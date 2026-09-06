@@ -8,7 +8,7 @@ the full BKS estimation chain, a simulation with known ground truth, and an
 evaluation harness that scores what the estimator recovers.
 
 - `DESIGN.md` is the binding specification: the method mapped to the paper's
-  equations, the decision register (D1-D49) with every assumption and best
+  equations, the decision register (D1-D52) with every assumption and best
   guess, the module contracts, the simulation design and the harness.
 - `reports/simulation/` holds the harness reports (what the estimator
   recovered on simulated data, and how that compares with the truth).
@@ -102,6 +102,27 @@ inherit the assets' betas, so the estimator can build priced factor
 portfolios from topics that carry no information. `no_factor` is the
 chance-level null; `topic_null` shows the mechanism.
 
+## What the simulation study showed (2026-09-06)
+
+Full detail: `reports/simulation/STUDY_NOTES_2026-09-06.md` and the harness
+reports under `reports/simulation/full/`. In short:
+
+1. The factor structure is recovered in every signal scenario: implied betas
+   at a first canonical correlation of 0.97 with the truth, factors at 0.99,
+   93% of the true systematic return explained, and an out-of-sample MVE
+   Sharpe of about 70% of what the true factors' MVE realises.
+2. With no topic carrying information but priced factors in returns, the
+   estimator still recovers betas (0.92) and earns 40% of the true OOS Sharpe,
+   because kernel covariances of noise topics inherit the betas (D47). Sharpe
+   ratios, selection counts and selection stability therefore cannot certify
+   narrative information; the placebo test and pricing errors can.
+3. The paper's in-sample argmax rule is not selective on a flat Sharpe
+   surface (91 of 120 topics, 15 of 20 placebos); the 2% tolerance rule
+   (`TuningConfig.tolerance`) selects 9-11 topics with no placebo at the same
+   OOS Sharpe.
+4. Loading rows, impact vectors and latent states are not identified by the
+   model (D52); the implied betas `c Gamma` are.
+
 ## Layout
 
 | Path | Content |
@@ -114,7 +135,8 @@ chance-level null; `topic_null` shows the mechanism.
 | `narrative_ipca/pipeline.py`, `cli.py` | orchestration, artefacts, CLI |
 | `narrative_ipca/simulation.py`, `harness.py` | DGP with ground truth; evaluation harness and report |
 | `tests/` | equation-level tests (brute-force references, KKT conditions, invariances) |
-| `scripts/` | `run_simulation_study.py`, `benchmark_solver.py` |
+| `scripts/` | `run_full_study.py` (parallel study driver), `summarise_study.py`, `rescore_study.py`, `run_simulation_study.py`, `benchmark_solver.py` |
+| `reports/simulation/` | study notes, harness reports and tables (`README.md` there has the regeneration recipe) |
 
 ## Status
 

@@ -1,0 +1,6 @@
+scenario,selection_recall,selection_recall_strong,selection_precision,beta_canonical_corr,placebo_selected,gamma_subspace_cos,factor_canonical_corr,state_canonical_corr,impact_spearman,oos_sharpe_ratio_to_true,systematic_r2_recovered,null_selection_lift,null_oos_sharpe_abs,all
+baseline,1.0,1.0,0.0,1.0,0.0,,1.0,,,1.0,1.0,,,0.0
+no_factor,,,,,,,,,,,,1.0,1.0,1.0
+topic_null,,,,,,,,,,,,,,1.0
+softmax,1.0,0.6666666666666666,0.3333333333333333,1.0,0.3333333333333333,,1.0,,,0.6666666666666666,1.0,,,0.0
+weak,1.0,1.0,0.3333333333333333,1.0,0.3333333333333333,,1.0,,,0.3333333333333333,1.0,,,0.3333333333333333

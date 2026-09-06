@@ -9,7 +9,7 @@ whose topic attention time series come from FASTopic and are supplied as input.
 The document has six parts:
 
 - Part A — the methodology, step by step, mapped to modules and equations.
-- Part B — the decision register (D1–D51): every assumption or best guess, with
+- Part B — the decision register (D1–D52): every assumption or best guess, with
   the reason and where to change it.
 - Part C — module contracts (function signatures the code implements).
 - Part D — the simulation data-generating process with known ground truth.
@@ -227,7 +227,12 @@ Each entry: the decision, why, and the config field or code location to change i
   `lambda`. The path is traced in ascending `lambda` with warm starts (dense
   to sparse, the numerically stable direction). Points near `lam_max` can be
   spurious non-trivial stationary points (objective above the all-zero
-  solution); the tuner never picks them because their Sharpe is low.
+  solution); the tuner never picks them because their Sharpe is low. At the
+  other end, the study grid extends to `1e-4 lam_max` so that the in-sample
+  argmax does not sit on the dense boundary (the criterion is flat down to
+  about `1e-3 lam_max`); the densest points may hit `max_iter = 500` outer
+  sweeps and are then reported with `converged = False` (their objective is
+  still non-increasing and their fit is usable).
 - **D23 Convergence:** relative change of the Eq. 8 objective below `tol`
   (default 1e-8) or `max_iter` sweeps. Both the value and the path are
   returned. The inner group-lasso budget (`inner_max_iter = 200` sweeps,
@@ -413,6 +418,37 @@ Each entry: the decision, why, and the config field or code location to change i
 - **D51 Tolerance rule for lambda** (see D27): `TuningConfig.tolerance`,
   default 0 (BKS exact argmax); the study reports the argmax, the 2%
   tolerance rule and LOOCV side by side.
+- **D52 What the model identifies, and which harness checks follow from it**
+  (full study, 2026-09-06). Eq. 5 gives `cov_{i,t} = beta_{i,t} Sigma_ff A'`,
+  so the population instrument vector has rank `K`, and any `Gamma_tilde`
+  with `Sigma_ff A' Gamma_tilde = I_K` reproduces every beta:
+  `Gamma_tilde = A (A'A)^-1 Sigma_ff^-1 + N` for any `N` with `A'N = 0`, an
+  `(L - K)`-dimensional family. In population `K` relevant instruments
+  suffice to invert, and the group lasso prefers a sparse representative;
+  in finite samples more narratives are selected because they average out
+  the noise in the sample covariances. Consequences:
+  1. Row-level loadings (`gamma_subspace_cos`), the impact vector built
+     from `A_hat` (`impact_spearman`) and the latent states built from
+     `A_hat` (`state_canonical_corr`) are not identified targets; the
+     harness reports them but does not pass/fail them. The study measured
+     mean principal-angle cosines of about 0.6 and impact-vector rank
+     correlations of 0.45-0.65 while the implied betas, factors and
+     systematic returns were recovered at 0.97, 0.99 and 0.94: the model
+     pins down `c Gamma`, not `Gamma`. For the research plan this means that
+     BKS's narrative interpretation (which topics, by how much) is a property
+     of the sparse representative the lasso happens to pick, not of the
+     data-generating `A`; per-topic attribution needs a separately identified
+     model (the plan's exposure layer), as the vault's anchor note already
+     argues on rotation grounds.
+  2. Selection recall is not a requirement of the model (a perfect sparse
+     fit may use only the strong topics); it is kept as a soft check. Precision
+     and the placebo count are the meaningful selection checks, and they
+     judge the tuning rule: the BKS exact argmax selected 91 of 120 topics on
+     average (precision 0.19, 15 of 20 placebos), the 2% tolerance rule 34
+     (precision 0.74, 5 placebos), with identical factor recovery and OOS
+     Sharpe.
+  3. Under `no_factor` a chance-level selection contains placebos at rate
+     `n_placebo / L`, so the placebo check is not applied there.
 
 ---
 
@@ -640,12 +676,12 @@ All comparisons are rotation-invariant (D38). `hat` marks estimates.
 | `selection_recall_strong` | recall over the relevant topics whose row norm `||A_l||` is above the median of the relevant rows | near 1 | ≥ 0.80 |
 | `selection_precision` | selected ∩ relevant / selected | high under a sparsity-preferring tuning rule; low under the exact in-sample argmax on a flat criterion (D27, Part F.5) | ≥ 0.60 |
 | `beta_canonical_corr` | mean over sampled periods of the first canonical correlation between the implied betas `c_{i,t-1} Gamma_hat` and the true `beta_{i,t}` across the assets of the period (rotation-invariant; the object IPCA identifies) | > 0.95 | ≥ 0.90 |
-| `placebo_selected` | number of placebo topics selected at tuned lambda | 0 (App. C.2) | ≤ 0 |
-| `gamma_subspace_cos` | mean cosine of principal angles between col(Gamma_tilde_hat) and col(Gamma_tilde_true) restricted to the rows that are relevant *and selected* (non-selected rows are zero by construction and would only measure recall) | > 0.9 | ≥ 0.85 |
-| `factor_canonical_corr` | first canonical correlation between `F_hat` (in-sample) and `f_period_true` | > 0.95 | ≥ 0.90 |
+| `placebo_selected` | number of placebo topics selected at tuned lambda (signal scenarios only; under `no_factor` chance-level selection contains placebos at rate `n_placebo / L`, D52) | 0 (App. C.2) under a selective tuning rule; the exact argmax selected 15 of 20 on the flat criterion | ≤ 0 |
+| `gamma_subspace_cos` | mean of the informative principal-angle cosines between col(Gamma_tilde_hat) and col(Gamma_tilde_true) on the rows that are relevant *and selected* (needs more than K such rows; with exactly K rows any full-rank block spans R^K) | not identified (D52); observed ≈ 0.6 | reported |
+| `factor_canonical_corr` | first canonical correlation between `F_hat` (in-sample) and `f_period_true` | > 0.95 (observed 0.99) | ≥ 0.90 |
 | `factor_canonical_corr_mean` | mean over K canonical correlations | reported | — |
-| `state_canonical_corr` | first canonical correlation between `x_hat_tau` and `x_true_tau` | > 0.85 | ≥ 0.80 |
-| `impact_spearman` | Spearman correlation of `I_{z->MVE}` hat vs true over the relevant topics that were selected (BKS report impact vectors for selected narratives only) | > 0.8 | ≥ 0.70 |
+| `state_canonical_corr` | first canonical correlation between `x_hat_tau` and `x_true_tau` | depends on `A_hat`, not identified (D52); observed 0.55-0.77 | reported |
+| `impact_spearman` | Spearman correlation of `I_{z->MVE}` hat vs true over the relevant topics that were selected (BKS report impact vectors for selected narratives only) | depends on `A_hat`, not identified (D52); observed 0.45-0.65 | reported |
 | `mve_sharpe_is` | in-sample MVE Sharpe of the fit | ≈ true (1.0), inflated a little | reported |
 | `oos_sharpe` | realised OOS MVE Sharpe | ≈ 0.5–0.9 of true | ≥ 0.5 × true |
 | `oos_sharpe_true_mve` | realised OOS Sharpe of the *true* MVE portfolio of true factors | ≈ true | reported (upper bound) |
@@ -654,7 +690,7 @@ All comparisons are rotation-invariant (D38). `hat` marks estimates.
 | `n_selected` | | ≈ n_relevant | reported |
 | `instrument_beta_r2_*` | cross-sectional R2 of the instrument `cov[t, :, l]` on the true `beta_t` (mean over sampled periods), split into relevant / noise / placebo topics; `_chance` = K / N | relevant ≫ noise > chance (baseline); noise > chance (topic_null); all ≈ chance (no_factor) | reported |
 | `oos_selection_stability` | mean Jaccard similarity of the selected set between consecutive refits | high in baseline *and* topic_null (the spurious instruments persist with the kernel), low only in no_factor; a diagnostic of estimation noise, not of narrative information (D47) | reported |
-| `null_selection_lift` (no_factor only) | n_selected / round(0.05 L), the number selected relative to a 5% chance level | ≈ 1, no lift | ≤ 2.0 |
+| `null_selection_lift` (no_factor only) | n_selected / round(0.05 L), the number selected relative to a 5% chance level | ≈ 1, no lift (observed 0.7-0.8 under the argmax and the tolerance rule; LOOCV picks arbitrary points on pure noise) | ≤ 2.0 |
 | `null_oos_sharpe_abs` (no_factor only) | \|realised OOS Sharpe\| | within two standard errors of 0 (`2 sqrt(12 / n_oos)` ≈ 0.7 at 90-100 OOS months) | ≤ 0.75 |
 
 Why these expectations: with 20 relevant topics carrying a K=3 structure, 500

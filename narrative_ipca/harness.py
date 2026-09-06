@@ -37,15 +37,38 @@ comparison is rotation invariant:
 * the share of the true systematic return ``beta_{i,t}' f_t`` that the fitted
   values ``c_{i,t-1} Gamma_hat f_hat_t`` reproduce.
 
+Three of these are *reported only* (:data:`REPORT_ONLY_METRICS`; check set
+``v2``, DESIGN.md D52): ``gamma_subspace_cos``, ``state_canonical_corr`` and
+``impact_spearman``. In the BKS model the instrument-to-loading map
+``Gamma_tilde`` is identified only up to an ``(L - K)``-dimensional family:
+Eq. 5 gives ``cov = beta Sigma_ff A'``, so any ``Gamma_tilde`` with
+``Sigma_ff A' Gamma_tilde = I_K`` reproduces every ``beta``, i.e.
+``Gamma_tilde = A (A'A)^-1 Sigma_ff^-1 + N`` for any ``N`` with ``A'N = 0``;
+in population ``K`` relevant instruments suffice to invert, and the group
+lasso prefers a sparse representative. Row-level loading recovery, the
+impact vector built from ``A_hat`` and the latent states built from
+``A_hat`` are therefore not identified targets of the model, and selection
+recall is not a requirement of the model either (a perfect sparse fit may
+use only ``K`` of the relevant topics): the two recall checks stay in the
+signal set as *soft* checks. What the model identifies - the implied betas
+``c Gamma`` (``beta_canonical_corr``), the factors
+(``factor_canonical_corr``), the fitted systematic return
+(``systematic_r2_recovered``) and the OOS MVE (``oos_sharpe_ratio_to_true``)
+- and what a selective tuning rule must deliver - precision and no placebo -
+are the pass/fail checks.
+
 Pass/fail flags come from :class:`~narrative_ipca.config.HarnessThresholds`
 (D40: regression-test signals, not statistical tests). Which checks apply
 depends on the scenario: the signal scenarios (``baseline``, ``softmax``,
-``balanced``, ``weak``) get the recovery checks; ``no_factor`` (returns
+``balanced``, ``weak``) get :data:`SIGNAL_CHECKS`; ``no_factor`` (returns
 without a common factor structure, the chance-level null) only the no-lift
-checks; ``topic_null`` (alias ``null``: no topic carries information but
-returns keep their priced factor structure) is *report-only* - no check
-applies and ``all_passed`` is vacuously true. ``weak`` uses relaxed recall,
-strong-recall and subspace thresholds (:data:`SCENARIO_THRESHOLD_OVERRIDES`).
+checks :data:`NULL_CHECKS` - not the placebo check: a chance-level selection
+includes placebo topics at rate ``n_placebo / L``, so ``placebo_selected <=
+0`` is not a valid chance-level check there (D52); ``topic_null`` (alias
+``null``: no topic carries information but returns keep their priced factor
+structure) is *report-only* - no check applies and ``all_passed`` is
+vacuously true. ``weak`` uses relaxed recall and strong-recall thresholds
+(:data:`SCENARIO_THRESHOLD_OVERRIDES`).
 
 Why ``topic_null`` is not a pass/fail null (verification finding of
 2026-09-06): under that DGP the Eq. 6 kernel covariance of *any* noise topic
@@ -128,8 +151,11 @@ __all__ = [
     "beta_canonical_corr",
     "default_pipeline_config",
     "CHECKS",
+    "CHECK_SET_VERSION",
     "SIGNAL_CHECKS",
     "NULL_CHECKS",
+    "REPORT_ONLY_METRICS",
+    "REPORTED_TEXT",
     "NULL_SCENARIOS",
     "REPORT_ONLY_SCENARIOS",
     "SCENARIO_ALIASES",
@@ -244,51 +270,95 @@ CHECKS: tuple[tuple[str, str, str, str], ...] = (
 
 _CHECK_TABLE: dict[str, tuple[str, str, str]] = {name: (metric, op, field) for name, metric, op, field in CHECKS}
 
+CHECK_SET_VERSION: str = "v2"
+"""Version of the check set. ``v1``: every Part E metric with a threshold was a pass/fail check and
+``placebo_selected`` applied to ``no_factor``. ``v2`` (DESIGN.md D52): the three metrics of
+:data:`REPORT_ONLY_METRICS` are reported only and the placebo check does not apply to ``no_factor``.
+A finished study can be rescored with ``scripts/rescore_study.py``."""
+
+REPORT_ONLY_METRICS: tuple[str, ...] = ("gamma_subspace_cos", "state_canonical_corr", "impact_spearman")
+"""Metrics reported but not pass/fail (DESIGN.md D52). They stay in :data:`CHECKS` and :data:`METRICS`
+with their ``HarnessThresholds`` fields so that the thresholds can be re-enabled, but they are in no
+scenario's check set.
+
+Reason: in the BKS model the instrument-to-loading map ``Gamma_tilde`` is identified only up to an
+``(L - K)``-dimensional family. Eq. 5 gives ``cov = beta Sigma_ff A'``, so any ``Gamma_tilde`` with
+``Sigma_ff A' Gamma_tilde = I_K`` reproduces every ``beta``, i.e. ``Gamma_tilde = A (A'A)^-1 Sigma_ff^-1 + N``
+for any ``N`` with ``A'N = 0``; in population ``K`` relevant instruments suffice to invert, and the group
+lasso prefers a sparse representative. Row-level loading recovery (``gamma_subspace_cos``), the impact
+vector built from ``A_hat`` (``impact_spearman``) and the latent states built from ``A_hat``
+(``state_canonical_corr``) are therefore not identified targets of the model."""
+
+REPORTED_TEXT: str = "reported (not identified)"
+"""Pass/fail-table cell of a :data:`REPORT_ONLY_METRICS` row in a scenario where the check would otherwise apply."""
+
 SIGNAL_CHECKS: tuple[str, ...] = (
     "selection_recall",
     "selection_recall_strong",
     "selection_precision",
     "beta_canonical_corr",
     "placebo_selected",
-    "gamma_subspace_cos",
     "factor_canonical_corr",
-    "state_canonical_corr",
-    "impact_spearman",
     "oos_sharpe_ratio_to_true",
     "systematic_r2_recovered",
 )
-"""Checks applied to the scenarios with signal (baseline, softmax, balanced, weak)."""
+"""Checks applied to the scenarios with signal (baseline, softmax, balanced, weak); check set ``v2`` (D52).
 
-NULL_CHECKS: tuple[str, ...] = ("null_selection_lift", "null_oos_sharpe_abs", "placebo_selected")
+What the model identifies (``beta_canonical_corr``, ``factor_canonical_corr``, ``systematic_r2_recovered``,
+``oos_sharpe_ratio_to_true``), what a selective tuning rule must deliver (``selection_precision``,
+``placebo_selected``), and the two recall checks as soft checks (a sparse representative may legitimately
+use only the strong topics). The three metrics of :data:`REPORT_ONLY_METRICS` are reported only."""
+
+NULL_CHECKS: tuple[str, ...] = ("null_selection_lift", "null_oos_sharpe_abs")
 """Checks applied to the chance-level null ``no_factor`` (returns without a common factor structure:
 the kernel covariances carry no information, so selection should sit at chance and the realised OOS
-Sharpe within two standard errors of zero). They are *not* applied to ``topic_null``, where selection
-above chance and a positive OOS Sharpe are the estimator's correct behaviour (module docstring)."""
+Sharpe within two standard errors of zero). ``placebo_selected`` is not among them (D52): a chance-level
+selection includes placebo topics at rate ``n_placebo / L``, so ``placebo_selected <= 0`` is not a valid
+chance-level check; the count is reported next to its chance level. They are *not* applied to
+``topic_null``, where selection above chance and a positive OOS Sharpe are the estimator's correct
+behaviour (module docstring)."""
 
 SCENARIO_THRESHOLD_OVERRIDES: dict[str, dict[str, float]] = {
-    "weak": {"selection_recall_min": 0.3, "selection_recall_strong_min": 0.6, "gamma_subspace_cos_min": 0.7},
+    "weak": {"selection_recall_min": 0.3, "selection_recall_strong_min": 0.6},
 }
-"""Per-scenario threshold relaxations (``weak`` degrades gracefully: recall falls, precision stays)."""
+"""Per-scenario threshold relaxations (``weak`` degrades gracefully: recall falls, precision stays).
+Only checks that still apply are relaxed (``gamma_subspace_cos`` is reported only, D52)."""
 
 EXPECTED: dict[str, str] = {
     "selection_recall": (
+        "soft check: a sparse representative may legitimately use only the strong topics (DESIGN.md D52); "
         "recall well below 1: the relevant rows of A are standard-normal draws, so a share of the relevant "
         "topics are weak and legitimately not selected"
     ),
-    "selection_recall_strong": "recall over the relevant topics with ||A_l|| at or above the median near 1",
+    "selection_recall_strong": (
+        "soft check: a sparse representative may legitimately use only the strong topics (DESIGN.md D52); "
+        "recall over the relevant topics with ||A_l|| at or above the median near 1"
+    ),
     "selection_precision": "precision high (irrelevant persistent topics may enter at small lambda)",
     "beta_canonical_corr": "first canonical correlation of implied vs true betas > 0.95",
     "placebo_selected": "no placebo topic selected (BKS App. C.2)",
     "gamma_subspace_cos": (
-        "col(Gamma_tilde) recovered on the relevant rows that were selected (mean principal-angle cosine > 0.9)"
+        "reported only: not an identified target of the model, see DESIGN.md D52 (Gamma_tilde is identified only "
+        "up to an (L - K)-dimensional family: any Gamma_tilde with Sigma_ff A' Gamma_tilde = I_K reproduces every "
+        "beta, so the row-level col(Gamma_tilde) on the selected relevant rows need not match the truth)"
     ),
     "factor_canonical_corr": "first canonical correlation between F_hat and the true period factors > 0.95",
-    "state_canonical_corr": "first canonical correlation between x_hat and the true daily states > 0.85",
-    "impact_spearman": "Spearman correlation of I_{z->MVE} hat vs true over the selected relevant topics > 0.8",
+    "state_canonical_corr": (
+        "reported only: not an identified target of the model, see DESIGN.md D52 (the states are built from "
+        "A_hat, which is identified only up to the (L - K)-dimensional family of Gamma_tilde)"
+    ),
+    "impact_spearman": (
+        "reported only: not an identified target of the model, see DESIGN.md D52 (the impact vector is built "
+        "from A_hat, which is identified only up to the (L - K)-dimensional family of Gamma_tilde)"
+    ),
     "oos_sharpe_ratio_to_true": "realised OOS MVE Sharpe about 0.5-0.9 of the true MVE's realised OOS Sharpe",
     "systematic_r2_recovered": "R2 of the true systematic return on the fitted values > 0.7",
     "null_selection_lift": "no_factor: selection at chance level, no lift",
     "null_oos_sharpe_abs": "no_factor: realised OOS Sharpe within two standard errors of zero",
+    "placebo_selected_no_factor": (
+        "no_factor: reported only (D52) - a chance-level selection includes placebo topics at rate n_placebo / L, "
+        "so placebo_selected <= 0 is not a valid chance-level check"
+    ),
     "instrument_beta_r2_relevant": "relevant topics' instruments are linear in beta (Eq. 5): R2 well above chance K/N",
     "instrument_beta_r2_noise": (
         "topic_null: noise topics' instruments span beta through the persistent common vector G_{t,l}, "
@@ -537,7 +607,8 @@ def scenario_checks(scenario: str) -> tuple[str, ...]:
     (alias ``null``; report-only, see the module docstring);
     :data:`SIGNAL_CHECKS` for ``baseline``, ``softmax``, ``balanced``,
     ``weak``. Unknown scenario names (a custom base) get the signal checks
-    with a log message; ``-fast`` / ``_fast`` suffixes are ignored.
+    with a log message; ``-fast`` / ``_fast`` suffixes are ignored. The
+    metrics of :data:`REPORT_ONLY_METRICS` are in no check set (D52).
     """
     key = _canonical_scenario(scenario)
     if key in NULL_SCENARIOS:
@@ -586,6 +657,16 @@ def _threshold_text(thresholds: HarnessThresholds, check: str) -> str:
     bound = getattr(thresholds, field)
     text = f"{int(bound)}" if float(bound).is_integer() and "placebo" in check else f"{float(bound):.2f}"
     return f"{op} {text}"
+
+
+def _report_only_check(check: str) -> bool:
+    """Whether ``check`` belongs to a metric of :data:`REPORT_ONLY_METRICS` (reported, never pass/fail; D52)."""
+    return _CHECK_TABLE[check][0] in REPORT_ONLY_METRICS
+
+
+def _signal_scenario(scenario: str) -> bool:
+    """Whether ``scenario`` gets the signal checks (the report-only metrics are then shown as reported)."""
+    return scenario_checks(scenario) == SIGNAL_CHECKS
 
 
 # ---------------------------------------------------------------------------
@@ -1781,15 +1862,40 @@ def _null_sharpe_within_se(ok_runs: pd.DataFrame, thr: HarnessThresholds) -> lis
     return notes
 
 
+def _placebo_reported_text(frame: pd.DataFrame) -> str:
+    """``placebo_selected`` of ``no_factor`` next to its chance level ``n_selected x n_placebo / L`` (reported only, D52)."""
+    text = f"placebo selected {_span(frame, 'placebo_selected')} (reported only, D52"
+    n_sel, n_pl, L = _col_mean(frame, "n_selected"), _col_mean(frame, "n_placebo_topics"), _col_mean(frame, "L")
+    if np.isfinite(n_sel) and np.isfinite(n_pl) and np.isfinite(L) and L > 0:
+        text += (
+            f": a chance-level selection of {_fmt(n_sel)} topics includes about {_fmt(n_sel * n_pl / L, 2)} placebos "
+            f"at rate n_placebo / L = {_fmt(n_pl / L, 2)}"
+        )
+    return text + ")"
+
+
+def _reported_metrics_text(frame: pd.DataFrame) -> str:
+    """The values of :data:`REPORT_ONLY_METRICS` as a 'Reported (not pass/fail)' line (D52)."""
+    cells = "; ".join(f"{metric} {_span(frame, metric)}" for metric in REPORT_ONLY_METRICS)
+    return (
+        f"Reported (not pass/fail): {cells} - not identified targets of the model (check set {CHECK_SET_VERSION}, "
+        "DESIGN.md D52: Gamma_tilde is identified only up to an (L - K)-dimensional family, so row-level loading "
+        "recovery and the states and impact vector built from A_hat are not required to match the truth)."
+    )
+
+
 def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
     """One short paragraph per scenario generated from the numbers: expectations, observations, failures.
 
     ``no_factor`` is the chance-level null (its true MVE Sharpe ratios are
-    printed as :data:`NO_FACTOR_TEXT`, and a Sharpe that fails the absolute
-    threshold but sits within two standard errors of zero is said to);
+    printed as :data:`NO_FACTOR_TEXT`, a Sharpe that fails the absolute
+    threshold but sits within two standard errors of zero is said to, and
+    the placebo count is reported next to its chance level);
     ``topic_null`` is report-only and its paragraph explains the mechanism
     (module docstring), states the expectation and compares the observed
     numbers with the baseline rows of the same harness run when present.
+    The signal scenarios list the :data:`REPORT_ONLY_METRICS` under
+    'Reported (not pass/fail)' with their values instead of pass counts.
     """
     runs = result.per_run[result.per_run["scenario"] == scenario]
     ok_runs = runs[runs["error"].fillna("") == ""] if "error" in runs else runs
@@ -1807,7 +1913,8 @@ def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
             "that is unstable across refits (the instruments are pure noise, so this is the one scenario where the "
             "stability diagnostic is low). The true-factor MVE portfolio is not spanned by returns here, so the "
             f"true MVE Sharpe ratios are {NO_FACTOR_TEXT}, the OOS ratio is undefined (nan) and the instrument R2 "
-            "on the (zero) true loadings is zero by construction."
+            "on the (zero) true loadings is zero by construction. The placebo count is reported, not checked: a "
+            "chance-level selection includes placebo topics at rate n_placebo / L (D52)."
         )
     elif key == "topic_null":
         intro = (
@@ -1830,8 +1937,9 @@ def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
     elif key == "weak":
         intro = (
             f"**{scenario}** ({seeds}). Expected: graceful degradation - recall falls (threshold relaxed to "
-            f"{thr.selection_recall_min:.2f}, strong-half recall to {thr.selection_recall_strong_min:.2f}), precision "
-            f"stays, no placebo selected, subspace cosine threshold {thr.gamma_subspace_cos_min:.2f}."
+            f"{thr.selection_recall_min:.2f}, strong-half recall to {thr.selection_recall_strong_min:.2f}; both soft "
+            "checks), precision stays, no placebo selected; the Gamma subspace, states and impact vector are reported "
+            "only (D52)."
         )
     elif key == "softmax":
         intro = (
@@ -1842,9 +1950,12 @@ def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
         intro = (
             f"**{scenario}** ({seeds}). Expected: recall of the strong half of the relevant topics near 1 (overall "
             "recall well below 1: the relevant rows of A are standard-normal draws, so the weak relevant topics are "
-            "legitimately left out), precision high, the implied betas c Gamma recovered (first canonical correlation "
-            "> 0.95), no placebo selected, the Gamma subspace on the selected rows, factors, states and impact vector "
-            "recovered, the OOS Sharpe about 0.5-0.9 of the true MVE's, systematic R2 recovered above 0.7."
+            "legitimately left out; both recall checks are soft: a sparse representative may legitimately use only "
+            "the strong topics, D52), precision high, the implied betas c Gamma recovered (first canonical correlation "
+            "> 0.95), no placebo selected, the factors recovered (first canonical correlation > 0.95), the OOS Sharpe "
+            "about 0.5-0.9 of the true MVE's, systematic R2 recovered above 0.7. The Gamma subspace on the selected "
+            "rows, the states and the impact vector are reported but not pass/fail: they are not identified targets "
+            "of the model (DESIGN.md D52)."
         )
     lines.append(intro)
     obs: list[str] = []
@@ -1866,6 +1977,7 @@ def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
         ]
     elif key == "no_factor":
         obs.append(f"OOS Sharpe {_sharpe_with_se(ok_runs)} (true MVE {NO_FACTOR_TEXT})")
+        obs.append(_placebo_reported_text(ok_runs))
         obs.append(_instrument_text(ok_runs))
     if "sharpe_mve_true" in ok_runs and len(ok_runs):
         structure = _has_factor_structure(result, scenario)
@@ -1879,6 +1991,8 @@ def _expected_vs_observed(result: HarnessResult, scenario: str) -> str:
         lines.append("Observed: " + "; ".join(obs) + ". Context: " + extra)
     else:
         lines.append("Observed: " + "; ".join(obs) + ".")
+    if _signal_scenario(scenario):
+        lines.append(_reported_metrics_text(ok_runs))
     if key == "no_factor":
         notes = _null_sharpe_within_se(ok_runs, thr)
         if notes:
@@ -1932,6 +2046,13 @@ def _render_report(result: HarnessResult) -> str:
         + ("numba JIT group-lasso kernel" if backend == "numba" else "pure-numpy reference group-lasso kernel; numba not active")
         + "; D46)."
     )
+    if meta.get("rescored"):
+        stamp = str(meta.get("rescored_at") or now.isoformat())[:10]
+        parts.append(
+            f"- Pass flags rescored on {stamp} with check set {meta.get('check_set', CHECK_SET_VERSION)} "
+            "(DESIGN.md D52; `scripts/rescore_study.py`): the pass/fail columns, the pass/fail tables and this report "
+            "were recomputed from the stored per-run metrics; the metrics and the artefacts are those of the original run."
+        )
     sims = meta.get("simulation", {})
     if sims:
         sim_rows = []
@@ -1962,13 +2083,19 @@ def _render_report(result: HarnessResult) -> str:
             f"annualisation {ev.get('annualization')}."
         )
     parts.append("")
-    parts.append("Thresholds (per scenario after the relaxations of `SCENARIO_THRESHOLD_OVERRIDES`):")
+    parts.append(
+        f"Thresholds (check set {CHECK_SET_VERSION}; per scenario after the relaxations of `SCENARIO_THRESHOLD_OVERRIDES`; "
+        f"`reported only` = a metric of `REPORT_ONLY_METRICS`, reported but not pass/fail, DESIGN.md D52):"
+    )
     parts.append("")
     thr_rows = []
     for check, metric, op, field in CHECKS:
         cells = [check, f"{metric} {op}"]
         for s in scenarios:
-            cells.append(_fmt(getattr(_thresholds_of(result, s), field), 2) if check in scenario_checks(s) else "n/a")
+            if _report_only_check(check):
+                cells.append("reported only" if _signal_scenario(s) else "n/a")
+            else:
+                cells.append(_fmt(getattr(_thresholds_of(result, s), field), 2) if check in scenario_checks(s) else "n/a")
         thr_rows.append(cells)
     parts.append(_md_table(["check", "metric", *scenarios], thr_rows))
     parts.append("")
@@ -2003,6 +2130,17 @@ def _render_report(result: HarnessResult) -> str:
         "rows and n < 2K, the 2K - n largest principal-angle cosines are one by dimension counting (any full-rank "
         "K x K block scores one on every angle), so `gamma_subspace_cos` averages the min(K, n - K) smallest cosines "
         "and is nan with n <= K."
+    )
+    parts.append("")
+    parts.append(
+        "`gamma_subspace_cos`, `state_canonical_corr` and `impact_spearman` are reported but not pass/fail (check set "
+        f"{CHECK_SET_VERSION}, DESIGN.md D52): Gamma_tilde is identified only up to an (L - K)-dimensional family - any "
+        "Gamma_tilde with Sigma_ff A' Gamma_tilde = I_K reproduces every beta, and the group lasso prefers a sparse "
+        "representative -, so row-level loading recovery and the states and impact vector built from A_hat are not "
+        "identified targets of the model. The identified targets are the implied betas (`beta_canonical_corr`), the "
+        "factors (`factor_canonical_corr`), the fitted systematic return (`systematic_r2_recovered`) and the OOS MVE "
+        "(`oos_sharpe_ratio_to_true`); the recall checks are soft (a sparse representative may use only the strong "
+        "topics). Under `no_factor` the placebo count is reported next to its chance level n_placebo / L, not checked."
     )
     parts.append("")
     if not all(structure.values()):
@@ -2046,11 +2184,20 @@ def _render_report(result: HarnessResult) -> str:
     # ---- pass / fail ----
     parts.append("## Pass / fail (seeds passing / seeds run)")
     parts.append("")
+    parts.append(
+        f"Check set {CHECK_SET_VERSION} (DESIGN.md D52). `{REPORTED_TEXT}`: the metric is reported in the tables above "
+        "but is not a pass/fail check (not an identified target of the model); `n/a`: the check does not apply to the "
+        "scenario."
+    )
+    parts.append("")
     pf_rows = []
     counts = {s: int((per_run["scenario"] == s).sum()) for s in scenarios}
     for check, metric, op, field in CHECKS:
         cells = [check]
         for s in scenarios:
+            if _report_only_check(check):
+                cells.append(REPORTED_TEXT if _signal_scenario(s) else "n/a")
+                continue
             if check not in scenario_checks(s):
                 cells.append("n/a")
                 continue
@@ -2152,14 +2299,19 @@ def write_report(result: HarnessResult, out_dir: str | Path) -> str:
     structure read :data:`NO_FACTOR_TEXT`), the instrument-informativeness
     table (instrument R2 on the true loadings per topic kind vs chance, OOS
     selection stability), pass/fail table (``n/a`` for checks that do not
-    apply, e.g. every check of the report-only ``topic_null``), per-run
-    table, timings, an 'expected vs observed' paragraph per scenario
-    generated from the numbers (stating plainly which checks failed; for
-    ``topic_null`` the mechanism, the expectation and a comparison with the
-    baseline rows of the same run; for ``no_factor`` a Sharpe that fails the
-    absolute threshold but sits within two standard errors of zero is said
-    to), errors (if any) and the artefact locations. An existing report of
-    the same day is not overwritten: a ``_2``, ``_3``, ... suffix is added.
+    apply, e.g. every check of the report-only ``topic_null``;
+    :data:`REPORTED_TEXT` in the rows of the :data:`REPORT_ONLY_METRICS`,
+    D52), per-run table, timings, an 'expected vs observed' paragraph per
+    scenario generated from the numbers (stating plainly which checks
+    failed and listing the report-only metrics under 'Reported (not
+    pass/fail)'; for ``topic_null`` the mechanism, the expectation and a
+    comparison with the baseline rows of the same run; for ``no_factor`` a
+    Sharpe that fails the absolute threshold but sits within two standard
+    errors of zero is said to, and the placebo count is read against its
+    chance level), errors (if any) and the artefact locations. A result
+    whose ``meta["rescored"]`` is set (``scripts/rescore_study.py``) says so
+    in the setup section. An existing report of the same day is not
+    overwritten: a ``_2``, ``_3``, ... suffix is added.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

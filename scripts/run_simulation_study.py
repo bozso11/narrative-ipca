@@ -20,7 +20,8 @@ The two null scenarios (see ``narrative_ipca.simulation`` and ``harness``):
   returns have no common factor structure (every loading is zero), so the
   kernel covariances carry no information; selection is expected at chance
   and the OOS Sharpe within two standard errors of zero (pass/fail checks
-  ``null_selection_lift``, ``null_oos_sharpe_abs``, ``placebo_selected``).
+  ``null_selection_lift``, ``null_oos_sharpe_abs``; the placebo count is
+  reported against its chance level ``n_placebo / L``, not checked, D52).
 * ``topic_null`` (alias ``null``) - no topic carries information but returns
   keep their priced factor structure; the instruments of pure noise topics
   then span the true loadings (their kernel covariances are ``beta_i' G_{t,l}``

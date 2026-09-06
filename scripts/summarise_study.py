@@ -13,11 +13,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+from narrative_ipca.harness import CHECK_SET_VERSION, REPORT_ONLY_METRICS  # noqa: E402
 
 KEY_METRICS = [
     ("n_selected", "selected"),
@@ -80,6 +87,13 @@ def build(runs: dict[str, pd.DataFrame]) -> str:
         "Metric definitions: DESIGN.md Part E."
     )
     parts.append("")
+    parts.append(
+        f"Check set {CHECK_SET_VERSION} (DESIGN.md D52): {', '.join(f'`{m}`' for m in REPORT_ONLY_METRICS)} are reported "
+        "only (not identified targets of the model: Gamma_tilde is identified only up to an (L - K)-dimensional family); "
+        "the recall checks are soft (a sparse representative may use only the strong topics); under `no_factor` the "
+        "placebo count is reported against its chance level n_placebo / L, not checked."
+    )
+    parts.append("")
     for s in scenarios:
         parts.append(f"## {s}")
         parts.append("")
@@ -87,6 +101,8 @@ def build(runs: dict[str, pd.DataFrame]) -> str:
         parts.append(header)
         parts.append("|---|" + "---|" * len(variants))
         for col, label in KEY_METRICS:
+            if col in REPORT_ONLY_METRICS:
+                label = f"{label}; reported only"
             cells = []
             for v in variants:
                 df = runs[v]

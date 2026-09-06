@@ -23,9 +23,16 @@ What is checked, mathematically rather than by shape:
   ``beta_canonical_corr`` on implied betas ``c Gamma`` that reproduce the
   true betas up to an invertible transform (one; invariant to a rotation of
   ``Gamma``; ``nan`` without true loadings);
-* the pass/fail logic per scenario and the threshold relaxations: the
-  chance-level null ``no_factor`` gets the null checks, the report-only
-  ``topic_null`` (alias ``null``) none;
+* the pass/fail logic per scenario and the threshold relaxations (check set
+  v2, DESIGN.md D52): the signal scenarios get the identified targets, the
+  selective-tuning checks and the two soft recall checks; ``gamma_subspace_cos``,
+  ``state_canonical_corr`` and ``impact_spearman`` are reported only (in no
+  check set, no pass flag, 'reported (not identified)' in the report); the
+  chance-level null ``no_factor`` gets the two null checks and no placebo
+  check, the report-only ``topic_null`` (alias ``null``) none;
+* ``scripts/rescore_study.py`` on a hand-built ``per_run.csv``: the pass
+  flags are recomputed from the stored metrics, the tables rebuilt, the old
+  report replaced;
 * the instrument-informativeness diagnostic ``instrument_beta_r2`` against a
   hand-built regression, on a panel that is exactly linear in the loadings
   (R2 = 1), on a baseline run (relevant topics far above chance) and under
@@ -43,6 +50,7 @@ import json
 import math
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -204,8 +212,32 @@ def test_evaluate_checks_per_scenario_and_relaxations():
     # thresholds are inclusive; every signal check passes at the boundary
     passed = harness.evaluate_checks(good, thr, "baseline")
     assert tuple(passed) == harness.SIGNAL_CHECKS and all(passed.values())
-    # no_factor is the chance-level null: the null checks apply
-    assert harness.evaluate_checks(good, thr, "no_factor") == {"null_selection_lift": True, "null_oos_sharpe_abs": True, "placebo_selected": True}
+    # check set v2 (D52): the identified targets, the selective-tuning checks and the two soft recall checks
+    assert harness.CHECK_SET_VERSION == "v2"
+    assert harness.SIGNAL_CHECKS == (
+        "selection_recall", "selection_recall_strong", "selection_precision", "beta_canonical_corr", "placebo_selected",
+        "factor_canonical_corr", "oos_sharpe_ratio_to_true", "systematic_r2_recovered",
+    )
+    # ... the three unidentified metrics are reported only: still in CHECKS / METRICS (thresholds can be re-enabled),
+    # in no check set, never a pass flag
+    assert harness.REPORT_ONLY_METRICS == ("gamma_subspace_cos", "state_canonical_corr", "impact_spearman")
+    assert set(harness.REPORT_ONLY_METRICS) <= {m for _, m, _, _ in harness.CHECKS}
+    assert set(harness.REPORT_ONLY_METRICS) <= set(harness.METRICS)
+    for name in ("baseline", "softmax", "weak", "balanced", "no_factor", "topic_null", "custom"):
+        assert not set(harness.REPORT_ONLY_METRICS) & set(harness.scenario_checks(name)), name
+        assert not set(harness.REPORT_ONLY_METRICS) & set(harness.evaluate_checks(good, thr, name)), name
+    bad_reported = dict(good, gamma_subspace_cos=0.0, state_canonical_corr=0.0, impact_spearman=float("nan"))
+    assert all(harness.evaluate_checks(bad_reported, thr, "baseline").values())
+    for metric in harness.REPORT_ONLY_METRICS:
+        assert harness.EXPECTED[metric].startswith("reported only: not an identified target of the model, see DESIGN.md D52")
+    for check in ("selection_recall", "selection_recall_strong"):
+        assert harness.EXPECTED[check].startswith("soft check: a sparse representative may legitimately use only the strong topics")
+    # no_factor is the chance-level null: the two null checks apply, the placebo check does not (a chance-level
+    # selection includes placebos at rate n_placebo / L, D52)
+    assert harness.NULL_CHECKS == ("null_selection_lift", "null_oos_sharpe_abs")
+    assert harness.evaluate_checks(good, thr, "no_factor") == {"null_selection_lift": True, "null_oos_sharpe_abs": True}
+    assert "placebo_selected" not in harness.evaluate_checks(dict(good, placebo_selected=3.0), thr, "no_factor")
+    assert "n_placebo / L" in harness.EXPECTED["placebo_selected_no_factor"]
     # topic_null (alias null) is report-only: no check, vacuously all passed
     for name in ("topic_null", "null", "NULL-fast", "topic_null_fast"):
         assert harness.scenario_checks(name) == () and harness.evaluate_checks(good, thr, name) == {}, name
@@ -218,24 +250,25 @@ def test_evaluate_checks_per_scenario_and_relaxations():
     p = harness.evaluate_checks(bad, thr, "softmax")
     assert not p["selection_recall"] and not p["placebo_selected"] and p["selection_precision"]
     assert not harness.evaluate_checks(bad, thr, "no_factor")["null_selection_lift"]
-    assert not harness.evaluate_checks(dict(good, gamma_subspace_cos=float("nan")), thr, "balanced")["gamma_subspace_cos"]
+    assert not harness.evaluate_checks(dict(good, factor_canonical_corr=float("nan")), thr, "balanced")["factor_canonical_corr"]
     missing = dict(good)
-    del missing["state_canonical_corr"]
-    assert not harness.evaluate_checks(missing, thr, "baseline")["state_canonical_corr"]
-    # weak: recall 0.3, strong-half recall 0.6 and subspace cosine 0.7 are enough; baseline fails at those values
+    del missing["systematic_r2_recovered"]
+    assert not harness.evaluate_checks(missing, thr, "baseline")["systematic_r2_recovered"]
+    # weak: recall 0.3 and strong-half recall 0.6 are enough; baseline fails at those values. Only checks that still
+    # apply are relaxed (the subspace cosine is reported only, its threshold field is untouched)
     relaxed = harness.scenario_thresholds(thr, "weak")
-    assert relaxed.selection_recall_min == 0.3 and relaxed.selection_recall_strong_min == 0.6 and relaxed.gamma_subspace_cos_min == 0.7
-    assert relaxed.selection_recall_min < thr.selection_recall_min and relaxed.gamma_subspace_cos_min < thr.gamma_subspace_cos_min
+    assert relaxed.selection_recall_min == 0.3 and relaxed.selection_recall_strong_min == 0.6
+    assert relaxed.gamma_subspace_cos_min == thr.gamma_subspace_cos_min
+    assert relaxed.selection_recall_min < thr.selection_recall_min
     assert relaxed.selection_recall_strong_min < thr.selection_recall_strong_min
     weakish = dict(
         good, selection_recall=relaxed.selection_recall_min + 0.05, selection_recall_strong=relaxed.selection_recall_strong_min + 0.05,
-        gamma_subspace_cos=relaxed.gamma_subspace_cos_min + 0.02,
     )
     assert all(harness.evaluate_checks(weakish, thr, "weak").values())
     pb = harness.evaluate_checks(weakish, thr, "baseline")
-    assert not pb["selection_recall"] and not pb["selection_recall_strong"] and not pb["gamma_subspace_cos"] and pb["beta_canonical_corr"]
+    assert not pb["selection_recall"] and not pb["selection_recall_strong"] and pb["beta_canonical_corr"]
     assert relaxed.selection_precision_min == thr.selection_precision_min and relaxed.beta_canonical_corr_min == thr.beta_canonical_corr_min
-    assert harness.SCENARIO_THRESHOLD_OVERRIDES == {"weak": {"selection_recall_min": 0.3, "selection_recall_strong_min": 0.6, "gamma_subspace_cos_min": 0.7}}
+    assert harness.SCENARIO_THRESHOLD_OVERRIDES == {"weak": {"selection_recall_min": 0.3, "selection_recall_strong_min": 0.6}}
     assert harness.scenario_thresholds(thr, "baseline") == thr
     # scenario names: case-insensitive, '-fast' suffix ignored, unknown -> signal checks
     assert harness.scenario_checks("NO_FACTOR-fast") == harness.NULL_CHECKS == harness.scenario_checks("No-Factor")
@@ -464,7 +497,7 @@ def test_compare_to_truth_positional_and_period_label_fallbacks(result, sim, met
                 "oos_sharpe_ratio_to_true", "null_oos_sharpe_abs"):
         assert math.isnan(m4.values[key]), key
     assert m4.values["beta_canonical_corr"] == pytest.approx(metrics.values["beta_canonical_corr"])  # needs the panel only
-    assert not m4.passed["state_canonical_corr"] and not m4.passed["oos_sharpe_ratio_to_true"]
+    assert "state_canonical_corr" not in m4.passed and not m4.passed["oos_sharpe_ratio_to_true"]  # reported only (D52)
     assert m4.values["selection_recall"] == metrics.values["selection_recall"]
 
 
@@ -533,10 +566,11 @@ def test_compare_to_truth_perfect_estimate_up_to_rotation(result, sim, kind):
     # the fitted values cov_hat Gamma_tilde_true f_true reproduce most of the true systematic return
     assert 0.5 < v["systematic_r2_recovered"] <= 1.0
     assert 0.5 < v["systematic_r2_recovered_narrative"] <= 1.0
-    for check in ("selection_recall", "selection_recall_strong", "selection_precision", "beta_canonical_corr", "placebo_selected",
-                  "gamma_subspace_cos", "factor_canonical_corr", "state_canonical_corr", "impact_spearman",
-                  "oos_sharpe_ratio_to_true", "systematic_r2_recovered"):
+    for check in harness.SIGNAL_CHECKS:
         assert m.passed[check], check
+    assert set(m.passed) == set(harness.SIGNAL_CHECKS) and not set(m.passed) & set(harness.REPORT_ONLY_METRICS)
+    for metric in harness.REPORT_ONLY_METRICS:  # reported only (D52), still one on a perfect estimate
+        assert v[metric] == pytest.approx(1.0, abs=1e-8), metric
     assert m.all_passed
 
 
@@ -552,7 +586,7 @@ def test_compare_to_truth_rank_deficient_gamma_gives_nan_subspace(result, sim):
     norms = np.linalg.norm(Gamma, axis=1)
     fit2 = replace(fit, Gamma=Gamma, gamma_norms=norms, selected=norms[1:] > 0)
     m = harness.compare_to_truth(replace(result, fit=fit2), truth, HarnessThresholds(), "baseline", asset_ids=sim.returns.assets)
-    assert math.isnan(m.values["gamma_subspace_cos"]) and not m.passed["gamma_subspace_cos"]
+    assert math.isnan(m.values["gamma_subspace_cos"]) and "gamma_subspace_cos" not in m.passed  # reported only (D52)
     assert math.isnan(m.values["gamma_subspace_cos_all_relevant"])
     assert m.values["gamma_relevant_rows_selected"] == K - 1
     assert m.values["selection_recall"] == pytest.approx((K - 1) / truth.relevant.sum())
@@ -583,7 +617,7 @@ def test_gamma_subspace_on_selected_rows_separates_loading_recovery_from_recall(
     v = m.values
     assert v["selection_recall"] == pytest.approx((K + 1) / len(rel_idx)) and v["selection_recall"] < 1.0
     assert v["selection_precision"] == 1.0 and v["gamma_relevant_rows_selected"] == K + 1
-    assert v["gamma_subspace_cos"] == pytest.approx(1.0, abs=1e-10) and m.passed["gamma_subspace_cos"]
+    assert v["gamma_subspace_cos"] == pytest.approx(1.0, abs=1e-10) and "gamma_subspace_cos" not in m.passed
     np.testing.assert_allclose(m.details["gamma_principal_cosines"], np.ones(K), atol=1e-10)
     assert m.details["gamma_rank_hat"] == K == m.details["gamma_rank_true"]
     rel = np.asarray(truth.relevant, dtype=bool)
@@ -604,9 +638,9 @@ def test_gamma_subspace_on_selected_rows_separates_loading_recovery_from_recall(
     assert v3["selection_recall"] == 1.0 and v3["selection_precision"] < 1.0
     assert v3["gamma_subspace_cos"] == pytest.approx(1.0, abs=1e-10) and v3["gamma_subspace_cos_all_relevant"] == pytest.approx(1.0, abs=1e-10)
     # exactly K relevant rows selected: any full-rank K x K block spans R^K, so every cosine is one whatever the
-    # estimate - the comparison has no content and the metric is nan (the check fails rather than passing vacuously)
+    # estimate - the comparison has no content and the metric is nan (reported only, D52: no pass flag either way)
     m4 = harness.compare_to_truth(replace(result, fit=_fit_with_true_rows(fit, truth, rel_idx[:K])), truth, HarnessThresholds(), "baseline", asset_ids=sim.returns.assets)
-    assert math.isnan(m4.values["gamma_subspace_cos"]) and not m4.passed["gamma_subspace_cos"]
+    assert math.isnan(m4.values["gamma_subspace_cos"]) and "gamma_subspace_cos" not in m4.passed
     assert m4.values["gamma_relevant_rows_selected"] == K and m4.details["gamma_informative_cosines"] == 0
     np.testing.assert_allclose(m4.details["gamma_principal_cosines"], np.ones(K), atol=1e-10)
     rng = np.random.default_rng(5)
@@ -646,7 +680,7 @@ def test_impact_metrics_over_selected_relevant_topics(result, sim):
     m = run(rel_idx[:3])
     v = m.values
     assert v["selection_recall"] == pytest.approx(0.6) and v["selection_precision"] == 1.0
-    assert v["impact_spearman"] == pytest.approx(1.0) and v["impact_sign_agreement"] == 1.0 and m.passed["impact_spearman"]
+    assert v["impact_spearman"] == pytest.approx(1.0) and v["impact_sign_agreement"] == 1.0 and "impact_spearman" not in m.passed
     assert m.details["n_impact_topics"] == 3 and m.details["n_impact_topics_all_relevant"] == 5
     a_all = np.zeros(5)
     a_all[:3] = 2.5 * truth.impact_z_to_mve_true[rel_idx[:3]]
@@ -658,7 +692,7 @@ def test_impact_metrics_over_selected_relevant_topics(result, sim):
     # two selected relevant topics: undefined on the selected set, still defined over all relevant topics
     m2 = run(rel_idx[:2])
     assert math.isnan(m2.values["impact_spearman"]) and math.isnan(m2.values["impact_sign_agreement"])
-    assert not m2.passed["impact_spearman"] and m2.details["n_impact_topics"] == 2
+    assert "impact_spearman" not in m2.passed and m2.details["n_impact_topics"] == 2  # reported only (D52)
     assert np.isfinite(m2.values["impact_spearman_all_relevant"]) and m2.details["n_impact_topics_all_relevant"] == 5
     # every relevant topic selected: the two versions coincide
     m5 = run(rel_idx)
@@ -864,10 +898,10 @@ def test_run_harness_fast_two_scenarios_writes_tables_artefacts_and_report(tmp_p
         assert base_row[f"pass_{c}"] in (0.0, 1.0), c
     for c in ("null_selection_lift", "null_oos_sharpe_abs"):
         assert math.isnan(base_row[f"pass_{c}"]) and null_row[f"pass_{c}"] in (0.0, 1.0)
-    for c in harness.SIGNAL_CHECKS:
-        if c != "placebo_selected":
-            assert math.isnan(null_row[f"pass_{c}"]), c
-    assert null_row["pass_placebo_selected"] in (0.0, 1.0)
+    for c in harness.SIGNAL_CHECKS:  # no placebo check under no_factor (D52): a chance-level selection includes placebos
+        assert math.isnan(null_row[f"pass_{c}"]), c
+    for c in harness.REPORT_ONLY_METRICS:  # reported only (D52): the value column exists, the pass flag is NaN everywhere
+        assert c in pr.columns and math.isnan(base_row[f"pass_{c}"]) and math.isnan(null_row[f"pass_{c}"]), c
     assert (pr["error"] == "").all() and (pr["runtime_seconds"] > 0).all()
     assert pr["all_passed"].dtype == bool
     # the no_factor truth has no signal: its lift uses the same chance level as the baseline
@@ -949,6 +983,19 @@ def test_run_harness_fast_two_scenarios_writes_tables_artefacts_and_report(tmp_p
     assert "recall of the strong half of the relevant topics near 1" in text
     assert "chance-level null" in text and "Baseline rows of this run for comparison" in text
     assert "| no_factor | 0.000 | 0.000 | 0.000 |" in text  # instrument R2 zero by construction
+    # check set v2 (D52): the report-only metrics read 'reported (not identified)' in the signal column and n/a in the
+    # null column, the placebo check is n/a for no_factor, the baseline paragraph lists the reported values
+    pf = text.split("## Pass / fail")[1].split("## Per-run table")[0]
+    for c in harness.REPORT_ONLY_METRICS:
+        assert f"| {c} | {harness.REPORTED_TEXT} | n/a |" in pf, c
+    assert f"| placebo_selected | {int(base_row['pass_placebo_selected'])}/1 (<= 0) | n/a |" in pf
+    thr_table = text.split("Thresholds (check set")[1].split("## Summary")[0]
+    assert "| gamma_subspace_cos | gamma_subspace_cos >= | reported only | n/a |" in thr_table
+    para_base = text.split("**baseline** (1 seed).")[1].split("\n\n")[0]
+    assert "Reported (not pass/fail): gamma_subspace_cos " in para_base and "state_canonical_corr" in para_base
+    assert "not identified targets of the model" in para_base and "[>= 0.85" not in para_base
+    assert "Reported (not pass/fail)" not in text.split("**no_factor** (1 seed).")[1].split("\n\n")[0]
+    assert "Pass flags rescored" not in text  # a fresh run, not a rescoring
     # the setup states the solver backend that was active during the run (D46)
     assert f"- Solver backend: {active_backend()} (" in text.split("## Setup")[1].split("## Summary")[0]
     # no_factor: the true MVE Sharpe ratios are not attainable and are never printed as numbers
@@ -967,6 +1014,11 @@ def test_run_harness_fast_two_scenarios_writes_tables_artefacts_and_report(tmp_p
     para_nf = text.split("**no_factor** (1 seed).")[1].split("\n\n")[0]
     assert f"vs true {nf}" in para_nf and f"(true MVE {nf})" in para_nf and "vs true 1" not in para_nf
     assert "unstable across refits" in para_nf and "true MVE Sharpe ratios are " + nf in para_nf
+    # the placebo count of the null is reported against its chance level n_selected x n_placebo / L (D52)
+    chance_placebo = null_row["n_selected"] * null_row["n_placebo_topics"] / null_row["L"]
+    assert f"placebo selected {harness._fmt(null_row['placebo_selected'])} (reported only, D52: a chance-level selection of " \
+           f"{harness._fmt(null_row['n_selected'])} topics includes about {harness._fmt(chance_placebo, 2)} placebos" in para_nf
+    assert "placebo_selected (failed" not in para_nf
     # a null Sharpe that fails the absolute 0.75 threshold on this short panel is read in standard-error units
     if null_row["pass_null_oos_sharpe_abs"] == 0.0 and abs(null_row["oos_sharpe"]) / null_row["oos_sharpe_se"] <= 2.0:
         assert "standard errors of zero" in para_nf and "calibrated for 90-100 OOS periods" in para_nf
@@ -1001,6 +1053,8 @@ def test_run_harness_topic_null_is_report_only(monkeypatch, result, tmp_path):
     assert "| all applicable checks | " in text and "1/1 (report-only, no checks)" in text
     assert "| null_selection_lift | n/a | n/a | n/a |" in text
     assert "| topic_null | 0 |" in text and "| n/a |" in text
+    pf = text.split("## Pass / fail")[1].split("## Per-run table")[0]
+    assert f"| gamma_subspace_cos | {harness.REPORTED_TEXT} | n/a | n/a |" in pf
     para = text.split("**topic_null** (1 seed).")[1].split("\n\n")[0]
     for phrase in ("Report-only", "G_{t,l}", "69 months", "spans beta", "cannot certify", "positive but degraded",
                    "selection above chance does not either", "real narratives must beat variance-matched noise",
@@ -1147,9 +1201,20 @@ def test_write_report_on_hand_built_result(tmp_path):
     # pass/fail: recall passes 2/2 for the baseline and is n/a for the null; the lift is n/a for the baseline
     assert f"| selection_recall | 2/2 (>= {HarnessThresholds().selection_recall_min:.2f}) | n/a |" in text
     assert "| null_selection_lift | n/a | 2/2 (<= 2.00) |" in text
-    assert "| placebo_selected | 2/2 (<= 0) | 2/2 (<= 0) |" in text
+    assert "| placebo_selected | 2/2 (<= 0) | n/a |" in text  # no placebo check under no_factor (D52)
     assert "| selection_recall_strong | selection_recall_strong >= | 0.80 | n/a |" in text
     assert "| beta_canonical_corr | beta_canonical_corr >= | 0.90 | n/a |" in text
+    # the report-only metrics (D52): 'reported only' in the thresholds table, 'reported (not identified)' in the
+    # pass/fail table, values under 'Reported (not pass/fail)' in the baseline paragraph, still in the summary table
+    for c in harness.REPORT_ONLY_METRICS:
+        assert f"| {c} | {c} >= | reported only | n/a |" in text, c
+        assert f"| {c} | {harness.REPORTED_TEXT} | n/a |" in text, c
+        assert f"| {c} | " in text.split("## Summary per scenario")[1].split("## Instrument")[0], c
+    assert f"| all applicable checks | " in text
+    para_base = text.split("**baseline** (2 seeds).")[1].split("\n\n")[0]
+    assert "Reported (not pass/fail): gamma_subspace_cos " in para_base and "DESIGN.md D52" in para_base
+    assert "gamma_subspace_cos (failed" not in text and "state_canonical_corr (failed" not in text
+    assert f"Check set {harness.CHECK_SET_VERSION} (DESIGN.md D52)" in text.split("## Pass / fail")[1]
     assert "`beta_canonical_corr` is the first canonical correlation" in text.split("## Summary per scenario")[1].split("## Instrument")[0]
     assert "## Errors" in text and "`no_factor_seed1`: ValueError: synthetic" in text
     assert "**no_factor** (2 seeds)" in text and "**baseline** (2 seeds)" in text
@@ -1175,6 +1240,11 @@ def test_write_report_on_hand_built_result(tmp_path):
            "the 0.75 threshold is calibrated for 90-100 OOS periods." in para_nf
     assert "seed 1:" not in para_nf  # the erroring seed is not read
     assert "null_oos_sharpe_abs (failed 2/2 seeds)" in para_nf
+    assert "placebo selected 0 (reported only, D52)" in para_nf and "placebo_selected (failed" not in para_nf
+    # a rescored result says so in the setup section
+    res.meta.update({"rescored": True, "rescored_at": "2026-09-07T10:00:00+00:00", "check_set": harness.CHECK_SET_VERSION})
+    text2 = Path(harness.write_report(res, tmp_path / "reports2")).read_text(encoding="utf-8")
+    assert "- Pass flags rescored on 2026-09-07 with check set v2 (DESIGN.md D52" in text2.split("## Setup")[1].split("## Summary")[0]
     # the note is only written when the standard-error reading differs from the absolute one
     thr = HarnessThresholds()
     ok = res.per_run[(res.per_run["scenario"] == "no_factor") & (res.per_run["error"] == "")]
@@ -1255,3 +1325,177 @@ def test_study_script_plumbs_arguments_and_prints_the_table(monkeypatch, tmp_pat
     assert "no_factor" in help_text and "topic_null" in help_text and "report-only" in help_text
     flat = " ".join(help_text.split())  # argparse wraps the help; compare on collapsed whitespace
     assert "baseline | no_factor" in flat and "topic_null (alias null" in flat and "| softmax | weak | balanced" in flat
+
+
+# ---------------------------------------------------------------------------
+# scripts/rescore_study.py on a hand-built per_run.csv
+# ---------------------------------------------------------------------------
+def _load_rescore_script():
+    spec = importlib.util.spec_from_file_location("rescore_study", REPO / "scripts" / "rescore_study.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _stale_per_run_rows() -> list[dict]:
+    """Two scenarios x two seeds with hand-set metrics and stale (check set v1) flags: everything 0.0, all_passed False."""
+    checks = [c for c, *_ in harness.CHECKS]
+    good = {
+        "selection_recall": 0.6, "selection_recall_strong": 0.9, "selection_precision": 0.8, "placebo_selected": 0.0,
+        "beta_canonical_corr": 0.97, "factor_canonical_corr": 0.99, "oos_sharpe_ratio_to_true": 0.7, "systematic_r2_recovered": 0.9,
+        # far below the (disabled) v1 thresholds: must not fail anything under check set v2
+        "gamma_subspace_cos": 0.3, "state_canonical_corr": 0.4, "impact_spearman": float("nan"),
+        "null_selection_lift": 9.0, "null_oos_sharpe_abs": 0.9,
+    }
+    variants = (
+        ("baseline", 0, {}),
+        ("baseline", 1, {"selection_precision": 0.2, "placebo_selected": 3.0}),
+        ("no_factor", 0, {"null_selection_lift": 1.0, "null_oos_sharpe_abs": 0.2, "placebo_selected": 1.0, "n_selected": 3.0}),
+        ("no_factor", 1, {"null_selection_lift": 2.5, "null_oos_sharpe_abs": 0.2, "placebo_selected": 0.0, "n_selected": 7.0}),
+    )
+    rows = []
+    for scenario, seed, over in variants:
+        row: dict = {"scenario": scenario, "seed": seed}
+        row.update({metric: float("nan") for metric in harness.METRICS})
+        row.update(good)
+        row.update({"n_selected": 12.0, "n_placebo_topics": 5.0, "L": 20.0, "runtime_seconds": 5.0 + seed, "factor_structure": 0.0 if scenario == "no_factor" else 1.0})
+        row.update(over)
+        row.update({f"pass_{c}": 0.0 for c in checks})
+        row["all_passed"] = False
+        row["harness_seconds"] = 5.5 + seed
+        row["error"] = ""
+        rows.append(row)
+    return rows
+
+
+def test_rescore_study_recomputes_flags_from_per_run_csv(tmp_path, capsys):
+    script = _load_rescore_script()
+    checks = [c for c, *_ in harness.CHECKS]
+    out = tmp_path / "study"
+    var = out / "bks"
+    art = var / "artefacts"
+    art.mkdir(parents=True)
+    pd.DataFrame(_stale_per_run_rows()).to_csv(var / "per_run.csv", index=False)
+    stale_report = var / "harness_2026-01-01.md"
+    stale_report.write_text("stale report", encoding="utf-8")
+    (var / "notes.md").write_text("keep me", encoding="utf-8")
+    (art / "baseline_seed0_metrics.json").write_text("{}", encoding="utf-8")
+    # the artefact is the primary record: its (exact) values replace the CSV's; 7/27 needs 17 digits, which pandas'
+    # default parser gets wrong by an ulp; keys that are not columns are ignored
+    artefact_b1 = json.dumps({"values": {"selection_precision": 7 / 27, "not_a_column": 1.0}})
+    (art / "baseline_seed1_metrics.json").write_text(artefact_b1, encoding="utf-8")
+    (out / "study_run.log").write_text(
+        "2026-09-06 17:05:23,131 run_full_study INFO variant bks: 4 runs on 8 workers (3 threads each)\n"
+        "2026-09-06 17:05:50,000 narrative_ipca.harness INFO write_report: study\\other\\harness_2026-09-06.md\n"
+        "2026-09-06 17:06:00,131 narrative_ipca.harness INFO write_report: study\\bks\\harness_2026-09-06.md\n"
+        "2026-09-06 17:06:00,200 run_full_study INFO variant tol02: 4 runs on 8 workers (3 threads each)\n",
+        encoding="utf-8",
+    )
+    # the timings of the original run come from the driver log (start line to the variant's write_report line)
+    assert script.timings_from_log(out, "bks") == (datetime(2026, 9, 6, 17, 5, 23), 37.0)
+    started, elapsed = script.timings_from_log(out, "tol02")
+    assert started == datetime(2026, 9, 6, 17, 6, 0) and math.isnan(elapsed)  # started, no report line
+    s_none, e_nan = script.timings_from_log(out, "loocv")  # variant absent from the log
+    assert s_none is None and math.isnan(e_nan)
+    assert math.isnan(script.timings_from_log(tmp_path / "nowhere", "bks")[1])
+
+    assert script.main(["--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "=== variant bks: rescored with check set v2" in printed and "null_selection_lift" in printed
+    assert "reported only (no pass flag): gamma_subspace_cos, state_canonical_corr, impact_spearman" in printed
+
+    # per_run.csv: flags recomputed from the metrics with the v2 check set, metrics untouched (bit-exact, the
+    # artefact's value restored where one exists), column order kept
+    back = pd.read_csv(var / "per_run.csv", float_precision="round_trip")
+    assert list(back["scenario"]) == ["baseline", "baseline", "no_factor", "no_factor"] and list(back["seed"]) == [0, 1, 0, 1]
+    assert list(back.columns[:2]) == ["scenario", "seed"] and list(back.columns[-3:]) == ["all_passed", "harness_seconds", "error"]
+    assert back.columns.get_loc("pass_selection_recall") < back.columns.get_loc("all_passed")
+    assert "not_a_column" not in back.columns
+    b0, b1, n0, n1 = (back.iloc[i] for i in range(4))
+    assert b0["selection_recall"] == 0.6 and b1["selection_precision"] == 7 / 27 and n0["null_selection_lift"] == 1.0
+    assert b0["gamma_subspace_cos"] == 0.3 and math.isnan(b0["impact_spearman"])  # values kept, ...
+    for c in harness.REPORT_ONLY_METRICS:  # ... no pass flag anywhere
+        assert back[f"pass_{c}"].isna().all(), c
+    for c in harness.SIGNAL_CHECKS:
+        assert b0[f"pass_{c}"] == 1.0, c
+        assert math.isnan(n0[f"pass_{c}"]) and math.isnan(n1[f"pass_{c}"]), c
+    assert b1["pass_selection_precision"] == 0.0 and b1["pass_placebo_selected"] == 0.0 and b1["pass_selection_recall"] == 1.0
+    assert math.isnan(n0["pass_placebo_selected"])  # no placebo check under no_factor even with a placebo selected (D52)
+    assert n0["pass_null_selection_lift"] == 1.0 and n0["pass_null_oos_sharpe_abs"] == 1.0
+    assert n1["pass_null_selection_lift"] == 0.0 and n1["pass_null_oos_sharpe_abs"] == 1.0
+    for row in (b0, b1):
+        assert math.isnan(row["pass_null_selection_lift"]) and math.isnan(row["pass_null_oos_sharpe_abs"])
+    assert list(back["all_passed"]) == [True, False, True, False] and back["all_passed"].dtype == bool
+    assert back["error"].isna().all() and list(back["harness_seconds"]) == [5.5, 6.5, 5.5, 6.5]
+    # passed.csv / summary.csv rebuilt as run_full_study.assemble does
+    passed = pd.read_csv(var / "passed.csv", index_col=0)
+    assert list(passed.index) == ["baseline", "no_factor"] and list(passed.columns) == checks + ["all"]
+    assert passed.loc["baseline", "selection_recall"] == 1.0 and passed.loc["baseline", "selection_precision"] == 0.5
+    assert passed.loc["baseline", "placebo_selected"] == 0.5 and math.isnan(passed.loc["no_factor", "placebo_selected"])
+    assert passed.loc["no_factor", "null_selection_lift"] == 0.5 and passed.loc["no_factor", "null_oos_sharpe_abs"] == 1.0
+    assert math.isnan(passed.loc["baseline", "null_selection_lift"]) and passed["gamma_subspace_cos"].isna().all()
+    assert list(passed["all"]) == [0.5, 0.5]
+    summary = pd.read_csv(var / "summary.csv", header=[0, 1], index_col=0)
+    assert list(summary.index) == ["baseline", "no_factor"]
+    assert summary.loc["baseline", ("selection_recall", "mean")] == pytest.approx(0.6)
+    assert summary.loc["baseline", ("selection_precision", "std")] == pytest.approx(np.std([0.8, 7 / 27], ddof=1))
+    # the old report is gone, exactly one new report of today exists, other files and the artefacts are untouched
+    assert not stale_report.exists() and (var / "notes.md").read_text(encoding="utf-8") == "keep me"
+    assert (art / "baseline_seed0_metrics.json").read_text(encoding="utf-8") == "{}"
+    assert (art / "baseline_seed1_metrics.json").read_text(encoding="utf-8") == artefact_b1
+    reports = sorted(var.glob("harness_*.md"))
+    assert [p.name for p in reports] == [f"harness_{datetime.now():%Y-%m-%d}.md"]
+    text = reports[0].read_text(encoding="utf-8")
+    today = f"{datetime.now():%Y-%m-%d}"
+    setup = text.split("## Setup")[1].split("## Summary")[0]
+    assert f"rescored on {today} with check set v2" in setup and "37.0 s wall clock" in text
+    assert "Pipeline config `study-bks`: K = 3, criterion = is_sharpe" in setup
+    assert "| baseline | 500 | 120 | 20 | 20 | 3 | 20 |" in setup  # sizes rebuilt from scenario_config
+    pf = text.split("## Pass / fail")[1].split("## Per-run table")[0]
+    assert "| selection_precision | 1/2 (>= 0.60) | n/a |" in pf and "| placebo_selected | 1/2 (<= 0) | n/a |" in pf
+    assert "| null_selection_lift | n/a | 1/2 (<= 2.00) |" in pf and "| all applicable checks | 1/2 | 1/2 |" in pf
+    assert f"| gamma_subspace_cos | {harness.REPORTED_TEXT} | n/a |" in pf
+    para_nf = text.split("**no_factor** (2 seeds).")[1].split("\n\n")[0]
+    assert "placebo selected 0.500 (min 0, max 1) (reported only, D52: a chance-level selection of 5 topics includes about 1.25 placebos" in para_nf
+    assert "Checks failed: null_selection_lift (failed 1/2 seeds)." in para_nf
+    assert "Artefacts" in text and "baseline_seed0_metrics.json" not in text  # artefact dir named, files not listed
+    # a second pass is idempotent on the tables and replaces the report again
+    assert script.main(["--out", str(out), "--variants", "bks"]) == 0
+    capsys.readouterr()
+    again = pd.read_csv(var / "per_run.csv", float_precision="round_trip")
+    pd.testing.assert_frame_equal(again, back)
+    assert [p.name for p in sorted(var.glob("harness_*.md"))] == [f"harness_{today}.md"]
+    # rescore_rows on its own: an erroring run keeps 0.0 on its applicable checks; a report-only scenario is
+    # vacuously all_passed with NaN everywhere; an unknown variant directory falls back to the default config
+    rows = _stale_per_run_rows()
+    rows[0]["error"] = "ValueError: synthetic"
+    rows[2]["scenario"] = "topic_null"
+    script.rescore_rows(rows, HarnessThresholds())
+    assert rows[0]["all_passed"] is False and rows[0]["pass_selection_recall"] == 0.0 and math.isnan(rows[0]["pass_null_selection_lift"])
+    assert rows[2]["all_passed"] is True and all(math.isnan(rows[2][f"pass_{c}"]) for c in checks)
+    assert script.pipeline_config_of("bks").tuning.criterion == "is_sharpe" and script.pipeline_config_of("loocv").tuning.criterion == "loocv_sharpe"
+    assert script.pipeline_config_of("custom").name == "study-custom"
+    assert script.find_variants(out) == ["bks"] and script.find_variants(tmp_path / "nowhere") == []
+    with pytest.raises(SystemExit):
+        script.main(["--out", str(tmp_path / "nowhere")])
+
+
+def test_rescore_study_reads_metrics_exactly_and_prefers_the_artefact(tmp_path):
+    """load_rows parses floats exactly; refresh_metrics_from_artefact restores the artefact's values, ignores junk."""
+    script = _load_rescore_script()
+    p = tmp_path / "per_run.csv"
+    pd.DataFrame([{"scenario": "baseline", "seed": 0, "selection_precision": 7 / 27, "n_selected": 12.0, "error": ""}]).to_csv(p, index=False)
+    (row,) = script.load_rows(p)
+    assert row["selection_precision"] == 7 / 27  # 17 significant digits survive the CSV round trip
+    assert row["seed"] == 0 and row["error"] == ""
+    art = tmp_path / "baseline_seed0_metrics.json"
+    assert script.refresh_metrics_from_artefact(row, art) == 0  # no artefact: row untouched
+    art.write_text(json.dumps({"values": {"selection_precision": 0.25, "n_selected": 3, "seed": 9, "other": 1.0, "s": "x", "none": None}}), encoding="utf-8")
+    assert script.refresh_metrics_from_artefact(row, art) == 2  # selection_precision and n_selected; seed is identity
+    assert row["selection_precision"] == 0.25 and row["n_selected"] == 3.0 and row["seed"] == 0 and "other" not in row
+    for junk in ("{}", "[1, 2]", "", "{\"values\": 5}"):
+        art.write_text(junk, encoding="utf-8")
+        assert script.refresh_metrics_from_artefact(row, art) == 0, junk
+    assert row["selection_precision"] == 0.25
+
