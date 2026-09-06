@@ -1,0 +1,256 @@
+2026-09-06 15:54:51,088 narrative_ipca.simulation INFO simulated scenario=baseline seed=0: 5040 days, 232 periods (M), 500 assets, 120 topics (20 relevant, 20 placebo), K=3, true MVE Sharpe 1.00 (realised 1.08), systematic R2 0.26
+2026-09-06 15:54:51,100 narrative_ipca.data INFO align_inputs: 5040 trading days (2005-01-03 .. 2024-04-26), 120 topics, 500 assets; dropped 0 leading / 0 trailing days; policy=drop lag=0 weighting=none
+2026-09-06 15:54:51,100 narrative_ipca.pipeline INFO step 1 align: 5040 days x 120 topics x 500 assets (0.01s)
+2026-09-06 15:54:51,110 narrative_ipca.shocks INFO attention_shocks: window=5, 5040 days x 120 topics, 5 days with a missing shock
+2026-09-06 15:54:51,110 narrative_ipca.pipeline INFO step 2 shocks: window=5, 5040 days x 120 topics, 5 days with a missing shock (0.01s)
+2026-09-06 15:54:51,257 narrative_ipca.covariances INFO build_covariance_panel: T=232 periods (M), N=500 assets, L=120 topics; xi=0.9900 skip_days=1 lookback=None min_days=60; 104573/116000 asset-periods valid; 5 days with missing shocks excluded
+2026-09-06 15:54:51,259 narrative_ipca.pipeline INFO step 3 covariances: (T, N, L) = (232, 500, 120), 104573/116000 asset-periods valid, dtype=float64 (0.15s)
+2026-09-06 15:54:51,314 narrative_ipca.panel INFO build_panel: 91930 rows, 219 return periods (2006-02-28 .. 2024-04-26), 500 assets, 121 instruments; burn_in=12 dropped, 0 periods below min_assets=20, 268 asset-periods with a return but no instrument
+2026-09-06 15:54:51,322 narrative_ipca.pipeline INFO step 4 panel: 91930 rows, T=219 periods (2006-02-28 .. 2024-04-26), N=500 assets, p=121 instruments (0.06s)
+2026-09-06 15:54:51,565 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00977751
+2026-09-06 15:54:51,598 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00977751
+2026-09-06 15:54:51,598 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:52,005 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.778e-05 K=3: 96 sweeps, converged=True, selected=11/120, total_r2=0.2655
+2026-09-06 15:54:52,239 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001486 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2634
+2026-09-06 15:54:52,418 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002259 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2568
+2026-09-06 15:54:52,558 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003433 K=3: 38 sweeps, converged=True, selected=4/120, total_r2=0.2491
+2026-09-06 15:54:52,695 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005218 K=3: 32 sweeps, converged=True, selected=4/120, total_r2=0.2488
+2026-09-06 15:54:52,806 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0007931 K=3: 26 sweeps, converged=True, selected=3/120, total_r2=0.2481
+2026-09-06 15:54:52,885 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001205 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2469
+2026-09-06 15:54:52,948 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001832 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2449
+2026-09-06 15:54:52,996 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002785 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2410
+2026-09-06 15:54:53,034 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004232 K=3: 7 sweeps, converged=True, selected=2/120, total_r2=0.2338
+2026-09-06 15:54:53,063 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006433 K=3: 5 sweeps, converged=True, selected=2/120, total_r2=0.2192
+2026-09-06 15:54:53,083 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009778 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1865
+2026-09-06 15:54:53,084 narrative_ipca.tuning INFO tune: chosen lam=9.778e-05 K=3 (is_sharpe=1.0335, 11 selected, 1 tied point(s), lam_max=0.009778)
+2026-09-06 15:54:53,085 narrative_ipca.pipeline INFO step 5-6 tune: is_sharpe -> lambda*=9.778e-05 K=3, 11/120 narratives selected, IS Sharpe 1.033, total R2 0.2655, 12 path points, converged=True (1.76s)
+2026-09-06 15:54:53,088 narrative_ipca.wrapup INFO wrap_up: L=120 K=3 selected=11 rank_deficient=False days=5040 (finite 5035)
+2026-09-06 15:54:53,088 narrative_ipca.pipeline INFO step 7 wrapup: A (120, 3), states (5040, 3), 0 observable(s), term vector=False, rank_deficient=False (0.00s)
+2026-09-06 15:54:53,089 narrative_ipca.oos INFO run_oos: 219 periods, first OOS period 2017-01-31 (index 131, 131 training periods), 8 refit(s) every 12 periods, retune_lambda=True
+2026-09-06 15:54:53,089 narrative_ipca.oos INFO run_oos: refit 1/8: training on 131 periods through 2016-12-30
+2026-09-06 15:54:53,159 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0107737
+2026-09-06 15:54:53,190 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0107737
+2026-09-06 15:54:53,190 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:53,523 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001077 K=3: 98 sweeps, converged=True, selected=10/120, total_r2=0.2806
+2026-09-06 15:54:53,708 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001638 K=3: 62 sweeps, converged=True, selected=8/120, total_r2=0.2773
+2026-09-06 15:54:53,849 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002489 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2721
+2026-09-06 15:54:53,957 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003783 K=3: 39 sweeps, converged=True, selected=4/120, total_r2=0.2660
+2026-09-06 15:54:54,042 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.000575 K=3: 30 sweeps, converged=True, selected=3/120, total_r2=0.2656
+2026-09-06 15:54:54,117 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0008739 K=3: 26 sweeps, converged=True, selected=4/120, total_r2=0.2649
+2026-09-06 15:54:54,174 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001328 K=3: 20 sweeps, converged=True, selected=4/120, total_r2=0.2637
+2026-09-06 15:54:54,216 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002019 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2614
+2026-09-06 15:54:54,245 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.003068 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2574
+2026-09-06 15:54:54,271 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004664 K=3: 8 sweeps, converged=True, selected=2/120, total_r2=0.2497
+2026-09-06 15:54:54,286 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.007088 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2345
+2026-09-06 15:54:54,296 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.01077 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.2000
+2026-09-06 15:54:54,297 narrative_ipca.tuning INFO tune: chosen lam=0.0001077 K=3 (is_sharpe=1.0377, 10 selected, 1 tied point(s), lam_max=0.01077)
+2026-09-06 15:54:54,298 narrative_ipca.oos INFO run_oos: refit 1/8 lam=0.0001077 K=3 selected=10/120 train Sharpe=1.038 applied to 12 period(s)
+2026-09-06 15:54:54,298 narrative_ipca.oos INFO run_oos: refit 2/8: training on 143 periods through 2017-12-29
+2026-09-06 15:54:54,371 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0105234
+2026-09-06 15:54:54,401 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0105234
+2026-09-06 15:54:54,402 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:54,737 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001052 K=3: 97 sweeps, converged=True, selected=10/120, total_r2=0.2768
+2026-09-06 15:54:54,926 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001599 K=3: 62 sweeps, converged=True, selected=9/120, total_r2=0.2737
+2026-09-06 15:54:55,091 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002431 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2684
+2026-09-06 15:54:55,207 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003695 K=3: 39 sweeps, converged=True, selected=4/120, total_r2=0.2621
+2026-09-06 15:54:55,299 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005616 K=3: 31 sweeps, converged=True, selected=4/120, total_r2=0.2617
+2026-09-06 15:54:55,371 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0008536 K=3: 25 sweeps, converged=True, selected=4/120, total_r2=0.2610
+2026-09-06 15:54:55,432 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001297 K=3: 20 sweeps, converged=True, selected=3/120, total_r2=0.2598
+2026-09-06 15:54:55,475 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001972 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2576
+2026-09-06 15:54:55,508 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002997 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2536
+2026-09-06 15:54:55,534 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004555 K=3: 8 sweeps, converged=True, selected=2/120, total_r2=0.2461
+2026-09-06 15:54:55,549 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006924 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2312
+2026-09-06 15:54:55,560 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.01052 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1974
+2026-09-06 15:54:55,561 narrative_ipca.tuning INFO tune: chosen lam=0.0001052 K=3 (is_sharpe=1.0005, 10 selected, 1 tied point(s), lam_max=0.01052)
+2026-09-06 15:54:55,562 narrative_ipca.oos INFO run_oos: refit 2/8 lam=0.0001052 K=3 selected=10/120 train Sharpe=1.001 applied to 12 period(s)
+2026-09-06 15:54:55,562 narrative_ipca.oos INFO run_oos: refit 3/8: training on 155 periods through 2018-12-31
+2026-09-06 15:54:55,640 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0101375
+2026-09-06 15:54:55,672 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.0101375
+2026-09-06 15:54:55,672 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:56,028 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001014 K=3: 97 sweeps, converged=True, selected=11/120, total_r2=0.2712
+2026-09-06 15:54:56,231 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001541 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2687
+2026-09-06 15:54:56,390 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002342 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2626
+2026-09-06 15:54:56,520 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003559 K=3: 39 sweeps, converged=True, selected=4/120, total_r2=0.2558
+2026-09-06 15:54:56,628 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.000541 K=3: 32 sweeps, converged=True, selected=4/120, total_r2=0.2554
+2026-09-06 15:54:56,714 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0008223 K=3: 26 sweeps, converged=True, selected=4/120, total_r2=0.2548
+2026-09-06 15:54:56,781 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.00125 K=3: 20 sweeps, converged=True, selected=4/120, total_r2=0.2535
+2026-09-06 15:54:56,828 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0019 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2514
+2026-09-06 15:54:56,864 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002887 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2475
+2026-09-06 15:54:56,889 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004388 K=3: 8 sweeps, converged=True, selected=1/120, total_r2=0.2402
+2026-09-06 15:54:56,906 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.00667 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2257
+2026-09-06 15:54:56,918 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.01014 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1930
+2026-09-06 15:54:56,920 narrative_ipca.tuning INFO tune: chosen lam=0.0001014 K=3 (is_sharpe=1.0005, 11 selected, 1 tied point(s), lam_max=0.01014)
+2026-09-06 15:54:56,921 narrative_ipca.oos INFO run_oos: refit 3/8 lam=0.0001014 K=3 selected=11/120 train Sharpe=1.001 applied to 12 period(s)
+2026-09-06 15:54:56,921 narrative_ipca.oos INFO run_oos: refit 4/8: training on 167 periods through 2019-12-31
+2026-09-06 15:54:57,000 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00965945
+2026-09-06 15:54:57,032 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00965945
+2026-09-06 15:54:57,032 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:57,442 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.659e-05 K=3: 97 sweeps, converged=True, selected=10/120, total_r2=0.2629
+2026-09-06 15:54:57,666 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001468 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2607
+2026-09-06 15:54:57,845 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002231 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2545
+2026-09-06 15:54:57,979 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003392 K=3: 39 sweeps, converged=True, selected=3/120, total_r2=0.2467
+2026-09-06 15:54:58,080 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005155 K=3: 30 sweeps, converged=True, selected=3/120, total_r2=0.2463
+2026-09-06 15:54:58,161 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0007835 K=3: 24 sweeps, converged=True, selected=3/120, total_r2=0.2456
+2026-09-06 15:54:58,222 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001191 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2445
+2026-09-06 15:54:58,271 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.00181 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2424
+2026-09-06 15:54:58,307 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002751 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2387
+2026-09-06 15:54:58,337 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004181 K=3: 8 sweeps, converged=True, selected=2/120, total_r2=0.2316
+2026-09-06 15:54:58,355 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006355 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2176
+2026-09-06 15:54:58,369 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009659 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1861
+2026-09-06 15:54:58,370 narrative_ipca.tuning INFO tune: chosen lam=9.659e-05 K=3 (is_sharpe=1.0460, 10 selected, 1 tied point(s), lam_max=0.009659)
+2026-09-06 15:54:58,371 narrative_ipca.oos INFO run_oos: refit 4/8 lam=9.659e-05 K=3 selected=10/120 train Sharpe=1.046 applied to 12 period(s)
+2026-09-06 15:54:58,371 narrative_ipca.oos INFO run_oos: refit 5/8: training on 179 periods through 2020-12-31
+2026-09-06 15:54:58,455 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00975062
+2026-09-06 15:54:58,488 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00975062
+2026-09-06 15:54:58,488 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:54:58,894 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.751e-05 K=3: 96 sweeps, converged=True, selected=11/120, total_r2=0.2637
+2026-09-06 15:54:59,131 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001482 K=3: 61 sweeps, converged=True, selected=10/120, total_r2=0.2615
+2026-09-06 15:54:59,319 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002253 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2556
+2026-09-06 15:54:59,449 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003424 K=3: 38 sweeps, converged=True, selected=3/120, total_r2=0.2474
+2026-09-06 15:54:59,554 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005204 K=3: 30 sweeps, converged=True, selected=3/120, total_r2=0.2471
+2026-09-06 15:54:59,639 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0007909 K=3: 24 sweeps, converged=True, selected=3/120, total_r2=0.2464
+2026-09-06 15:54:59,705 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001202 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2452
+2026-09-06 15:54:59,759 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001827 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2432
+2026-09-06 15:54:59,800 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002777 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2394
+2026-09-06 15:54:59,829 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004221 K=3: 7 sweeps, converged=True, selected=2/120, total_r2=0.2321
+2026-09-06 15:54:59,849 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006415 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2178
+2026-09-06 15:54:59,864 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009751 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1855
+2026-09-06 15:54:59,865 narrative_ipca.tuning INFO tune: chosen lam=9.751e-05 K=3 (is_sharpe=1.0439, 11 selected, 1 tied point(s), lam_max=0.009751)
+2026-09-06 15:54:59,866 narrative_ipca.oos INFO run_oos: refit 5/8 lam=9.751e-05 K=3 selected=11/120 train Sharpe=1.044 applied to 12 period(s)
+2026-09-06 15:54:59,866 narrative_ipca.oos INFO run_oos: refit 6/8: training on 191 periods through 2021-12-31
+2026-09-06 15:54:59,957 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00975703
+2026-09-06 15:54:59,992 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00975703
+2026-09-06 15:54:59,992 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:55:00,413 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.757e-05 K=3: 96 sweeps, converged=True, selected=10/120, total_r2=0.2642
+2026-09-06 15:55:00,653 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001483 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2620
+2026-09-06 15:55:00,845 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002254 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2560
+2026-09-06 15:55:00,996 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003426 K=3: 38 sweeps, converged=True, selected=4/120, total_r2=0.2480
+2026-09-06 15:55:01,126 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005207 K=3: 32 sweeps, converged=True, selected=4/120, total_r2=0.2477
+2026-09-06 15:55:01,226 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0007914 K=3: 25 sweeps, converged=True, selected=4/120, total_r2=0.2470
+2026-09-06 15:55:01,306 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001203 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2458
+2026-09-06 15:55:01,364 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001828 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2438
+2026-09-06 15:55:01,409 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002779 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2399
+2026-09-06 15:55:01,440 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004224 K=3: 7 sweeps, converged=True, selected=2/120, total_r2=0.2327
+2026-09-06 15:55:01,461 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006419 K=3: 5 sweeps, converged=True, selected=1/120, total_r2=0.2183
+2026-09-06 15:55:01,476 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009757 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1859
+2026-09-06 15:55:01,478 narrative_ipca.tuning INFO tune: chosen lam=9.757e-05 K=3 (is_sharpe=0.9728, 10 selected, 1 tied point(s), lam_max=0.009757)
+2026-09-06 15:55:01,479 narrative_ipca.oos INFO run_oos: refit 6/8 lam=9.757e-05 K=3 selected=10/120 train Sharpe=0.973 applied to 12 period(s)
+2026-09-06 15:55:01,479 narrative_ipca.oos INFO run_oos: refit 7/8: training on 203 periods through 2022-12-30
+2026-09-06 15:55:01,575 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00970131
+2026-09-06 15:55:01,611 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00970131
+2026-09-06 15:55:01,611 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:55:02,061 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.701e-05 K=3: 96 sweeps, converged=True, selected=11/120, total_r2=0.2635
+2026-09-06 15:55:02,322 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0001475 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2613
+2026-09-06 15:55:02,525 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002241 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2552
+2026-09-06 15:55:02,681 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003406 K=3: 38 sweeps, converged=True, selected=4/120, total_r2=0.2472
+2026-09-06 15:55:02,814 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0005177 K=3: 33 sweeps, converged=True, selected=4/120, total_r2=0.2468
+2026-09-06 15:55:02,926 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0007869 K=3: 26 sweeps, converged=True, selected=4/120, total_r2=0.2461
+2026-09-06 15:55:03,007 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001196 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2450
+2026-09-06 15:55:03,071 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001818 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2429
+2026-09-06 15:55:03,116 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002763 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2391
+2026-09-06 15:55:03,153 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004199 K=3: 7 sweeps, converged=True, selected=2/120, total_r2=0.2319
+2026-09-06 15:55:03,180 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006383 K=3: 5 sweeps, converged=True, selected=2/120, total_r2=0.2175
+2026-09-06 15:55:03,197 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009701 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1851
+2026-09-06 15:55:03,198 narrative_ipca.tuning INFO tune: chosen lam=9.701e-05 K=3 (is_sharpe=0.9694, 11 selected, 1 tied point(s), lam_max=0.009701)
+2026-09-06 15:55:03,199 narrative_ipca.oos INFO run_oos: refit 7/8 lam=9.701e-05 K=3 selected=11/120 train Sharpe=0.969 applied to 12 period(s)
+2026-09-06 15:55:03,199 narrative_ipca.oos INFO run_oos: refit 8/8: training on 215 periods through 2023-12-29
+2026-09-06 15:55:03,300 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00993197
+2026-09-06 15:55:03,335 narrative_ipca.sparse_ipca INFO lambda_max(K=3) = 0.00993197
+2026-09-06 15:55:03,335 narrative_ipca.tuning INFO tune: criterion=is_sharpe, K candidates=(3,), 12 path point(s), tie_break=sparser
+2026-09-06 15:55:03,778 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=9.932e-05 K=3: 96 sweeps, converged=True, selected=11/120, total_r2=0.2682
+2026-09-06 15:55:04,029 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.000151 K=3: 61 sweeps, converged=True, selected=9/120, total_r2=0.2661
+2026-09-06 15:55:04,237 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0002294 K=3: 49 sweeps, converged=True, selected=7/120, total_r2=0.2595
+2026-09-06 15:55:04,396 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0003487 K=3: 38 sweeps, converged=True, selected=4/120, total_r2=0.2520
+2026-09-06 15:55:04,531 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.00053 K=3: 30 sweeps, converged=True, selected=4/120, total_r2=0.2516
+2026-09-06 15:55:04,642 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.0008056 K=3: 24 sweeps, converged=True, selected=3/120, total_r2=0.2509
+2026-09-06 15:55:04,729 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001224 K=3: 18 sweeps, converged=True, selected=2/120, total_r2=0.2497
+2026-09-06 15:55:04,795 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.001861 K=3: 14 sweeps, converged=True, selected=2/120, total_r2=0.2476
+2026-09-06 15:55:04,843 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.002829 K=3: 10 sweeps, converged=True, selected=2/120, total_r2=0.2438
+2026-09-06 15:55:04,876 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.004299 K=3: 7 sweeps, converged=True, selected=2/120, total_r2=0.2364
+2026-09-06 15:55:04,903 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.006535 K=3: 5 sweeps, converged=True, selected=2/120, total_r2=0.2217
+2026-09-06 15:55:04,920 narrative_ipca.sparse_ipca INFO fit_sparse_ipca lam=0.009932 K=3: 3 sweeps, converged=True, selected=1/120, total_r2=0.1885
+2026-09-06 15:55:04,921 narrative_ipca.tuning INFO tune: chosen lam=9.932e-05 K=3 (is_sharpe=1.0734, 11 selected, 1 tied point(s), lam_max=0.009932)
+2026-09-06 15:55:04,922 narrative_ipca.oos INFO run_oos: refit 8/8 lam=9.932e-05 K=3 selected=11/120 train Sharpe=1.073 applied to 4 period(s)
+2026-09-06 15:55:04,922 narrative_ipca.oos INFO run_oos: 88 out-of-sample periods (0 skipped as empty), realised MVE Sharpe 0.915
+2026-09-06 15:55:04,926 narrative_ipca.pipeline INFO step 8 oos: 88 OOS periods from 2017-01-31 00:00:00, 8 refit(s), realised MVE Sharpe 0.915 (11.84s)
+2026-09-06 15:55:04,936 narrative_ipca.evaluation INFO evaluate_run: total_r2=0.2655 pred_r2=0.0105 mve_sharpe_is=1.033 n_selected=11 lam*=9.778e-05 oos_sharpe=0.915
+2026-09-06 15:55:04,936 narrative_ipca.pipeline INFO step 9 evaluate: total_r2=0.2655 pred_r2=0.0105 mve_sharpe_is=1.033 oos_sharpe=0.915 n_selected=11 (0.01s); pipeline total 13.85s
+2026-09-06 15:55:04,997 narrative_ipca.harness INFO compare_to_truth[baseline]: recall 0.55 precision 1.00 placebo 0 gamma_cos 0.410 factor_cc 0.995 state_cc 0.802 impact_rho 0.336 oos 0.91 (true 1.07, se 0.38) sys_r2 0.938 lift 1.83 instrument R2 rel 0.839 noise 0.106 chance 0.007 stability 0.89 -> 6/9 checks passed
+TIMINGS {
+ "align": 0.008989199995994568,
+ "shocks": 0.009351700078696012,
+ "covariances": 0.14785810001194477,
+ "panel": 0.06333150016143918,
+ "tune": 1.7621545996516943,
+ "wrapup": 0.003325999714434147,
+ "oos": 11.837832000106573,
+ "placebo": 0.0,
+ "evaluate": 0.010049199685454369,
+ "total": 13.845494899898767
+}
+HARNESS {
+ "selection_recall": 0.55,
+ "selection_precision": 1.0,
+ "selection_f1": 0.7097,
+ "n_selected": 11.0,
+ "n_relevant": 20.0,
+ "n_relevant_effective": 20.0,
+ "n_placebo_topics": 20.0,
+ "placebo_selected": 0.0,
+ "L": 120.0,
+ "K": 3.0,
+ "K_true": 3.0,
+ "gamma_subspace_cos": 0.4098,
+ "gamma_relevant_rows_selected": 11.0,
+ "factor_canonical_corr": 0.9946,
+ "factor_canonical_corr_mean": 0.9138,
+ "state_canonical_corr": 0.8024,
+ "state_canonical_corr_mean": 0.6356,
+ "impact_spearman": 0.3358,
+ "impact_sign_agreement": 0.35,
+ "mve_sharpe_is": 1.0335,
+ "sharpe_mve_true": 1.0,
+ "sharpe_mve_true_realised": 1.081,
+ "factor_structure": 1.0,
+ "oos_sharpe": 0.915,
+ "oos_sharpe_true_mve": 1.0703,
+ "n_oos_periods": 88.0,
+ "oos_sharpe_se": 0.3757,
+ "oos_sharpe_ratio_to_true": 0.8548,
+ "systematic_r2_recovered": 0.9385,
+ "systematic_r2_recovered_narrative": 0.9385,
+ "systematic_r2_true": 0.2592,
+ "total_r2": 0.2655,
+ "pred_r2": 0.0105,
+ "oos_selection_stability": 0.8864,
+ "instrument_beta_r2_relevant": 0.8395,
+ "instrument_beta_r2_noise": 0.1065,
+ "instrument_beta_r2_placebo": 0.12,
+ "instrument_beta_r2_chance": 0.0071,
+ "instrument_beta_r2_n_periods": 20.0,
+ "instrument_beta_r2_mean_n_assets": 420.15,
+ "null_selection_lift": 1.8333,
+ "null_selection_lift_relevant": 0.55,
+ "null_oos_sharpe_abs": 0.915,
+ "lam_star": 0.0001,
+ "lam_max": 0.0098,
+ "converged": 1.0,
+ "wrapup_rank_deficient": 0.0,
+ "runtime_seconds": 13.8455
+}
+PASSED {'selection_recall': False, 'selection_precision': True, 'placebo_selected': True, 'gamma_subspace_cos': False, 'factor_canonical_corr': True, 'state_canonical_corr': True, 'impact_spearman': False, 'oos_sharpe_ratio_to_true': True, 'systematic_r2_recovered': True}
+PATH
+    K       lam  total_r2   pred_r2  mve_sharpe  n_selected  criterion   objective  converged  n_iter
+0   3  0.000098  0.265530  0.010546    1.033454          11   1.033454  241.836858       True      96
+1   3  0.000149  0.263421  0.010572    1.033275           9   1.033275  244.251736       True      61
+2   3  0.000226  0.256820  0.010459    0.893914           7   0.893914  246.679730       True      49
+3   3  0.000343  0.249142  0.010471    0.747637           4   0.747637  249.169377       True      38
+4   3  0.000522  0.248768  0.010470    0.747877           4   0.747877  252.335992       True      32
+5   3  0.000793  0.248104  0.010459    0.748215           3   0.748215  256.470893       True      26
+6   3  0.001205  0.246947  0.010405    0.748383           2   0.748383  261.847152       True      18
+7   3  0.001832  0.244862  0.010322    0.747761           2   0.747761  268.794991       True      14
+8   3  0.002785  0.241023  0.010163    0.746848           2   0.746848  277.689391       True      10
+9   3  0.004232  0.233756  0.009851    0.745429           2   0.745429  288.905724       True       7
+10  3  0.006433  0.219243  0.009213    0.742959           2   0.742959  302.682172       True       5
+11  3  0.009778  0.186522  0.007826    0.736890           1   0.736890  318.680754       True       3
+TOTAL 14.015354633331299

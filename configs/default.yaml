@@ -1,0 +1,56 @@
+data:
+  period: M
+  attention_lag_days: 0
+  non_trading_day_policy: drop
+  return_kind: excess
+  return_aggregation: sum
+  asset_weighting: none
+  vol_window_days: 252
+  min_assets_per_period: 20
+  dtype: float64
+shocks:
+  window: 5
+  standardize: false
+covariance:
+  xi: 0.99
+  skip_days: 1
+  burn_in_periods: 12
+  lookback_periods: null
+  min_days: 60
+estimation:
+  K: 3
+  lam: null
+  lam_grid:
+    n_lambdas: 30
+    ratio: 0.001
+    values: null
+  penalize_intercept: true
+  max_iter: 500
+  tol: 1.0e-08
+  inner_max_iter: 200
+  inner_tol: 1.0e-10
+  n_warmup: 3
+  seed: 0
+tuning:
+  criterion: is_sharpe
+  K_grid: null
+  tie_break: sparser
+  tolerance: 0.0
+  loocv_max_folds: null
+oos:
+  enabled: true
+  first_oos_period: null
+  oos_fraction: 0.4
+  refit_every: 12
+  retune_lambda: true
+  min_train_periods: 60
+evaluation:
+  annualization: 12.0
+  rcond: 1.0e-06
+  t_crit: 1.96
+  placebo_n: 0
+  placebo_seed: 12345
+run_wrapup: true
+output_dir: null
+save_panel: false
+name: narrative-ipca-run

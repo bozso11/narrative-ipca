@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "narrative-ipca"
+version = "0.1.0"
+description = "Production implementation of the Bybee-Kelly-Su (2023) narrative asset pricing pipeline: attention shocks -> narrative covariances -> Sparse IPCA -> narrative factors, with a simulation and evaluation harness"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "bozso11" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+io = ["pyarrow>=14", "pyyaml>=6"]
+stats = ["statsmodels>=0.14"]
+# Compiled Gamma-step kernel (narrative_ipca.grouplasso); without it the pure-numpy
+# reference path is used (about 30x slower on the full-size study).
+accel = ["numba>=0.59"]
+dev = ["pytest>=8", "pytest-cov>=4", "pyarrow>=14", "pyyaml>=6", "statsmodels>=0.14", "numba>=0.59"]
+
+[project.scripts]
+narrative-ipca = "narrative_ipca.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["narrative_ipca*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: test takes more than a few seconds (deselected by default; run with -m slow or -m '')",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]

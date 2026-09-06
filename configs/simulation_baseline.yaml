@@ -1,0 +1,62 @@
+seed: 0
+n_assets: 500
+n_topics: 120
+n_relevant: 20
+n_placebo: 20
+K: 3
+n_years: 20
+days_per_year: 252
+period: M
+mve_sharpe_annual: 1.0
+factor_vol_annual:
+- 0.16
+- 0.08
+- 0.06
+factor_ar1: 0.0
+nontradable_share: 0.5
+signal_strength: 1.0
+topic_noise_vol: 1.0
+topic_noise_ar1: 0.0
+attention_model: additive
+attention_persistence: 0.98
+attention_slow_vol: 0.05
+attention_level_mean: 1.0
+attention_level_dispersion: 0.5
+asset_classes:
+- name: equity
+  share: 0.6
+  idio_vol_annual: 0.3
+  beta_mean:
+  - 1.0
+  - 0.3
+  - 0.0
+  beta_sd: 0.4
+- name: credit
+  share: 0.2
+  idio_vol_annual: 0.08
+  beta_mean:
+  - 0.3
+  - -0.2
+  - 0.2
+  beta_sd: 0.15
+- name: rates
+  share: 0.1
+  idio_vol_annual: 0.06
+  beta_mean:
+  - -0.2
+  - 0.0
+  - 0.4
+  beta_sd: 0.15
+- name: commodity
+  share: 0.1
+  idio_vol_annual: 0.25
+  beta_mean:
+  - 0.2
+  - 0.5
+  - -0.3
+  beta_sd: 0.3
+beta_ar1: 0.9
+beta_innov_sd: 0.05
+unbalanced_fraction: 0.3
+missing_day_fraction: 0.01
+fat_tails_df: null
