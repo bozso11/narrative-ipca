@@ -17,6 +17,14 @@ does not change them (D53):
    the forecast window gets its factor from its own cross-section with the
    frozen training ``Gamma`` (``oos.oos_factor``, BKS Section 4.2), and the
    fitted return is split into per-topic terms.
+4. :func:`implied_exposures`: the topic exposures that the training fit
+   implies (BKS Eq. 5), in the direct estimator's units and on its training
+   pairs, so that the method comparison (:mod:`.compare`) scores BKS with the
+   same forecast-window evaluation as the direct methods.
+
+Two checks need no panel: :func:`training_weeks` (the training weeks a fit
+can use after the burn-in, D87) and :func:`kernel_history_share` (the share
+of the instruments' kernel weight before the training window, G.15).
 
 The BKS OOS R2 is a contemporaneous factor fit: each forecast week's ``K``
 factors are estimated from that week's own returns. It is therefore not
@@ -68,6 +76,14 @@ Validity boundaries
 * Out-of-sample discipline (D65): ``Gamma`` uses training periods only; the
   instruments ``c_{i,t-1}`` of a forecast week use data up to the window end
   of week ``t-1`` (ex ante), which may lie after ``train_end``.
+* The implied exposures (:func:`implied_exposures`) are a rank-``K``
+  reconstruction of the assets' topic covariances: with ``K`` below the
+  number of selected topics they cannot represent independent exposures to
+  every topic, and when the fit keeps the constant instrument its implied
+  covariance is added to every asset (``meta["B_const"]``). The kernel
+  covariance behind ``c_i`` weighs the whole history before the last
+  training week (half-life ``half_life_months``), while ``Sigma_z`` and the
+  scales use the training window only.
 """
 
 from __future__ import annotations
@@ -91,11 +107,12 @@ from ..config import (
     ShockConfig,
     TuningConfig,
 )
-from ..covariances import build_covariance_panel
-from ..data import align_inputs, period_end_index
+from ..covariances import build_covariance_panel, kernel_weights, window_bounds
+from ..data import align_inputs, period_end_index, trailing_volatility
 from ..oos import RIDGE, oos_factor
 from ..panel import build_panel
 from ..shocks import attention_shocks
+from ..sparse_ipca import betas as ipca_betas
 from ..sparse_ipca import canonicalize, fit_sparse_ipca
 from ..tuning import tune
 from ..types import (
@@ -106,8 +123,10 @@ from ..types import (
     SparseIPCAResult,
     TuningResult,
 )
-from .config import BKSLabConfig, WindowConfig
-from .types import BKSLabResult, SimData
+from ..wrapup import _lsq_map, _sym_pinv
+from .config import DATA_END, DATA_START, BKSLabConfig, WindowConfig
+from .direct import MIN_TRAIN_OBS, _train_moments, shock_matrix, training_pairs
+from .types import BKSLabResult, DirectFit, ObservedShocks, SimData
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +137,18 @@ __all__ = [
     "N_SHUFFLES",
     "SHUFFLE_STREAM",
     "D52_NOTE",
+    "IMPLIED_NOTE",
+    "IMPLIED_METHOD",
     "BKSPanel",
     "BKSFit",
     "bks_pipeline_config",
+    "training_weeks",
+    "kernel_history_share",
     "build_bks_panel",
     "fit_bks",
     "evaluate_bks",
+    "implied_topic_covariance",
+    "implied_exposures",
     "run_bks",
 ]
 
@@ -139,8 +164,10 @@ ANNUALIZATION = 52.0
 #: Upper bound of ``DataConfig.min_assets_per_period`` (the package default).
 _MAX_MIN_ASSETS = 20
 
-#: Fewest training periods :func:`fit_bks` accepts (half a year of weeks).
-MIN_TRAIN_PERIODS = 26
+#: Fewest training periods :func:`fit_bks` accepts: about six months of weeks. A training
+#: window of six calendar months holds 25 or 26 week ends, so the floor leaves a margin of one
+#: to two weeks (lowered from 26 on 2026-09-29 for the dashboard's six-month default window).
+MIN_TRAIN_PERIODS = 24
 
 #: Trading days of a full week on the weekday calendar (shorter weeks are flagged).
 _WEEK_DAYS = 5
@@ -156,6 +183,20 @@ D52_NOTE = (
     "Per-topic split not identified (D52): only c Gamma is identified, so the split of the fitted "
     "return across topics belongs to the sparse representative the group lasso chose; another "
     "Gamma with the same fitted values would split it differently."
+)
+
+#: Method name of the BKS-implied exposures in the method comparison (:func:`implied_exposures`).
+IMPLIED_METHOD = "bks_implied"
+
+#: Caveat attached to the BKS-implied exposures (D52). Where the signal goes, on the dashboard
+#: defaults (2026-09-29): the instruments alone, through the same unit conversion, reach Spearman
+#: 0.71 with ``B_true`` (review measurement; the rank-K reconstruction equals them only at K = L);
+#: the implied exposures reach 0.19 for the tuned K = 3 fit and 0.18 at K = 10 with all 20 topics
+#: kept (lambda 0), so the loss comes from the rank-K projection, not from topic selection.
+IMPLIED_NOTE = (
+    "BKS identifies the assets' factor betas, not how they split across topics (D52). With K factors the "
+    "implied exposures cannot represent independent exposures to every topic, so most of the topic signal "
+    "in the BKS instruments is lost in the conversion. They also depend on which topics the sparse fit kept."
 )
 
 
@@ -302,6 +343,135 @@ def _panel_params(cfg: BKSLabConfig, shock_window: int, lead_days: int) -> dict[
         "shock_window": int(shock_window),
         "lead_days": int(lead_days),
     }
+
+
+# ---------------------------------------------------------------------------
+# Training weeks and kernel history, without building the panel
+# ---------------------------------------------------------------------------
+def _panel_days(cfg: BKSLabConfig, lead_days: int, calendar: pd.DatetimeIndex | None) -> pd.DatetimeIndex:
+    """Trading days a BKS panel starts from: the data calendar after the warm-up of ``align_inputs``.
+
+    ``align_inputs`` keeps the days from the first one that carries attention
+    (lagged by ``l`` days) and a return; with ``inverse_vol`` weighting a
+    return also needs a trailing volatility. The first such day is found with
+    the package's own :func:`narrative_ipca.data.trailing_volatility` on a
+    probe series, so its ``min_periods`` rule is not restated here. Assumes
+    every asset has returns from the first day of ``calendar`` (true for the
+    lab's listed and generic assets).
+    """
+    cal = pd.bdate_range(DATA_START, DATA_END) if calendar is None else pd.DatetimeIndex(calendar)
+    first = min(max(int(lead_days), 0), len(cal))
+    if cfg.asset_weighting == "inverse_vol" and len(cal):
+        window = int(bks_pipeline_config(cfg, 1, lead_days).data.vol_window_days)
+        probe = pd.DataFrame({"x": np.resize(np.array([1.0, -1.0]), len(cal))}, index=cal)
+        ok = np.isfinite(trailing_volatility(probe, window)["x"].to_numpy(dtype=float))
+        first = max(first, int(np.argmax(ok)) if ok.any() else len(cal))
+    return cal[first:]
+
+
+def training_weeks(
+    train_start: str | pd.Timestamp,
+    train_end: str | pd.Timestamp,
+    cfg: BKSLabConfig,
+    lead_days: int = 0,
+    calendar: pd.DatetimeIndex | None = None,
+) -> tuple[int, pd.Timestamp]:
+    """Training weeks a BKS fit on this window can use, and the first week the data allow (G.7.2; D17).
+
+    ``build_panel`` drops the first ``cfg.burn_in_weeks`` weekly instrument
+    periods (kernel warm-up), and the return of week ``t`` pairs with the
+    instruments of week ``t - 1``. The first usable return week is therefore
+    week ``burn_in_weeks + 2`` of the panel's days (:func:`_panel_days`). On
+    the lab's data (from 2015-01-02, ``inverse_vol``, 52 weeks) it ends on
+    2016-04-08, so a training window that starts earlier loses its first
+    weeks.
+
+    The count is the one :func:`fit_bks` checks against
+    :data:`MIN_TRAIN_PERIODS` (week ends in ``[train_start, train_end]``),
+    before the package drops weeks with fewer than ``min_assets_per_period``
+    assets. It needs no panel, so the dashboard can check a window before a
+    run.
+
+    Parameters
+    ----------
+    train_start, train_end:
+        Training window, inclusive.
+    cfg:
+        Lab BKS settings; the asset weighting and the burn-in matter.
+    lead_days:
+        ``l`` of the simulation (attention is lagged by ``l`` days).
+    calendar:
+        Trading days of the data; default the lab's weekday calendar from
+        :data:`DATA_START` to :data:`DATA_END`.
+
+    Returns
+    -------
+    (n_weeks, first_week)
+        The usable training weeks and the last trading day of the first week
+        any BKS fit can use (``NaT`` when the data are too short).
+    """
+    days = _panel_days(cfg, lead_days, calendar)
+    _, ends = period_end_index(days, PERIOD)
+    pos = int(cfg.burn_in_weeks) + 1
+    if pos >= len(ends):
+        return 0, pd.NaT
+    usable = ends[pos:]
+    ts, te = pd.Timestamp(train_start), pd.Timestamp(train_end)
+    n = int(np.sum(np.asarray((usable >= ts) & (usable <= te), dtype=bool)))
+    return n, pd.Timestamp(usable[0])
+
+
+def _history_share(days: pd.DatetimeIndex, xi: float, skip_days: int, week_end: pd.Timestamp,
+                   train_start: pd.Timestamp) -> float:
+    """Kernel weight share before ``train_start`` of the instruments paired with the week ending ``week_end``."""
+    pid, ends = period_end_index(days, PERIOD)
+    t = int(ends.get_indexer([pd.Timestamp(week_end)])[0])
+    if t < 1:
+        return float("nan")
+    j = t - 1  # the instruments of week t are measured at the end of week t - 1
+    w = kernel_weights(pid, j, float(xi))
+    _, stop, cut = window_bounds(pid, int(skip_days))
+    w[cut[j]:stop[j]] = 0.0  # the window-end cut-off of week j (D12)
+    total = float(w.sum())
+    if total <= 0.0:
+        return float("nan")
+    before = np.asarray(days < pd.Timestamp(train_start), dtype=bool)
+    return float(w[before].sum() / total)
+
+
+def kernel_history_share(
+    train_start: str | pd.Timestamp,
+    train_end: str | pd.Timestamp,
+    cfg: BKSLabConfig,
+    lead_days: int = 0,
+    calendar: pd.DatetimeIndex | None = None,
+) -> float:
+    """Share of the BKS instruments' kernel weight on days before the training window (G.15).
+
+    The instrument row that the BKS-implied exposures use (the last training
+    week's, :func:`implied_exposures`) is a kernel covariance: day ``tau``
+    gets weight ``xi^(j - t_tau)``, with ``j`` the week before the last
+    training week, ``t_tau`` the week of day ``tau`` and
+    ``xi = cfg.xi_weekly``, over every day from the start of the panel's
+    days (BKS App. B.1; the last ``skip_days`` days of week ``j`` are left
+    out, D12). This returns the share of that weight on days before
+    ``train_start``, with every day counted (missing days move it slightly).
+    On the dashboard defaults (training 2025-01-01 to 2025-06-30, half-life
+    69 months) it is about 0.92: BKS-implied draws on history the direct
+    methods never see.
+
+    Returns ``NaN`` when no training week is usable (:func:`training_weeks`).
+    Parameters as in :func:`training_weeks`.
+    """
+    days = _panel_days(cfg, lead_days, calendar)
+    _, ends = period_end_index(days, PERIOD)
+    pos = int(cfg.burn_in_weeks) + 1
+    ts, te = pd.Timestamp(train_start), pd.Timestamp(train_end)
+    keep = np.flatnonzero(np.asarray((ends >= ts) & (ends <= te), dtype=bool) & (np.arange(len(ends)) >= pos))
+    if not len(keep):
+        return float("nan")
+    skip = int(bks_pipeline_config(cfg, 1, lead_days).covariance.skip_days)
+    return _history_share(days, float(cfg.xi_weekly), skip, pd.Timestamp(ends[int(keep[-1])]), ts)
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +1010,335 @@ def evaluate_bks(panel: BKSPanel, fit: BKSFit, window: WindowConfig) -> BKSLabRe
         contrib=pd.DataFrame(contrib, index=a_index, columns=t_index),
         const_contrib=pd.Series(const, index=a_index, name="const_contrib"),
         in_sample_total_r2=float(res.total_r2),
+        meta=meta,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: BKS-implied topic exposures (method comparison)
+# ---------------------------------------------------------------------------
+def implied_topic_covariance(
+    C: np.ndarray, Gamma: np.ndarray, rcond: float
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Loadings and model-implied topic covariances of instrument rows (BKS Eq. 5).
+
+    Symbols: ``c_i = [1, cov_i]`` an instrument row (a row of ``C``, in the
+    units of ``IPCAPanel.X``), ``Gamma`` the ``((L+1) x K)`` training map in
+    the same units (row 0 the constant, ``Gamma_tilde = Gamma[1:]`` the
+    topics), ``beta_i = c_i Gamma`` the asset's ``K`` factor loadings.
+
+    The model-implied covariance of the asset's (panel-unit) daily return
+    with the raw topic shocks is
+
+    ``m_i = Gamma_tilde (Gamma_tilde' Gamma_tilde)^+ beta_i'``   (an ``L``-vector).
+
+    In words: BKS Eq. 5 gives ``cov_i = beta_i Sigma_ff A'`` with
+    ``A = Gamma_tilde (Gamma_tilde' Gamma_tilde)^-1 Sigma_ff^-1``
+    (:func:`narrative_ipca.wrapup.recover_A`), so
+    ``A Sigma_ff beta_i' = Gamma_tilde (Gamma_tilde' Gamma_tilde)^-1 beta_i'``:
+    the low-rank, sparse-topic reconstruction of the asset's topic
+    covariances. ``Sigma_ff`` cancels. Topics the group lasso dropped have zero
+    rows of ``Gamma_tilde`` and get ``m = 0`` exactly. With ``K = L`` and
+    ``Gamma_tilde`` invertible, ``m_i = cov_i' + (Gamma_tilde')^-1 Gamma_0'``.
+
+    Parameters
+    ----------
+    C:
+        ``(n, L+1)`` instrument rows, constant in column 0.
+    Gamma:
+        ``(L+1, K)`` map of the fit (``SparseIPCAResult.Gamma``, original
+        instrument units).
+    rcond:
+        Pseudo-inverse cut-off (``EvaluationConfig.rcond``): a singular value
+        ``s`` of ``Gamma_tilde`` is kept when ``s^2 > rcond * s_max^2``, as in
+        :func:`narrative_ipca.wrapup.recover_A`.
+
+    Returns
+    -------
+    (m, beta, rank):
+        ``m`` ``(n, L)``, ``beta`` ``(n, K)`` (equal to
+        :func:`narrative_ipca.sparse_ipca.betas`), ``rank`` the numerical
+        rank of ``Gamma_tilde``.
+    """
+    Gamma = np.asarray(Gamma, dtype=float)
+    beta = ipca_betas(C, Gamma)
+    M, rank = _lsq_map(Gamma[1:], float(rcond))  # (L, K): Gamma_tilde (Gamma_tilde' Gamma_tilde)^+
+    return beta @ M.T, beta, int(rank)
+
+
+def implied_exposures(
+    panel: BKSPanel,
+    fit: BKSFit,
+    sim: SimData,
+    shocks: ObservedShocks,
+    select_tau: float = 0.05,
+) -> DirectFit:
+    """Topic exposures implied by the BKS training fit, in the direct estimator's units (G.7, G.8; D52, D65).
+
+    The result is a :class:`DirectFit` on the same training pairs and the
+    same observed shocks as :func:`narrative_ipca.exposure_lab.direct.fit_direct`,
+    so the forecast-window evaluation (:func:`.evaluate.evaluate_window`,
+    :func:`.evaluate.window_sweep`) and the recovery metrics apply unchanged
+    and nothing is fitted inside the forecast window.
+
+    Steps, per asset ``i`` (symbols of :func:`implied_topic_covariance`):
+
+    1. ``c_i``: the asset's panel row in the last training week of ``fit``
+       (the row pairs ``c_{i,T-1}``, measured at the end of the week before,
+       with that week's return); if the asset has no row that week, its
+       latest training row. An asset with no training row, no divisor (step
+       3) or fewer than :data:`.direct.MIN_TRAIN_OBS` training pairs (the
+       rule of :func:`.direct.fit_direct`) gets zero exposures and is listed
+       in ``meta["skipped_assets"]``.
+    2. ``beta_i = c_i Gamma`` and ``m_i = Gamma_tilde (Gamma_tilde' Gamma_tilde)^+ beta_i'``
+       (BKS Eq. 5).
+    3. Units back to returns: with ``asset_weighting = "inverse_vol"`` the
+       panel's daily returns were divided by a trailing volatility
+       (``AlignedData.scale``), so ``m_i`` is multiplied by the asset's mean
+       divisor over its training return days (an approximation: the divisor
+       varies over time and the kernel covariance also weighs days before the
+       training window). Factor 1 for ``"none"``.
+    4. Raw exposure ``b_i = Sigma_z^+ m_i``, with ``Sigma_z`` the covariance
+       (``ddof = 0``) of the raw observed shocks ``z`` over the direct
+       estimator's training shock days (:func:`.direct.training_pairs`);
+       pseudo-inverse with cut-off ``rcond`` on the eigenvalues.
+    5. Standardised: ``B_hat[k, i] = b_i[k] * sd_train(z_k) / sd_train(r_i)``,
+       with ``sd_train(z_k) = shocks.scale`` and ``sd_train(r_i)`` computed
+       exactly as :func:`.direct.fit_direct` does (returned as
+       ``ret_scale``, with ``ret_mean``).
+
+    Lead: the panel lags attention by ``l`` days (``attention_lag_days``), so
+    its covariances pair ``r_{t+l}`` with ``z_t``, as the direct training
+    pairs do.
+
+    Parameters
+    ----------
+    panel:
+        Output of :func:`build_bks_panel` for ``sim`` and ``shocks.window``.
+    fit:
+        Output of :func:`fit_bks` on ``panel``; its training weeks must end on
+        or before ``shocks.train_end``.
+    sim:
+        The simulation (returns, calendar, topics, lead).
+    shocks:
+        Observed shocks of the lab's training window (:func:`.dgp.observed_shocks`).
+    select_tau:
+        A pair is selected when ``|B_hat| >= select_tau`` (the dense-method
+        rule of G.7.1).
+
+    Returns
+    -------
+    DirectFit
+        ``method = "bks_implied"``, ``intercept`` 0, ``penalty`` ``NaN``,
+        ``n_train`` the direct training count. ``meta`` holds the keys of
+        :func:`.direct.fit_direct` (``select_tau``, ``last_return_day``, ...)
+        plus ``K``, ``lam``, ``selected_topics`` (nonzero ``Gamma`` rows),
+        ``train_period`` (last training week), ``row_period`` (per asset, the
+        week of the row used), ``stale_assets`` (assets that used an earlier
+        row), ``divisor`` (per asset), ``B_const`` (topics x assets: the part
+        of ``B_hat`` that comes from the constant instrument, ``c = [1, 0, ..., 0]``;
+        the same implied covariance for every asset before the unit
+        conversion), ``gamma_const_norm`` (``||Gamma_0||``, 0 when the
+        penalty dropped the constant), ``gamma_rank``, ``sigma_z_rank``,
+        ``rcond``, ``asset_weighting``, ``units_note``, ``caveat``
+        (:data:`IMPLIED_NOTE`), ``kernel_share_before_train`` (the share of
+        the instruments' kernel weight on days before the training window,
+        :func:`kernel_history_share`), ``bks_train_start``, ``bks_train_end`` and
+        ``timings`` (``implied``, ``bks_panel``, ``bks_fit`` and ``total``,
+        the sum: the cost of the whole BKS route).
+
+    Raises
+    ------
+    ValueError
+        When the panel's lead or shock window differ from ``sim`` and
+        ``shocks``, the fit's training weeks end after ``shocks.train_end``
+        (D65), or topics, assets or instruments do not match.
+    """
+    t0 = time.perf_counter()
+    pnl = panel.panel
+    res = fit.fit
+    lead = int(sim.lead_days)
+    topic_ids = sim.topics.ids
+    asset_ids = [str(a) for a in sim.market.returns.columns]
+    n_topics, n_assets = len(topic_ids), len(asset_ids)
+
+    # consistency with the lab's direct route
+    if int(panel.pipeline_cfg.data.attention_lag_days) != lead:
+        raise ValueError(
+            f"the BKS panel lags attention by {panel.pipeline_cfg.data.attention_lag_days} day(s) but the "
+            f"simulation's lead is {lead}"
+        )
+    if int(panel.pipeline_cfg.shocks.window) != int(shocks.window):
+        raise ValueError(
+            f"the BKS panel uses shock window {panel.pipeline_cfg.shocks.window} but the shocks use {shocks.window}"
+        )
+    if list(res.instrument_names) != list(pnl.instrument_names):
+        raise ValueError("fit and panel have different instruments; fit_bks must be run on this panel")
+    if sorted(str(t) for t in pnl.topics) != sorted(topic_ids):
+        raise ValueError("the BKS panel's topics differ from the simulation's")
+    if sorted(str(a) for a in pnl.assets) != sorted(asset_ids):
+        raise ValueError("the BKS panel's assets differ from the simulation's")
+    last_train = pd.Timestamp(fit.train_periods.max())
+    if last_train > pd.Timestamp(shocks.train_end):
+        raise ValueError(
+            f"the BKS fit's last training week ends {last_train.date()}, after the training end "
+            f"{pd.Timestamp(shocks.train_end).date()} of the shocks (D65); refit BKS on the same training window"
+        )
+
+    # 1. instrument rows: the last training week, else the asset's latest training row
+    periods = pd.DatetimeIndex(pnl.periods)
+    train_pos = np.flatnonzero(np.asarray(periods.isin(fit.train_periods), dtype=bool))
+    rows = np.flatnonzero(np.isin(pnl.t_idx, train_pos))
+    rev = rows[::-1]  # t_idx is sorted, so the first hit per asset in reverse order is its latest row
+    found_assets, first = np.unique(pnl.asset_idx[rev], return_index=True)
+    last_rows = rev[first]
+    panel_assets = [str(a) for a in pnl.assets]
+    row_of = {panel_assets[int(a)]: int(r) for a, r in zip(found_assets, last_rows)}
+
+    # training pairs and return scales exactly as fit_direct computes them
+    cal = sim.market.calendar
+    S_all = shock_matrix(shocks, cal, topic_ids)
+    p_pos, q_pos = training_pairs(sim, shocks, S_all)
+    Rtr = sim.market.returns.to_numpy(dtype=float)[q_pos]
+    obs = np.isfinite(Rtr)
+    n_train = obs.sum(axis=0)
+    ret_mean, ret_scale = _train_moments(Rtr, obs)
+
+    # 2. loadings and implied topic covariances (panel topic order -> simulation topic order)
+    rcond = float(panel.pipeline_cfg.evaluation.rcond)
+    Gamma = np.asarray(res.Gamma, dtype=float)
+    col = {str(t): j for j, t in enumerate(pnl.topics)}
+    order = np.array([col[k] for k in topic_ids], dtype=np.int64)
+    a_pos = {a: j for j, a in enumerate(asset_ids)}
+    fitted_ids = [a for a in asset_ids if a in row_of]
+    idx_rows = np.array([row_of[a] for a in fitted_ids], dtype=np.int64)
+    C = pnl.X[idx_rows] if len(idx_rows) else np.zeros((0, pnl.p))
+    m_panel, _, gamma_rank = implied_topic_covariance(C, Gamma, rcond)
+    m = np.zeros((n_assets, n_topics))
+    m[np.array([a_pos[a] for a in fitted_ids], dtype=np.int64)] = m_panel[:, order]
+    # the constant instrument's share of m_i, the same for every asset: m of the row c = [1, 0, ..., 0]
+    e0 = np.zeros((1, pnl.p))
+    e0[0, 0] = 1.0
+    m_const = implied_topic_covariance(e0, Gamma, rcond)[0][0, order]
+
+    # 3. units back to returns: mean divisor of the vol-scaled panel returns over the training return days
+    scaled = panel.aligned.scale is not None
+    divisor = np.ones(n_assets)
+    if scaled:
+        sc = panel.aligned.scale.reindex(index=cal, columns=asset_ids).to_numpy(dtype=float)[q_pos]
+        ok = obs & np.isfinite(sc)
+        cnt = ok.sum(axis=0)
+        divisor = np.where(cnt > 0, np.where(ok, sc, 0.0).sum(axis=0) / np.maximum(cnt, 1), np.nan)
+    # assets without a training row, a divisor or MIN_TRAIN_OBS training pairs (fit_direct's rule) get 0
+    skipped = [
+        a for j, a in enumerate(asset_ids)
+        if a not in row_of or not np.isfinite(divisor[j]) or int(n_train[j]) < MIN_TRAIN_OBS
+    ]
+    zero = np.array([a in set(skipped) for a in asset_ids], dtype=bool)
+    conv = np.where(zero, 0.0, np.where(np.isfinite(divisor), divisor, 0.0))
+    m = m * conv[:, None]
+    m0 = conv[:, None] * m_const[None, :]  # (N, L): the constant's part of m, in return units
+
+    # 4. raw exposures b_i = Sigma_z^+ m_i on the training shock days
+    Z = shocks.z.reindex(index=cal, columns=topic_ids).to_numpy(dtype=float)[p_pos]
+    if Z.shape[0] >= 1:
+        Zc = Z - Z.mean(axis=0)
+        Sigma_z = (Zc.T @ Zc) / Z.shape[0]
+        Sz_pinv, sz_rank = _sym_pinv(Sigma_z, rcond)
+    else:
+        Sz_pinv, sz_rank = np.zeros((n_topics, n_topics)), 0
+    b_raw = m @ Sz_pinv  # (N, L); Sigma_z^+ is symmetric
+
+    # 5. standardised units of the direct estimator
+    z_scale = shocks.scale.reindex(topic_ids).to_numpy(dtype=float)
+    std = z_scale[None, :] / ret_scale[:, None]  # (N, L): sd_train(z_k) / sd_train(r_i)
+    B = (b_raw * std).T  # (L, N)
+    B_const = ((m0 @ Sz_pinv) * std).T
+    B[:, zero] = 0.0
+    B_const[:, zero] = 0.0
+    tau = float(select_tau)
+    selected = np.abs(B) >= tau
+    t_implied = time.perf_counter() - t0
+
+    t_index = pd.Index(topic_ids, name="topic_id")
+    a_index = pd.Index(asset_ids, name="asset_id")
+    row_period = pd.Series(
+        [periods[int(pnl.t_idx[row_of[a]])] if a in row_of else pd.NaT for a in asset_ids],
+        index=a_index, name="row_period", dtype="datetime64[ns]",
+    )
+    stale = [a for a in asset_ids if a in row_of and row_period[a] != last_train]
+    last_pair_day = cal[q_pos[-1]] if len(q_pos) else pd.NaT
+    last_used = last_train if pd.isna(last_pair_day) else max(pd.Timestamp(last_pair_day), last_train)
+    history_share = _history_share(
+        pd.DatetimeIndex(panel.aligned.calendar), float(panel.pipeline_cfg.covariance.xi),
+        int(panel.pipeline_cfg.covariance.skip_days), last_train, pd.Timestamp(shocks.train_start),
+    )
+    if scaled:
+        units_note = (
+            "inverse_vol weighting: the implied covariances are in vol-scaled units and are multiplied by the "
+            "asset's mean daily divisor over its training return days (approximate: the divisor varies over "
+            "time, and the kernel covariance also weighs days before the training window)"
+        )
+    else:
+        units_note = "no asset weighting: the implied covariances are in return units (no conversion)"
+    t_panel = float(panel.meta.get("timings", {}).get("total", 0.0))
+    t_fit = float(fit.meta.get("timings", {}).get("total", 0.0))
+    if skipped:
+        logger.warning(
+            "implied_exposures: %d asset(s) without a training row or divisor get zero exposures: %s",
+            len(skipped), ", ".join(skipped[:10]),
+        )
+    meta: dict[str, Any] = {
+        "method": IMPLIED_METHOD,
+        "alpha_rule": "none",
+        "select_tau": tau,
+        "sparse": False,
+        "l1_ratio": np.nan,
+        "n_topics": n_topics,
+        "n_assets": n_assets,
+        "lead_days": lead,
+        "shock_window": int(shocks.window),
+        "n_pairs": int(len(p_pos)),
+        "first_shock_day": cal[p_pos[0]] if len(p_pos) else pd.NaT,
+        "last_return_day": last_used,
+        "skipped_assets": skipped,
+        "n_convergence_warnings": 0,
+        "K": int(fit.K),
+        "lam": float(fit.lam),
+        "selected_topics": list(res.selected_topics),
+        "n_selected_topics": int(res.n_selected),
+        "train_period": last_train,
+        "row_period": row_period,
+        "stale_assets": stale,
+        "divisor": pd.Series(divisor, index=a_index, name="divisor"),
+        "B_const": pd.DataFrame(B_const, index=t_index, columns=a_index),
+        "gamma_const_norm": float(np.linalg.norm(Gamma[0])),
+        "gamma_rank": int(gamma_rank),
+        "sigma_z_rank": int(sz_rank),
+        "rcond": rcond,
+        "asset_weighting": str(panel.pipeline_cfg.data.asset_weighting),
+        "units_note": units_note,
+        "caveat": IMPLIED_NOTE,
+        "kernel_share_before_train": history_share,
+        "bks_train_start": fit.meta.get("train_start"),
+        "bks_train_end": fit.meta.get("train_end"),
+        "timings": {"implied": t_implied, "bks_panel": t_panel, "bks_fit": t_fit, "total": t_implied + t_panel + t_fit},
+    }
+    logger.info(
+        "implied_exposures: K=%d lambda=%.4g, %d/%d topics in Gamma (rank %d), rows of week %s, Sigma_z rank %d/%d, "
+        "%d pairs selected at tau=%.3g (%.3fs)",
+        fit.K, fit.lam, res.n_selected, n_topics, gamma_rank, last_train.date(), sz_rank, n_topics,
+        int(selected.sum()), tau, t_implied,
+    )
+    return DirectFit(
+        B_hat=pd.DataFrame(B, index=t_index, columns=a_index),
+        intercept=pd.Series(np.zeros(n_assets), index=a_index, name="intercept"),
+        ret_mean=pd.Series(ret_mean, index=a_index, name="ret_mean"),
+        ret_scale=pd.Series(ret_scale, index=a_index, name="ret_scale"),
+        selected=pd.DataFrame(selected, index=t_index, columns=a_index),
+        penalty=pd.Series(np.full(n_assets, np.nan), index=a_index, name="penalty"),
+        n_train=pd.Series(n_train.astype(np.int64), index=a_index, name="n_train"),
+        method=IMPLIED_METHOD,
         meta=meta,
     )
 

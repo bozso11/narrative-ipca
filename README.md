@@ -141,9 +141,19 @@ topics explain out of sample. The spec and decisions are in `DESIGN.md` Part G.
 - **Estimators**: the research plan's direct exposure regression (elastic net
   by default) and BKS Sparse IPCA, both fitted on a training window and scored
   on a separate forecast window of 1-12 weeks.
+- **Time windows**: the sidebar sets the training window by its end (cut-off)
+  and a length of one month to 10 years counted back; dashboard defaults are
+  6 months to 2025-06-30 and a 4-week forecast from 2025-07-01.
 - **Views**: explained variation per asset, an asset x topic exposure table in
   the layout of the desk example, and a per-asset ranking of topic
   contributions.
+- **Compare methods**: elastic net, ridge, OLS, BKS (through its implied
+  topic exposures) and the oracle scored on the same forecast days with
+  exposures frozen at the training end, with one method at a time against
+  the oracle. BKS's instruments also weigh the history before the training
+  window; the tab states how much (DESIGN.md G.15).
+- **Real data page**: a placeholder for estimates on real news; it shares the
+  sidebar and lists the settings that will apply to real data.
 
 Install and run (from the repository root):
 
@@ -170,8 +180,8 @@ python scripts/fetch_market_data.py
 
 | Path | Content |
 |---|---|
-| `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, charts, cached session |
-| `dashboard/` | the Streamlit app (`app.py`) and its pure helpers (`_ui.py`) |
+| `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, method comparison, charts, cached session |
+| `dashboard/` | the Streamlit app (`app.py`), its pure helpers (`_ui.py`) and the Real data page (`real_exposures.py`) |
 | `data/reference/` | assets (image order), legs with benchmark index and proxy, the 20 manual topics, the default link map |
 | `data/market/` | daily leg levels and returns, asset returns, raw downloads and `manifest.json`; `README.md` there has sources, conventions, QA and open items |
 | `tests/test_lab_*.py` | lab tests, including Monte Carlo checks of the simulation truth |

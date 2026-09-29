@@ -33,7 +33,8 @@ Methods (G.7.1)
 2. ``ridge``: ``b = (X'X + n lam I)^-1 X'y`` on centred data, with ``X`` the
    ``n x L`` shock matrix and ``y`` the standardised returns; ``lam`` fixed or
    chosen per asset by generalised cross-validation (GCV) over
-   ``logspace(-4, 1, 30)`` from the singular value decomposition of ``X``.
+   ``logspace(-4, 1, 30)`` from the singular value decomposition of ``X``,
+   with the intercept counted in the degrees of freedom (:func:`_fit_ridge`).
 3. ``ols``: least squares with intercept; refused when ``L >= n / 2``.
 4. ``oracle``: ``b = B_true`` (G.5.3), intercept 0, with the same training
    return scale as the estimators. A reference, not an estimator: the
@@ -133,8 +134,10 @@ def fit_direct(sim: SimData, shocks: ObservedShocks, cfg: DirectConfig, truth: S
         ``n_topics``, ``n_assets``, ``lead_days``, ``n_pairs`` (training pairs
         before dropping missing returns), ``first_shock_day``,
         ``last_return_day``, ``n_groups``, ``skipped_assets``,
-        ``n_convergence_warnings`` and ``timings`` (seconds); ``gcv_grid`` and
-        ``gcv_at_boundary`` for ridge with GCV; ``cv_folds`` for ``cv``.
+        ``n_convergence_warnings`` and ``timings`` (seconds); ``gcv_grid``,
+        ``gcv_at_boundary`` (assets whose lambda is at either end of the grid)
+        and ``gcv_at_lower_edge`` (at the smallest lambda, so close to OLS)
+        for ridge with GCV; ``cv_folds`` for ``cv``.
 
     Raises
     ------
@@ -244,6 +247,7 @@ def fit_direct(sim: SimData, shocks: ObservedShocks, cfg: DirectConfig, truth: S
             alpha_rule = "gcv" if cfg.ridge_lambda is None else "fixed"
             if cfg.ridge_lambda is None:
                 meta_extra["gcv_grid"] = RIDGE_GCV_GRID.copy()
+                meta_extra["gcv_at_lower_edge"] = int(np.sum(penalty == RIDGE_GCV_GRID[0]))
         else:
             alpha_rule = "none"
         if method == "elastic_net" and cfg.penalty == "cv":
@@ -421,9 +425,16 @@ def _fit_ridge(
     GCV with the thin SVD ``X = U diag(d) V'`` (``d`` the singular values):
     for penalty ``lam`` the fitted values shrink the component along ``U_i``
     by ``d_i^2 / (d_i^2 + n lam)``, the effective degrees of freedom are
-    ``df = sum_i d_i^2 / (d_i^2 + n lam)``, and
-    ``GCV(lam) = (RSS(lam) / n) / (1 - df / n)^2`` with ``RSS`` the residual
-    sum of squares. Returns ``(coef L x m, intercept m, lam m, n at grid edge)``.
+    ``df = 1 + sum_i d_i^2 / (d_i^2 + n lam)`` (the 1 counts the
+    intercept), and ``GCV(lam) = (RSS(lam) / n) / (1 - df / n)^2`` with
+    ``RSS`` the residual sum of squares; a grid point with ``df >= n`` gets
+    ``GCV = inf``, and an asset with no finite GCV gets the largest ``lam``.
+    Without the intercept's degree of freedom, a window with ``L >= n - 1``
+    topics (20 topics on a one-month window of 21 days) interpolates the
+    centred returns as ``lam -> 0``, GCV tends to 0 there, and the grid's
+    lower edge was chosen for every asset (review of 2026-09-29: median OOS
+    R2 below -1,000%). Returns ``(coef L x m, intercept m, lam m, n at grid
+    edge)``.
     """
     n, L = X.shape
     m = Y.shape[1]
@@ -444,9 +455,14 @@ def _fit_ridge(
     nl = n * RIDGE_GCV_GRID[:, None]  # (G, 1)
     shrink_resid = nl / (d2[None, :] + nl)  # (G, r): share of each component left in the residual
     rss = np.maximum(rss_perp[None, :], 0.0) + (shrink_resid**2) @ (Uty**2)  # (G, m)
-    df = (d2[None, :] / (d2[None, :] + nl)).sum(axis=1)  # (G,)
-    gcv = (rss / n) / ((1.0 - df / n) ** 2)[:, None]
+    df = 1.0 + (d2[None, :] / (d2[None, :] + nl)).sum(axis=1)  # (G,): the intercept counts one
+    ok = df < n
+    denom = np.where(ok, (1.0 - df / n) ** 2, 1.0)
+    gcv = np.where(ok[:, None], (rss / n) / denom[:, None], np.inf)
+    gcv = np.where(np.isfinite(gcv), gcv, np.inf)  # np.argmin would pick a NaN
     best = np.argmin(gcv, axis=0)  # (m,)
+    none_finite = ~np.isfinite(gcv[best, np.arange(m)])
+    best = np.where(none_finite, len(RIDGE_GCV_GRID) - 1, best)  # no finite GCV: the most shrinkage
     lam_best = RIDGE_GCV_GRID[best]
     factors = d[None, :] / (d2[None, :] + n * lam_best[:, None])  # (m, r)
     coef = Vt.T @ (factors.T * Uty)

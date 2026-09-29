@@ -1,11 +1,13 @@
 """Tests of the lab session, the dashboard and the run script (DESIGN.md G.9, G.10, G.13; D71).
 
 * :mod:`narrative_ipca.exposure_lab.session`: stage memoisation by config key.
-* ``dashboard/_ui.py``: config from widget values, exposure-table layout,
-  link edits (pure helpers, no Streamlit).
+* ``dashboard/_ui.py``: config from widget values, the training window from
+  its cut-off and length, the "Settings in use" table of the Real data page,
+  exposure-table layout, link edits (pure helpers, no Streamlit).
 * ``dashboard/app.py``: driven headless with ``streamlit.testing.v1.AppTest``
-  on the default config, after widget changes, with invalid dates, and with
-  a BKS run on a small generic universe.
+  on the default config, after widget changes, with invalid dates, with a
+  BKS run on a small generic universe, in the Compare methods tab before and
+  after a BKS run (G.15), and on the Real data page with the shared sidebar.
 * ``scripts/run_lab.py``: files written for a small generic config.
 
 The default page needs ``data/market`` and ``data/reference``; those tests are
@@ -28,8 +30,10 @@ import pandas as pd
 import pytest
 
 from narrative_ipca.exposure_lab import reference
+from narrative_ipca.exposure_lab.bks import IMPLIED_NOTE
 from narrative_ipca.exposure_lab.config import (
     STAGES,
+    DirectConfig,
     ExposureConfig,
     LabConfig,
     TopicSetConfig,
@@ -159,10 +163,19 @@ def test_session_lru_and_errors():
 # ---------------------------------------------------------------------------
 # dashboard/_ui.py
 # ---------------------------------------------------------------------------
-def test_config_from_values_default_matches_labconfig():
-    cfg, errors, notes = _ui.config_from_values(_ui.default_values())
+def test_config_from_values_default_uses_dashboard_windows():
+    """The dashboard's own time windows (owner request 2026-09-29); everything else is ``LabConfig()``."""
+    v = _ui.default_values()
+    assert v["sb_train_end"] == dt.date(2025, 6, 30) and v["sb_train_months"] == 6
+    assert v["sb_forecast_start"] == dt.date(2025, 7, 1) and v["sb_forecast_weeks"] == 4
+    assert "sb_train_start" not in v
+    cfg, errors, notes = _ui.config_from_values(v)
     assert errors == [] and notes == []
-    assert cfg == LabConfig()
+    window = WindowConfig(train_start="2025-01-01", train_end="2025-06-30", forecast_start="2025-07-01",
+                          forecast_weeks=4)
+    assert cfg.window == window
+    assert cfg == dataclasses.replace(LabConfig(), window=window)
+    assert LabConfig().window.train_end == "2022-12-30"  # the library default stays for scripts and tests
 
 
 def test_config_round_trip_normalises_lists_and_numbers():
@@ -193,15 +206,133 @@ def test_config_from_values_reports_invalid_windows():
     cfg, errors, _ = _ui.config_from_values(v)
     assert cfg is None and any("must be after training end" in e for e in errors)
 
+    # a cut-off 12 weekdays after the data start: the window is clipped and too short
     v = _ui.default_values()
-    v["sb_train_start"], v["sb_train_end"] = dt.date(2020, 1, 1), dt.date(2020, 3, 1)
+    v["sb_train_end"], v["sb_train_months"] = dt.date(2015, 1, 20), 1
     cfg, errors, _ = _ui.config_from_values(v)
-    assert cfg is None and any("250 weekdays" in e for e in errors)
+    assert cfg is None and any("has 13 weekdays" in e and "at least 21" in e and "one month" in e for e in errors)
+
+    # one month is accepted (D81)
+    v = _ui.default_values()
+    v["sb_train_end"], v["sb_train_months"], v["sb_forecast_start"] = dt.date(2022, 12, 30), 1, dt.date(2023, 1, 2)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert cfg is not None and not errors
+    assert (cfg.window.train_start, cfg.window.train_end) == ("2022-11-30", "2022-12-30")
+
+    v = _ui.default_values()
+    v["sb_train_end"] = None
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert cfg is None and "Choose a training end" in errors[0]
+
+    # the first day of the data as cut-off: the real reason (too short), not "outside the data"
+    v = _ui.default_values()
+    v["sb_train_end"], v["sb_train_months"], v["sb_forecast_start"] = dt.date(2015, 1, 2), 1, dt.date(2015, 1, 5)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert cfg is None and errors == [
+        "The training window 2015-01-02 to 2015-01-02 has 1 weekday; it needs at least 21 (about one month). "
+        "Move the cut-off to 2015-02-06 or later."
+    ]
+    # 21 weekdays at the data start, but the first w = 5 have no shock: 16 shock days are too few
+    v["sb_train_end"], v["sb_forecast_start"] = dt.date(2015, 1, 30), dt.date(2015, 2, 2)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert cfg is None and len(errors) == 1
+    assert "has 16 weekdays with a topic shock" in errors[0] and "first shock is on 2015-01-09" in errors[0]
+    v["sb_train_end"], v["sb_forecast_start"] = _ui.earliest_train_end(5), dt.date(2015, 2, 9)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert cfg is not None and not errors
+    assert _ui.shock_days(cfg.window.train_start, cfg.window.train_end, 5) == 21
+    assert [_ui.earliest_train_end(w) for w in (1, 5, 20)] == [dt.date(2015, 2, 2), dt.date(2015, 2, 6),
+                                                                dt.date(2015, 2, 27)]
+    assert _ui.first_shock_day(20) == dt.date(2015, 1, 30)
+    assert (_ui.plural(1, "weekday"), _ui.plural(2, "weekday"), _ui.plural(1, "consecutive 4-week window")) == (
+        "1 weekday", "2 weekdays", "1 consecutive 4-week window")
 
     v = _ui.default_values()
     v["sb_forecast_start"], v["sb_forecast_weeks"] = dt.date(2025, 12, 15), 4
     cfg, errors, notes = _ui.config_from_values(v)
     assert cfg is not None and errors == [] and "past the last day" in notes[0]
+
+
+def test_training_window_from_cut_off_and_length():
+    """Training start = (cut-off + 1 day) - length; extended to 21 weekdays; clipped at the data start."""
+    assert [_ui.train_months_label(m) for m in _ui.TRAIN_MONTHS] == [
+        "1 month", "2 months", "3 months", "4 months", "6 months", "9 months", "1 year", "18 months", "2 years",
+        "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 years", "10 years",
+    ]
+    tw = _ui.training_window(dt.date(2025, 6, 30), 6)
+    assert (tw["start"], tw["end"], tw["n_days"]) == (dt.date(2025, 1, 1), dt.date(2025, 6, 30), 129)
+    assert not tw["extended"] and not tw["clipped"] and tw["note"] == ""
+    assert tw["text"] == "Training window: 2025-01-01 to 2025-06-30 (129 weekdays)."
+
+    # February has 20 weekdays: the start moves back one weekday to reach 21
+    feb = _ui.training_window("2025-02-28", 1)
+    assert feb["nominal_start"] == dt.date(2025, 2, 1) and feb["extended"] and not feb["clipped"]
+    assert (feb["start"], feb["n_days"]) == (dt.date(2025, 1, 31), 21)
+    assert "moved back from 2025-02-01" in feb["text"] and "21 weekdays" in feb["text"]
+    v = _ui.default_values()
+    v["sb_train_end"], v["sb_train_months"], v["sb_forecast_start"] = dt.date(2025, 2, 28), 1, dt.date(2025, 3, 3)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert not errors and (cfg.window.train_start, cfg.window.train_end) == ("2025-01-31", "2025-02-28")
+
+    # 10 years back from 2020-06-30 starts before the data: clipped to 2015-01-02
+    ten = _ui.training_window("2020-06-30", 120)
+    assert ten["nominal_start"] == dt.date(2010, 7, 1) and ten["clipped"]
+    assert (ten["start"], ten["n_days"]) == (dt.date(2015, 1, 2), len(pd.bdate_range("2015-01-02", "2020-06-30")))
+    assert "10 years would start on 2010-07-01, before the data" in ten["text"] and "2015-01-02" in ten["text"]
+    v["sb_train_end"], v["sb_train_months"], v["sb_forecast_start"] = dt.date(2020, 6, 30), 120, dt.date(2020, 7, 1)
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert not errors and (cfg.window.train_start, cfg.window.train_end) == ("2015-01-02", "2020-06-30")
+
+    # a mid-month cut-off: one year back to the day after
+    assert _ui.training_window("2024-03-15", 12)["start"] == dt.date(2023, 3, 16)
+
+
+def _settings_dict(table: pd.DataFrame) -> dict[str, str]:
+    return dict(zip(table["Setting"], table["Value"]))
+
+
+def test_settings_in_use_table():
+    """The Real data page's table: time windows, direct estimator, BKS model and asset selection only."""
+    ref = reference.load_assets()
+    names = ref["name"].to_dict()
+    v = _ui.default_values()
+    t = _ui.settings_in_use(v, ref["asset_class"], names)
+    assert list(t.columns) == ["Group", "Setting", "Value"]
+    assert list(dict.fromkeys(t["Group"])) == ["Time windows", "Direct estimator", "BKS model", "Asset selection"]
+    got = _settings_dict(t)
+    assert got["Training end (cut-off)"] == "2025-06-30" and got["Training length"] == "6 months"
+    assert got["Training window"] == "2025-01-01 to 2025-06-30 (129 weekdays)"
+    assert got["Forecast start"] == "2025-07-01" and got["Forecast length"] == "4 weeks (2025-07-01 to 2025-07-28)"
+    assert got["Shock window w"] == "5 days"
+    assert got["Method"] == _ui.METHOD_LABELS["elastic_net"] and got["Penalty rule"] == _ui.PENALTY_LABELS["universal"]
+    assert "Penalty alpha" not in got and "L1 ratio" in got
+    assert got["Factors K"] == "3" and "weekly xi = " in got["Kernel half-life"]
+    assert got["Lambda rule"].startswith("Tolerance rule") and got["Lambda grid"].startswith("12 points")
+    assert got["Listed assets"] == f"{len(ref)} of {len(ref)}"
+    assert got["Asset classes"] == "all" and got["Left-out assets"] == "none"
+    # simulation-only settings are not listed
+    assert not t["Setting"].str.contains("Price source|seed|Beta|Generic", case=False).any()
+    assert all(isinstance(x, str) for x in t["Value"])
+
+    # a fixed penalty, a February window, a subset of assets and a generic simulation universe
+    first = str(ref.index[0])
+    v.update(sb_penalty="fixed", sb_alpha=0.1, sb_train_end=dt.date(2025, 2, 28), sb_train_months=1,
+             sb_asset_classes=["Equity"], sb_drop_assets=[first], sb_asset_source="generic", sb_bks_rule="fixed",
+             sb_bks_lam=0.0)
+    got = _settings_dict(_ui.settings_in_use(v, ref["asset_class"], names))
+    assert got["Penalty alpha"] == "0.100" and "moved back from 2025-02-01" in got["Training window"]
+    n_eq = int(((ref["asset_class"] == "Equity") & (ref.index != first)).sum())
+    assert got["Listed assets"].startswith(f"{n_eq} of {len(ref)}")
+    assert "real data uses the listed assets" in got["Listed assets"]
+    assert got["Asset classes"] == "Equity" and got["Left-out assets"] == names[first]
+    assert got["Lambda rule"].endswith("lambda = 0")
+    # ridge and the oracle
+    v.update(sb_method="ridge", sb_ridge_gcv=True)
+    got = _settings_dict(_ui.settings_in_use(v))
+    assert got["Ridge lambda"] == "chosen by generalised cross-validation" and "Penalty rule" not in got
+    assert got["Listed assets"].startswith("all listed assets")
+    v.update(sb_method="oracle")
+    assert "not available on real data" in _settings_dict(_ui.settings_in_use(v))["Method"]
 
 
 def test_config_from_values_subset_and_overrides():
@@ -332,8 +463,8 @@ def test_app_default_page_renders():
     at = _app().run()
     _assert_clean(at)
     assert at.title[0].value == "Topic-exposure lab"
-    assert [t.label for t in at.tabs] == ["Overview", "Exposure table", "Topic contributions", "BKS", "Lists",
-                                         "Data and method"]
+    assert [t.label for t in at.tabs] == ["Overview", "Correlation table", "Topic contributions", "Compare methods",
+                                         "BKS", "Lists", "Data and method"]
     labels = [m.label for m in at.metric]
     for label in ("Median OOS R², estimator", "Median OOS R², oracle", "Median population R²",
                   "Assets with positive OOS R²", "Coverage", "Sign agreement", "MCC", "Spearman",
@@ -341,12 +472,35 @@ def test_app_default_page_renders():
         assert label in labels
     assert len(at.get("plotly_chart")) >= 7
     assert at.tabs[1].get("plotly_chart"), "the exposure table tab has no chart"
-    assert any("20 return days" in m.value for m in at.tabs[1].markdown)
+    assert any("20 return days" in m.value for m in at.tabs[1].markdown)  # 2025-07-01 to 2025-07-28
+    assert any("training 2025-01-01 to 2025-06-30 (129 weekdays)" in m.value for m in at.markdown)
+    # the Time windows expander: cut-off, length and the resulting window, with the short-window note
+    assert "Time windows" in [e.label for e in at.sidebar.get("expander")]
+    assert at.date_input(key="sb_train_end").value == dt.date(2025, 6, 30)
+    assert at.select_slider(key="sb_train_months").value == 6
+    assert at.date_input(key="sb_forecast_start").value == dt.date(2025, 7, 1)
+    captions = [c.value for c in at.sidebar.caption]
+    assert "Training window: 2025-01-01 to 2025-06-30 (129 weekdays)." in captions
+    assert any(c.startswith("Short training window (129 weekdays") for c in captions)
+    assert not at.button(key="sb_run_bks").disabled
     # lists: 55 assets and the 20 manual topics
-    frames = [d.value for d in at.tabs[4].dataframe]
+    frames = [d.value for d in at.tabs[5].dataframe]
     assert any(len(f) == 55 and "Long proxy" in f.columns for f in frames)
     assert any(len(f) == 20 and "Scope" in f.columns for f in frames)
-    assert at.tabs[3].info, "BKS tab should ask for a run"
+    assert at.tabs[4].info, "BKS tab should ask for a run"
+    # Compare methods (G.15): the default methods, oracle last; BKS-implied not available before a BKS run
+    cm = at.tabs[3]
+    table = cm.dataframe[0].value
+    assert list(table["Method"]) == ["Elastic net", "Ridge (GCV)", "BKS-implied", "Oracle (true exposures)"]
+    assert list(table.index) == ["elastic_net", "ridge", "bks_implied", "oracle"]
+    r2_col = "Median OOS R², this window"
+    assert np.isfinite(table.loc[["elastic_net", "ridge", "oracle"], r2_col].astype(float)).all()
+    assert math.isnan(table.loc["bks_implied", r2_col]) and "Run BKS" in table.loc["bks_implied", "Note"]
+    assert any(i.value.startswith("BKS-implied is not available") for i in cm.info)
+    assert not at.button(key="cm_run_bks").disabled
+    assert len(cm.get("plotly_chart")) == 4  # dots, sweep, and the inspected method's scatter and R2 bars
+    assert at.selectbox(key="cm_inspect").value == "elastic_net"  # the sidebar's direct method
+    assert [m.label for m in cm.metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
     # the contributions tab opens on the variance share (D76); the heatmap has a colour option
     assert at.radio(key="tc_view").value == "Variance share"
     assert at.selectbox(key="ex_colors").value == next(iter(_ui.HEATMAP_COLORS))
@@ -378,6 +532,12 @@ def test_app_widget_changes_rerun_cleanly():
     at.slider(key="sb_forecast_weeks").set_value(12).run()
     _assert_clean(at)
     assert any("60 return days" in m.value for m in at.markdown)
+    # a longer training window from the same cut-off
+    at.select_slider(key="sb_train_months").set_value(24).run()
+    _assert_clean(at)
+    assert any("training 2023-07-01 to 2025-06-30" in m.value for m in at.markdown)
+    assert "Training window: 2023-07-01 to 2025-06-30 (521 weekdays)." in [c.value for c in at.sidebar.caption]
+    assert not any(c.value.startswith("Short training window") for c in at.sidebar.caption)
     at.radio(key="sb_asset_source").set_value("generic").run()
     at.slider(key="sb_n_generic_assets").set_value(30).run()
     _assert_clean(at)
@@ -432,8 +592,20 @@ def test_app_invalid_dates_show_error_not_traceback():
     at.date_input(key="sb_forecast_start").set_value(dt.date(2022, 6, 1)).run()
     assert not at.exception
     assert any("must be after training end" in e.value for e in at.error)
-    at.date_input(key="sb_forecast_start").set_value(dt.date(2023, 1, 2)).run()
+    at.date_input(key="sb_forecast_start").set_value(dt.date(2025, 7, 1)).run()
     _assert_clean(at)
+    # a February cut-off with one month: the window is extended to 21 weekdays and the caption says so
+    at.select_slider(key="sb_train_months").set_value(1)
+    at.date_input(key="sb_train_end").set_value(dt.date(2025, 2, 28))
+    at.date_input(key="sb_forecast_start").set_value(dt.date(2025, 3, 3)).run()
+    _assert_clean(at)
+    assert any("The start moved back from 2025-02-01" in c.value for c in at.sidebar.caption)
+    assert any("training 2025-01-31 to 2025-02-28 (21 weekdays)" in m.value for m in at.markdown)
+    # reset restores the dashboard defaults
+    at.button(key="sb_reset").click().run()
+    _assert_clean(at)
+    assert at.date_input(key="sb_train_end").value == dt.date(2025, 6, 30)
+    assert at.select_slider(key="sb_train_months").value == 6
 
 
 def test_app_bks_run_on_small_generic_config():
@@ -447,36 +619,36 @@ def test_app_bks_run_on_small_generic_config():
     assert any("12 topics" in m.value for m in at.markdown)
     at.button(key="sb_run_bks").click().run()
     _assert_clean(at)
-    bks = at.tabs[3]
+    bks = at.tabs[4]
     assert "Chosen lambda" in [m.label for m in bks.metric]
     assert len(bks.get("plotly_chart")) >= 4
     assert not bks.warning, [w.value for w in bks.warning]
     # a new forecast window re-evaluates the cached fit: not stale
     at.slider(key="sb_forecast_weeks").set_value(8).run()
     _assert_clean(at)
-    assert not [w for w in at.tabs[3].warning if "Settings changed" in w.value]
+    assert not [w for w in at.tabs[4].warning if "Settings changed" in w.value]
     # a new K makes the stored result stale until the next run
     at.slider(key="sb_bks_K").set_value(2).run()
-    assert any("Settings changed" in w.value for w in at.tabs[3].warning)
+    assert any("Settings changed" in w.value for w in at.tabs[4].warning)
     at.button(key="bks_run_tab").click().run()
     _assert_clean(at)
-    assert not [w for w in at.tabs[3].warning if "Settings changed" in w.value]
-    assert at.tabs[3].metric[1].value == "2"
+    assert not [w for w in at.tabs[4].warning if "Settings changed" in w.value]
+    assert at.tabs[4].metric[1].value == "2"
     assert "bks_requested" not in at.session_state  # cleared once the run ended
     # F2: the BKS tab compares with the current direct fit, not a copy stored with the BKS run
     at.selectbox(key="sb_method").set_value("ridge").run()
     _assert_clean(at)
     est = next(m.value for m in at.metric if m.label == "Median OOS R², estimator")
-    assert any(f"direct estimator {est} (daily, current settings)" in c.value for c in at.tabs[3].caption)
+    assert any(f"direct estimator {est} (daily, current settings)" in c.value for c in at.tabs[4].caption)
     # the shuffled-instrument reference sits next to the pooled OOS R2
-    labels = [m.label for m in at.tabs[3].metric]
+    labels = [m.label for m in at.tabs[4].metric]
     assert "Same, instruments shuffled" in labels and "Median OOS R², BKS / direct" not in labels
     # F1: a fixed lambda of 0 no longer shows an OOS R2 of zero
     at.radio(key="sb_bks_rule").set_value("fixed").run()
     at.number_input(key="sb_bks_lam").set_value(0.0).run()
     at.button(key="sb_run_bks").click().run()
     _assert_clean(at)
-    pooled = next(m.value for m in at.tabs[3].metric if m.label == "Pooled OOS R² (weekly)")
+    pooled = next(m.value for m in at.tabs[4].metric if m.label == "Pooled OOS R² (weekly)")
     assert pooled not in ("0.0%", "-0.0%", "n/a")
     # F10: another browser session whose BKS fit settings match (the fit is in the shared cache; only the
     # forecast length differs) does not adopt this session's run; it asks for its own
@@ -490,11 +662,116 @@ def test_app_bks_run_on_small_generic_config():
     other.radio(key="sb_bks_rule").set_value("fixed").run()
     other.number_input(key="sb_bks_lam").set_value(0.0).run()
     _assert_clean(other)
-    assert other.tabs[3].info and "Chosen lambda" not in [m.label for m in other.tabs[3].metric]
+    assert other.tabs[4].info and "Chosen lambda" not in [m.label for m in other.tabs[4].metric]
     other.button(key="bks_run_tab").click().run()  # its own run reuses the cached fit
     _assert_clean(other)
-    assert "Chosen lambda" in [m.label for m in other.tabs[3].metric]
-    assert next(m.value for m in other.tabs[3].metric if m.label == "Pooled OOS R² (weekly)") not in ("0.0%", "n/a")
+    assert "Chosen lambda" in [m.label for m in other.tabs[4].metric]
+    assert next(m.value for m in other.tabs[4].metric if m.label == "Pooled OOS R² (weekly)") not in ("0.0%", "n/a")
+
+
+def _generic_sidebar(at) -> None:
+    """Set the sidebar to 30 generic assets and 12 generic topics (6 linked): fast, needs no data files."""
+    at.radio(key="sb_asset_source").set_value("generic").run()
+    at.slider(key="sb_n_generic_assets").set_value(30).run()
+    at.selectbox(key="sb_manual").set_value("none").run()
+    at.slider(key="sb_n_generic_topics").set_value(12).run()
+    at.slider(key="sb_signal_share").set_value(0.5).run()
+
+
+def _trace_names(chart) -> list[str]:
+    return [t.get("name") for t in json.loads(chart.proto.spec)["data"]]
+
+
+def test_app_compare_methods_with_a_bks_run():
+    """G.15, D83: BKS-implied joins the comparison after this session's BKS run and stays when only the
+    forecast window changes; the inspect control follows the sidebar's method; OLS on request."""
+    at = _app().run()
+    _generic_sidebar(at)
+    _assert_clean(at)
+    r2_col = "Median OOS R², this window"
+    table = at.tabs[3].dataframe[0].value
+    assert math.isnan(table.loc["bks_implied", r2_col])
+    assert "BKS-implied" not in _trace_names(at.tabs[3].get("plotly_chart")[0])
+    # "Method to inspect" follows the sidebar's direct method until the user picks one
+    at.selectbox(key="sb_method").set_value("ridge").run()
+    _assert_clean(at)
+    assert at.selectbox(key="cm_inspect").value == "ridge"
+
+    at.button(key="cm_run_bks").click().run()  # the tab's own Run BKS button
+    _assert_clean(at)
+    cm = at.tabs[3]
+    assert not cm.info
+    table = cm.dataframe[0].value
+    implied = table.loc["bks_implied"]
+    assert np.isfinite(float(implied[r2_col])) and np.isfinite(float(implied["Spearman vs truth"]))
+    assert implied["Note"] == IMPLIED_NOTE
+    assert list(table.index)[-1] == "oracle"
+    dots, sweep = cm.get("plotly_chart")[:2]
+    assert "BKS-implied" in _trace_names(dots) and "BKS-implied" in _trace_names(sweep)
+    # the lead caption: BKS-implied's extra history and the BKS tab's own R2, named with its value
+    lead = cm.caption[0].value
+    assert "weigh all days before the cut-off" in lead and "lies before the training start" in lead
+    assert "The BKS tab's OOS R² (here " in lead
+    # the oracle is the reference in the inspect charts, not an option
+    inspect_options = at.selectbox(key="cm_inspect").options  # display labels
+    assert "BKS-implied" in inspect_options and not any(o.startswith("Oracle") for o in inspect_options)
+    assert "Chosen lambda" in [m.label for m in at.tabs[4].metric]  # the BKS tab has the same run
+
+    # a new forecast window re-scores the cached fits: BKS-implied stays, with the same fit time
+    at.slider(key="sb_forecast_weeks").set_value(8).run()
+    _assert_clean(at)
+    after = at.tabs[3].dataframe[0].value.loc["bks_implied"]
+    assert np.isfinite(float(after[r2_col])) and not at.tabs[3].info
+    assert after[r2_col] != implied[r2_col] and after["Fit time (s)"] == implied["Fit time (s)"]
+
+    # inspecting BKS-implied shows the caveat with the fit's K and kept topics
+    at.selectbox(key="cm_inspect").set_value("bks_implied").run()
+    _assert_clean(at)
+    assert any(c.value.startswith(IMPLIED_NOTE) and "K = 3 factors" in c.value for c in at.tabs[3].caption)
+    assert [m.label for m in at.tabs[3].metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
+    at.selectbox(key="sb_method").set_value("elastic_net").run()
+    assert at.selectbox(key="cm_inspect").value == "bks_implied"  # the user's own choice stays
+
+    # OLS on request, in method order
+    at.multiselect(key="cm_methods").select("ols").run()
+    _assert_clean(at)
+    assert list(at.tabs[3].dataframe[0].value.index) == ["elastic_net", "ridge", "ols", "bks_implied", "oracle"]
+
+    # a new K: the BKS fit of these settings has not been run, so BKS-implied is unavailable again
+    at.slider(key="sb_bks_K").set_value(2).run()
+    _assert_clean(at)
+    assert any(i.value.startswith("BKS-implied is not available") for i in at.tabs[3].info)
+    assert math.isnan(at.tabs[3].dataframe[0].value.loc["bks_implied", r2_col])
+
+
+def test_comparison_table_labels_and_notes():
+    """The pure helpers of the Compare methods tab: table columns and units, plain notes, option labels."""
+    s = LabSession()
+    # a one-month window with 12 topics: OLS is refused (L >= n_train / 2)
+    cfg = _generic_cfg(train_start="2022-12-01", train_end="2022-12-30", forecast_start="2023-01-02")
+    res = s.comparison(cfg, methods=("elastic_net", "ols", "bks_implied", "oracle"), use_bks=False)
+    t = _ui.comparison_table(res.summary, {"bks_implied": "Run BKS first."})
+    assert list(t.columns) == [head for _, head, _ in _ui.COMPARISON_COLUMNS]
+    assert list(t.columns[:4]) == ["Method", "Median OOS R², this window", "Median OOS R², all windows",
+                                   "Windows above the oracle"]  # on screen at laptop width
+    assert list(t.columns[-2:]) == ["Fit time (s)", "Note"]
+    assert list(t.index) == ["elastic_net", "ols", "bks_implied", "oracle"]
+    assert t.loc["elastic_net", "Coverage"] == pytest.approx(100.0 * res.summary.loc["elastic_net", "coverage"])
+    assert t.loc["elastic_net", "RMSE vs truth"] == pytest.approx(res.summary.loc["elastic_net", "rmse"])
+    note = t.loc["ols", "Note"]
+    assert note.startswith("Not fitted: OLS needs fewer topics") and "12 topics" in note
+    assert "elastic_net" not in note  # no code names
+    assert math.isnan(t.loc["ols", "Median OOS R², this window"])
+    assert t.loc["bks_implied", "Note"] == "Run BKS first."
+    assert math.isnan(t.loc["oracle", "Windows above the oracle"])
+    fmts = _ui.comparison_column_formats()
+    assert fmts["Coverage"] == "%.1f%%" and fmts["MCC"] == "%.2f" and "Method" not in fmts and "Note" not in fmts
+    assert _ui.unavailable_note("BKS has not been run.") == "BKS has not been run."
+    assert _ui.method_option_label("elastic_net", DirectConfig(penalty="cv")) == "Elastic net (CV)"
+    assert _ui.method_option_label("ridge", DirectConfig(method="ridge", ridge_lambda=0.1)) == "Ridge (fixed lambda)"
+    assert _ui.method_option_label("ridge", DirectConfig(penalty="cv")) == "Ridge (GCV)"  # not the sidebar's method
+    assert _ui.method_option_label("bks_implied") == "BKS-implied"
+    assert _ui.COMPARE_DEFAULT_METHODS == ("elastic_net", "ridge", "bks_implied", "oracle")
 
 
 # ---------------------------------------------------------------------------
@@ -529,3 +806,191 @@ def test_run_lab_script_writes_outputs(tmp_path, capsys):
     cfg = LabConfig.from_dict(d)  # the configs normalise lists themselves (D77); no helper in the script
     assert cfg.exposure.link_overrides == (("G001", "G_ASSET_001", "strong", -1),)
     assert not hasattr(mod, "normalise_config")
+
+
+# ---------------------------------------------------------------------------
+# One-month training floor (D81)
+# ---------------------------------------------------------------------------
+def test_short_training_note():
+    from narrative_ipca.exposure_lab.bks import MIN_TRAIN_PERIODS
+
+    assert not hasattr(_ui, "BKS_MIN_TRAIN_WEEKS")  # read from the BKS module, not duplicated
+    assert _ui.short_training_note("2015-01-02", "2022-12-30", 20) is None
+    note = _ui.short_training_note("2022-12-01", "2022-12-30", 20)
+    assert note is not None and "22 weekdays" in note and f"BKS needs at least {MIN_TRAIN_PERIODS}" in note
+    assert "0.21" in note  # 1/sqrt(22)
+    note = _ui.short_training_note("2022-01-03", "2022-09-30", 20)
+    assert note is not None and "BKS can run" in note
+    # the dashboard default: 129 weekdays over 26 weeks
+    note = _ui.short_training_note("2025-01-01", "2025-06-30", 20)
+    assert "129 weekdays, 26 weeks" in note and ("BKS can run" in note) == (26 >= MIN_TRAIN_PERIODS)
+
+
+def test_bks_training_check_counts_the_burn_in():
+    """BKS skips its first 52 weeks of data (D17): a window near the data start has fewer usable weeks
+    than Fridays, and the reason says so (review 2026-09-29: the note said "BKS can run" and the fit
+    then refused)."""
+    from narrative_ipca.exposure_lab.bks import MIN_TRAIN_PERIODS
+
+    ok = _ui.bks_training_check("2025-01-01", "2025-06-30")
+    assert ok["can_run"] and ok["reason"] == "" and ok["weeks"] == ok["n_weeks"] == 26
+    short = _ui.bks_training_check("2025-06-01", "2025-06-30")
+    assert not short["can_run"]
+    assert short["reason"] == f"BKS needs at least {MIN_TRAIN_PERIODS} training weeks; the training window has 4."
+    early = _ui.bks_training_check("2015-07-01", "2015-12-31")
+    assert (early["weeks"], early["n_weeks"], early["can_run"]) == (26, 0, False)
+    assert "skips the first 52 weeks" in early["reason"] and "2016-04-08" in early["reason"]
+    note = _ui.short_training_note("2015-07-01", "2015-12-31", 20)
+    assert "BKS can run" not in note and "2016-04-08" in note
+    # ten years back from 2016-06-30 (clipped to the data start): 78 Fridays, 12 usable weeks
+    ten = _ui.bks_training_check("2015-01-02", "2016-06-30")
+    assert (ten["weeks"], ten["n_weeks"], ten["can_run"]) == (78, 12, False)
+
+
+def test_one_month_training_runs_direct_and_bks_refuses():
+    from narrative_ipca.exposure_lab.bks import run_bks
+
+    cfg = _generic_cfg(train_start="2022-12-01", train_end="2022-12-30", forecast_start="2023-01-02")
+    out = run_lab(cfg)
+    assert int(out["direct"].n_train.min()) >= 20
+    assert np.isfinite(out["evaluation"].r2.to_numpy(dtype=float)).all()
+    with pytest.raises(ValueError, match="training"):
+        run_bks(out["simulation"], cfg.bks, cfg.window)
+
+
+# ---------------------------------------------------------------------------
+# Top navigation and the Real data placeholder (G.14, D82)
+# ---------------------------------------------------------------------------
+import real_exposures  # noqa: E402
+
+
+def test_real_exposures_status_and_loading(tmp_path):
+    status = real_exposures.data_status(tmp_path)
+    assert list(status["Found"]) == ["no", "no", "no"]
+    assert real_exposures.load_exposures(tmp_path) == (None, [])
+
+    rows = [
+        ("2025-12-31", "S1", "ENERGY_v_WEQ", 0.40, 0.05, "blended", "2023-01-02/2025-12-31", "full", "v1"),
+        ("2025-12-31", "S1", "NOK_v_USD", 0.12, 0.04, "regression", "2023-01-02/2025-12-31", "partial", "v1"),
+        ("2025-12-31", "A4", "ENERGY_v_WEQ", -0.05, 0.03, "llm", "2023-01-02/2025-12-31", "none", "v1"),
+    ]
+    df = pd.DataFrame(rows, columns=list(real_exposures.EXPOSURE_COLUMNS))
+    df.to_parquet(tmp_path / "exposures.parquet")
+    loaded, problems = real_exposures.load_exposures(tmp_path)
+    assert problems == [] and len(loaded) == 3
+    status = real_exposures.data_status(tmp_path)
+    assert status.loc[status["File"].str.endswith("exposures.parquet"), "Found"].item() == "yes"
+    values, blank = real_exposures.exposure_table(loaded, "2025-12-31", ["NOK_v_USD", "ENERGY_v_WEQ"])
+    assert list(values.index) == ["NOK_v_USD", "ENERGY_v_WEQ"]
+    assert values.loc["ENERGY_v_WEQ", "S1"] == pytest.approx(0.40)
+    assert bool(blank.loc["ENERGY_v_WEQ", "A4"])  # coverage none is blank
+    assert bool(blank.loc["NOK_v_USD", "A4"])  # no estimate is blank
+
+    df.loc[0, "source"] = "guess"
+    df.to_parquet(tmp_path / "exposures.parquet")
+    _, problems = real_exposures.load_exposures(tmp_path)
+    assert any("unknown source" in p for p in problems)
+
+
+def _real_page_app(settings: str = "None"):
+    """AppTest of the Real data page alone; ``settings`` is Python source evaluated in the script."""
+    from streamlit.testing.v1 import AppTest
+
+    src = (
+        "import sys, datetime as dt\n"
+        f"sys.path.insert(0, {str(ROOT / 'dashboard')!r})\n"
+        "import _ui\n"
+        "import real_exposures\n"
+        f"real_exposures.render({settings})\n"
+    )
+    return AppTest.from_string(src, default_timeout=TIMEOUT)
+
+
+def test_real_exposures_page_empty_and_with_file(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    (data / "real").mkdir(parents=True)
+    ref = reference.reference_dir()
+    (data / "reference").mkdir()
+    for f in ("assets.csv", "legs.csv", "topics.csv", "link_map.csv"):
+        (data / "reference" / f).write_bytes((ref / f).read_bytes())
+    monkeypatch.setenv("NARRATIVE_IPCA_DATA_DIR", str(data))
+    reference.clear_cache()
+
+    at = _real_page_app().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.title[0].value == "Real data"
+    assert any("Placeholder" in i.value for i in at.info)
+    assert not at.get("plotly_chart")
+    assert "Settings in use" not in [h.value for h in at.subheader]  # no settings passed
+
+    rows = [("2025-12-31", "S1", "ENERGY_v_WEQ", 0.40, 0.05, "blended", "2023-01-02/2025-12-31", "full", "v1")]
+    pd.DataFrame(rows, columns=list(real_exposures.EXPOSURE_COLUMNS)).to_parquet(data / "real" / "exposures.parquet")
+    at = _real_page_app().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.get("plotly_chart")) == 1
+    reference.clear_cache()
+
+
+def test_real_data_page_lists_settings_and_warns_on_invalid_ones():
+    """render(settings): the "Settings in use" table; settings errors are a warning, not an error."""
+    settings = (
+        "{'values': {**_ui.default_values(), 'sb_forecast_start': dt.date(2025, 6, 2)}, "
+        "'errors': ['Forecast start (2025-06-02) must be after training end (2025-06-30).'], "
+        "'asset_names': {}}"
+    )
+    at = _real_page_app(settings).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    assert at.title[0].value == "Real data"
+    heads = [h.value for h in at.subheader]
+    assert heads.index("Settings in use") < heads.index("Status")  # near the top
+    table = at.dataframe[0].value
+    assert list(table.columns) == ["Group", "Setting", "Value"]
+    got = _settings_dict(table)
+    assert got["Training window"] == "2025-01-01 to 2025-06-30 (129 weekdays)"
+    assert got["Forecast start"] == "2025-06-02"
+    assert any("not valid" in w.value and "must be after training end" in w.value for w in at.warning)
+    assert _ui.SIMULATION_ONLY_NOTE in [c.value for c in at.caption]
+
+
+@needs_market
+def test_app_has_top_navigation_with_two_pages():
+    at = _app().run()
+    _assert_clean(at)
+    assert at.title[0].value == "Topic-exposure lab"  # the default page is the simulation lab
+    src = APP.read_text(encoding="utf-8")
+    assert 'title="Simulation lab"' in src and 'title="Real data"' in src and 'position="top"' in src
+    assert 'REAL_DATA_URL = "real-data"' in src and "url_path=REAL_DATA_URL" in src
+
+
+def _open_real_data_page(at) -> None:
+    """Point a run AppTest at the Real data page (callable pages have no file for ``switch_page``)."""
+    pages = getattr(at, "_registered_pages", None)
+    hashes = [h for h, info in (pages or {}).items() if info.get("url_pathname") == "real-data"]
+    if not hashes or not hasattr(at, "_page_hash"):
+        pytest.skip("this Streamlit version's AppTest cannot open a callable page")
+    at._page_hash = hashes[0]
+
+
+@needs_market
+def test_app_real_data_page_shares_the_sidebar():
+    """The sidebar is drawn on the Real data page too; its settings show there, invalid ones as a warning."""
+    at = _app().run()
+    _assert_clean(at)
+    _open_real_data_page(at)
+    at.run()
+    _assert_clean(at)
+    assert at.title[0].value == "Real data"
+    assert "Time windows" in [e.label for e in at.sidebar.get("expander")]
+    assert at.button(key="sb_run_bks").disabled  # BKS runs on the simulation page only
+    got = _settings_dict(at.dataframe[0].value)
+    assert got["Training window"] == "2025-01-01 to 2025-06-30 (129 weekdays)"
+    assert got["Listed assets"] == "55 of 55"
+    # a change in the shared sidebar shows on the page; an invalid one is a warning, not an error
+    at.select_slider(key="sb_train_months").set_value(12).run()
+    _assert_clean(at)
+    got = _settings_dict(at.dataframe[0].value)
+    assert got["Training length"] == "1 year" and got["Training window"].startswith("2024-07-01 to 2025-06-30")
+    at.date_input(key="sb_forecast_start").set_value(dt.date(2025, 6, 2)).run()
+    _assert_clean(at)
+    assert any("must be after training end" in w.value for w in at.warning)

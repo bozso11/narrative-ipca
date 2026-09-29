@@ -1,8 +1,18 @@
-"""Streamlit dashboard of the topic-exposure lab (DESIGN.md G.9, G.10; D66-D70).
+"""Streamlit dashboard of the topic-exposure lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85).
 
 Run from the repository root::
 
     .venv/Scripts/python.exe -m streamlit run dashboard/app.py
+
+Two pages in the top navigation (D82): **Simulation lab** (this module's
+``main``) and **Real data** (``real_exposures.py``, a placeholder until the
+research pipeline delivers exposures).
+
+The sidebar is shared by both pages (owner request 2026-09-29): the
+entrypoint at the bottom of this module draws it and validates its values
+before the chosen page runs, and keeps the result in :data:`_RUN` (page
+callables take no arguments). The Real data page lists the settings that will
+apply to real data.
 
 The sidebar sets a :class:`~narrative_ipca.exposure_lab.config.LabConfig`;
 one :class:`~narrative_ipca.exposure_lab.session.LabSession` per server
@@ -11,6 +21,11 @@ change re-runs only the stages that depend on it. BKS runs only on request
 (the "Run BKS" buttons); its result is kept in ``st.session_state`` with its
 config key and flagged as stale when the settings change. A cached BKS fit is
 reused automatically only when this browser session requested it.
+
+The Compare methods tab (G.15, D83) reads the session's ``comparison``
+stage: the direct fits and the BKS-implied exposures are cached by their
+training keys, so changing only the forecast window re-scores them without
+refitting. The tab never starts a BKS fit; it offers the Run BKS button.
 
 Widget state: every control keeps the user's own value in
 ``st.session_state["_values"]`` (copied back by an ``on_change`` callback),
@@ -44,8 +59,11 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import _ui  # noqa: E402
+import real_exposures  # noqa: E402
 from narrative_ipca.exposure_lab import charts, reference  # noqa: E402
-from narrative_ipca.exposure_lab.bks import D52_NOTE  # noqa: E402
+from narrative_ipca.exposure_lab import bks as lab_bks  # noqa: E402
+from narrative_ipca.exposure_lab import compare as lab_compare  # noqa: E402
+from narrative_ipca.exposure_lab.bks import D52_NOTE, IMPLIED_METHOD, IMPLIED_NOTE  # noqa: E402
 from narrative_ipca.exposure_lab.config import (  # noqa: E402
     DATA_END,
     DATA_START,
@@ -55,7 +73,7 @@ from narrative_ipca.exposure_lab.config import (  # noqa: E402
     LabConfig,
 )
 from narrative_ipca.exposure_lab.dgp import attenuation  # noqa: E402
-from narrative_ipca.exposure_lab.session import LabSession  # noqa: E402
+from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, LabSession  # noqa: E402
 
 logger = logging.getLogger("dashboard.app")
 
@@ -64,6 +82,20 @@ st.set_page_config(page_title="Topic-exposure lab", layout="wide")
 _VALUES = "_values"
 _EFFECTIVE = "_effective"
 _D0, _D1 = dt.date.fromisoformat(DATA_START), dt.date.fromisoformat(DATA_END)
+
+#: URL path of the Real data page (the sidebar's Run BKS button is disabled there).
+REAL_DATA_URL = "real-data"
+
+#: Result of the shared sidebar for this script run, set by the entrypoint before the page runs:
+#: ``values`` (in effect), ``cfg`` (or ``None``), ``errors``, ``notes``, ``train_window``,
+#: ``feas_slot`` and the reference tables. Streamlit executes the script in a fresh module
+#: namespace on every run, so the holder is per run.
+_RUN: dict[str, Any] = {}
+
+#: Tabs of the simulation page, in order (G.9).
+TABS: tuple[str, ...] = (
+    "Overview", "Correlation table", "Topic contributions", "Compare methods", "BKS", "Lists", "Data and method",
+)
 
 #: Defaults of the controls in the main area (tabs).
 MAIN_DEFAULTS: dict[str, Any] = {
@@ -82,6 +114,8 @@ MAIN_DEFAULTS: dict[str, Any] = {
     "tc_rollup": False,
     "tc_top_n": 15,
     "bks_asset": _ui.DEFAULT_CONTRIB_ASSET,
+    "cm_methods": list(_ui.COMPARE_DEFAULT_METHODS),
+    "cm_inspect": None,  # None: follow the sidebar's direct method until the user picks one
 }
 
 D47_NOTE = (
@@ -101,8 +135,12 @@ def get_session() -> LabSession:
 
 
 def _init_state() -> None:
+    defaults = {**_ui.default_values(), **MAIN_DEFAULTS}
     if _VALUES not in st.session_state:
-        st.session_state[_VALUES] = {**_ui.default_values(), **MAIN_DEFAULTS}
+        st.session_state[_VALUES] = defaults
+    else:  # controls added while this browser session was open start at their defaults
+        for k, v in defaults.items():
+            st.session_state[_VALUES].setdefault(k, v)
     st.session_state[_EFFECTIVE] = {}
     st.session_state.setdefault("link_overrides", {})
     st.session_state.setdefault("ls_views", {})
@@ -169,8 +207,15 @@ def show_chart(fig: Any, key: str) -> None:
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
-def sidebar(ref_assets: pd.DataFrame | None) -> dict[str, Any]:
-    """All sidebar controls; returns the values in effect and two placeholders filled after the run."""
+def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict[str, Any]:
+    """All sidebar controls, shared by both pages.
+
+    Returns the values in effect, the training window they give
+    (:func:`_ui.training_window`) and the placeholder for the feasibility note
+    that the simulation page fills after its run. Off the simulation page
+    (``on_simulation=False``) the Run BKS button is disabled, because BKS runs
+    on the simulation page only.
+    """
     sb = st.sidebar
     sb.header("Settings")
     values = st.session_state[_VALUES]
@@ -262,9 +307,24 @@ def sidebar(ref_assets: pd.DataFrame | None) -> dict[str, Any]:
         if n_edits:
             st.caption(f"{n_edits} session link edit(s) active (Lists tab).")
 
-    with sb.expander("Windows", expanded=True):
-        control("date_input", "Training start", "sb_train_start", min_value=_D0, max_value=_D1, format="YYYY-MM-DD")
-        control("date_input", "Training end", "sb_train_end", min_value=_D0, max_value=_D1, format="YYYY-MM-DD")
+    train_window = None
+    with sb.expander("Time windows", expanded=True):
+        t_min = _ui.earliest_train_end(int(values.get("sb_shock_window", 5) or 5))
+        t_end = control("date_input", "Training end (cut-off)", "sb_train_end", min_value=t_min, max_value=_D1,
+                        format="YYYY-MM-DD", help="Last day of the training window. The earliest cut-off leaves "
+                        "one month of days with a topic shock.")
+        months = control(
+            "select_slider", "Training length", "sb_train_months", options=list(_ui.TRAIN_MONTHS),
+            format_func=_ui.train_months_label, fallback=_ui.DEFAULT_TRAIN_MONTHS,
+            help="How far the training window reaches back from the cut-off, in calendar months.",
+        )
+        if t_end:
+            train_window = _ui.training_window(t_end, months)
+            st.caption(train_window["text"])
+            short_note = _ui.short_training_note(train_window["start"], train_window["end"], n_topics,
+                                                 lead_days=int(values.get("sb_lead", 0) or 0))
+            if short_note:
+                st.caption(short_note)
         control("date_input", "Forecast start", "sb_forecast_start", min_value=_D0, max_value=_D1,
                 format="YYYY-MM-DD")
         control("slider", "Forecast length (weeks)", "sb_forecast_weeks", min_value=1, max_value=12, step=1)
@@ -319,9 +379,11 @@ def sidebar(ref_assets: pd.DataFrame | None) -> dict[str, Any]:
         control("select_slider", "Grid ratio (smallest / largest lambda)", "sb_bks_ratio",
                 options=list(_ui.LAMBDA_RATIOS), format_func=lambda r: f"{r:g}")
         control("checkbox", "Penalise the intercept", "sb_bks_pen_int")
-        st.button("Run BKS", key="sb_run_bks", type="primary", on_click=_request_bks, width="stretch")
+        st.button("Run BKS", key="sb_run_bks", type="primary", on_click=_request_bks, width="stretch",
+                  disabled=not on_simulation, help=None if on_simulation else "BKS runs on the Simulation lab page.")
     sb.button("Reset all settings", key="sb_reset", on_click=_reset_settings)
-    return {"values": {**values, **st.session_state[_EFFECTIVE]}, "feas_slot": feas_slot}
+    return {"values": {**values, **st.session_state[_EFFECTIVE]}, "train_window": train_window,
+            "feas_slot": feas_slot}
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +436,14 @@ def overview_tab(ctx: dict[str, Any]) -> None:
     if n_conv:
         st.caption(f"The elastic net did not fully converge for {n_conv} asset group(s).")
     if fit.meta.get("gcv_at_boundary"):
-        st.caption(f"Ridge GCV chose the edge of its grid for {fit.meta['gcv_at_boundary']} asset(s).")
+        low = int(fit.meta.get("gcv_at_lower_edge", 0) or 0)
+        high = int(fit.meta["gcv_at_boundary"]) - low
+        parts = []
+        if low:
+            parts.append(f"the smallest lambda of its grid for {_ui.plural(low, 'asset')} (close to OLS)")
+        if high:
+            parts.append(f"the largest for {_ui.plural(high, 'asset')} (exposures shrunk towards zero)")
+        st.caption(f"Ridge GCV chose {' and '.join(parts)}.")
 
     c1, c2 = st.columns([1.05, 1])
     with c1:
@@ -614,6 +683,208 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
                        "forecast window is shaded.")
 
 
+def _bks_implied_reason(ctx: dict[str, Any], lib_reason: str) -> tuple[str, bool]:
+    """Why the BKS-implied exposures are not available, and whether a BKS run can help."""
+    cfg = ctx["cfg"]
+    check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days)
+    if not check["can_run"]:
+        return check["reason"], False
+    err = st.session_state.get("bks_error")
+    if err and err[0] == ctx["bks_key"]:
+        return f"BKS could not run with these settings: {err[1]}", True
+    if lib_reason and lib_reason not in (BKS_NOT_RUN, BKS_OFF):  # a BKS fit that does not match these settings
+        return lib_reason, True
+    return ("BKS has not been run on the current settings (training window and BKS model). Press Run BKS; the "
+            "comparison never starts a BKS fit on its own."), True
+
+
+def _bks_unavailable_box(ctx: dict[str, Any], lib_reason: str, key: str) -> str:
+    """Info box with the reason BKS-implied is not available and a Run BKS button; returns the reason."""
+    reason, can_run = _bks_implied_reason(ctx, lib_reason)
+    st.info(f"BKS-implied is not available. {reason}")
+    st.button("Run BKS", key=key, type="primary", on_click=_request_bks, disabled=not can_run,
+              help=None if can_run else "Change the training window first.")
+    return reason
+
+
+def _inspect_control(options: list[str], default: str, format_func: Any) -> str:
+    """"Method to inspect": follows the sidebar's direct method until the user picks another one."""
+    stored = st.session_state[_VALUES].get("cm_inspect")
+    value = stored if stored in options else (default if default in options else options[0])
+    st.session_state["cm_inspect"] = value
+    out = st.selectbox("Method to inspect", options, key="cm_inspect", format_func=format_func, on_change=_sync,
+                       args=("cm_inspect",))
+    st.session_state[_EFFECTIVE]["cm_inspect"] = out
+    return out
+
+
+def compare_tab(ctx: dict[str, Any]) -> None:
+    """Compare methods (G.15, D83): every method scored on the same forecast days, exposures frozen at the cut-off."""
+    cfg, session, truth = ctx["cfg"], ctx["session"], ctx["truth"]
+    a_labels = ctx["a_labels"]
+    w = cfg.window
+    share = lab_bks.kernel_history_share(w.train_start, w.train_end, cfg.bks, cfg.exposure.lead_days)
+    history = (f" On this window about {share:.0%} of that weight lies before the training start."
+               if np.isfinite(share) else "")
+    store = st.session_state.get("bks_store")
+    bks_r2 = ""
+    if store is not None and store["key"] == ctx["bks_key"]:
+        bks_r2 = f" (here {_ui.fmt_pct(store['result'].r2_pooled)})"
+    st.caption(
+        "Every method is scored on the same forecast days, with its exposures frozen at the training end.\n\n"
+        "- The direct methods are fitted on the training window only.\n"
+        "- BKS enters through its implied exposures: the topic-asset covariances that the BKS fit implies for "
+        "each asset, turned into exposures with the training covariance of the topic shocks.\n"
+        "- BKS-implied sees more past data than the direct methods. Its Gamma and scales use the training window, "
+        f"but its instruments weigh all days before the cut-off (half-life {cfg.bks.half_life_months:g} months)."
+        f"{history}\n"
+        f"- The BKS tab's OOS R²{bks_r2} fits K factors to each forecast week's own returns, so it cannot be set "
+        "next to the direct methods. The BKS-implied row here is the like-for-like figure.\n"
+        "- The oracle uses the true exposures of the simulation. It is the reference, not an estimator."
+    )
+    options = list(lab_compare.METHODS)
+
+    def label_of(m: str) -> str:
+        return _ui.method_option_label(m, cfg.direct)
+
+    chosen = control("multiselect", "Methods", "cm_methods", options=options, format_func=label_of)
+    st.caption(
+        "The sidebar's direct method keeps its settings; the other direct methods use their defaults (elastic net "
+        "with the universal penalty, ridge with lambda chosen by generalised cross-validation). All methods share "
+        f"the selection threshold tau = {cfg.direct.select_tau:g}."
+    )
+    if not chosen:
+        st.info("Choose at least one method.")
+        return
+    methods = tuple(m for m in options if m in chosen)
+    # D80: a BKS fit is reused only when this browser session requested it for these settings
+    use_bks = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
+    with st.spinner("Comparing methods ..."):
+        res = session.comparison(cfg, methods=methods, use_bks=use_bks)
+
+    notes: dict[str, str] = {}
+    if IMPLIED_METHOD in methods and IMPLIED_METHOD not in res.fits:
+        lib_reason = str(res.meta.get("unavailable", {}).get(IMPLIED_METHOD, ""))
+        notes[IMPLIED_METHOD] = _bks_unavailable_box(ctx, lib_reason, "cm_run_bks")
+
+    table = _ui.comparison_table(res.summary, notes)
+    column_config: dict[str, Any] = {
+        head: st.column_config.NumberColumn(head, format=fmt) for head, fmt in _ui.comparison_column_formats().items()
+    }
+    column_config["Note"] = st.column_config.TextColumn("Note", width="medium")
+    st.dataframe(table, hide_index=True, column_config=column_config, width="stretch", placeholder="–")
+    weeks = cfg.window.forecast_weeks
+    n_win = int(res.meta.get("n_windows", 0))
+    windows = (f"the {_ui.plural(n_win, f'consecutive {weeks}-week window')}" if n_win
+               else f"the consecutive {weeks}-week windows (none fits here)")
+    st.caption(
+        "How to read the table:\n\n"
+        "- Median OOS R², this window: the median over assets in the forecast window above.\n"
+        f"- Median OOS R², all windows: the median over {windows} from the forecast start to the end of the "
+        "data, with every training fit frozen.\n"
+        "- Windows above the oracle: the share of those windows where the method's median R² beats the oracle's. "
+        "The oracle is not the best fit in every window, so a method can beat it by chance.\n"
+        "- The columns from Selected pairs to RMSE compare each method's training exposures with the true "
+        "exposures, over all topic-asset pairs (as on the Overview).\n"
+        "- Fit time: seconds to fit on the training window; for BKS-implied, the BKS panel and fit plus the "
+        "conversion. The oracle row is last, as the reference. A dash marks a figure that does not apply."
+    )
+
+    labels = {str(m): str(res.summary.loc[m, "label"]) for m in res.summary.index}
+    if not res.fits:
+        st.info("None of the chosen methods is available; the table gives the reasons.")
+        return
+    c1, c2 = st.columns([1.05, 1])
+    with c1:
+        r2 = res.r2
+        ref = "oracle" if "oracle" in r2.columns else None
+        if len(r2) > 100 and r2.shape[1]:
+            key = r2[ref] if ref else r2.iloc[:, 0]
+            r2 = r2.reindex(key.sort_values(ascending=False, na_position="last").index[:100])
+            st.caption(f"Showing the 100 assets with the highest OOS R² of the {'oracle' if ref else 'first method'} "
+                       f"({len(res.r2)} assets).")
+        show_chart(
+            charts.method_r2_dots(r2, labels=a_labels, method_labels=labels, clip=-0.5, slots=lab_compare.METHODS,
+                                  title="Out-of-sample R² per asset by method, this window"),
+            "fig_cm_r2",
+        )
+        order = "the oracle's R²" if ref else "the first method's R²"
+        tick = "; the oracle is the ink tick." if ref else "."
+        st.caption(f"Assets sorted by {order}, highest on top. One marker per method{tick}")
+    with c2:
+        show_chart(
+            charts.method_sweep_lines(res.r2_sweep, method_labels=labels, slots=lab_compare.METHODS,
+                                      empty_message=f"No complete {weeks}-week window in the data"),
+            "fig_cm_sweep",
+        )
+        first, last = res.meta.get("sweep_first_day"), res.meta.get("sweep_last_day")
+        if n_win and first is not None and not pd.isna(first):
+            st.caption(f"{_ui.plural(n_win, f'consecutive {weeks}-week window')} from {pd.Timestamp(first).date()} "
+                       f"to {pd.Timestamp(last).date()}; each point is the median OOS R² over assets in one window.")
+        else:
+            st.caption(f"No complete {weeks}-week window fits between the forecast start and the end of the data.")
+
+    st.subheader("Inspect one method")
+    inspect_options = [m for m in options if m != "oracle"]  # the oracle is the reference in every inspect chart
+    inspect = _inspect_control(inspect_options, cfg.direct.method, label_of)
+    one = res if inspect in res.evals else session.comparison(cfg, methods=(inspect,), use_bks=use_bks)
+    name = str(one.summary.loc[inspect, "label"]) if inspect in one.summary.index else label_of(inspect)
+    if inspect not in one.evals:
+        reason = str(one.meta.get("unavailable", {}).get(inspect, "not fitted"))
+        if inspect == IMPLIED_METHOD:
+            if IMPLIED_METHOD in methods:
+                st.info("BKS-implied is not available; see the note above.")
+            else:
+                _bks_unavailable_box(ctx, reason, "cm_run_bks_inspect")
+        else:
+            st.info(f"{name} is not available. {_ui.unavailable_note(reason)}")
+        return
+    fit, ev = one.fits[inspect], one.evals[inspect]
+    rec = ev.recovery
+    m = st.columns(4)
+    m[0].metric("Coverage", _ui.fmt_pct(rec.get("coverage"), 0), border=True,
+                help="Share of design-linked pairs the method selected.")
+    m[1].metric("Sign agreement", _ui.fmt_pct(rec.get("sign_agreement"), 0), border=True,
+                help="Share of linked and selected pairs whose estimated sign equals the true sign.")
+    m[2].metric("MCC", _ui.fmt_num(rec.get("mcc")), border=True,
+                help="Matthews correlation of 'selected' against 'truly exposed' (true exposure at least tau in "
+                "absolute value), over all pairs.")
+    m[3].metric("Spearman", _ui.fmt_num(rec.get("spearman")), border=True,
+                help="Rank correlation of estimated and true exposures, all pairs.")
+    if inspect == IMPLIED_METHOD:
+        meta = fit.meta
+        n_topics = len(fit.B_hat.index)
+        K, rank = meta.get("K"), meta.get("gamma_rank")
+        used = (f" (only {rank} factor directions are used; the others are numerically zero)"
+                if rank is not None and K is not None and int(rank) < int(K) else "")
+        st.caption(
+            f"{IMPLIED_NOTE} This fit: K = {K} factors{used}, {meta.get('n_selected_topics')} of {n_topics} "
+            f"topics kept, lambda = {float(meta.get('lam', float('nan'))):.3g}."
+        )
+    skipped = [a_labels.get(a, a) for a in fit.meta.get("skipped_assets", [])]
+    if skipped:
+        st.caption(f"{len(skipped)} asset(s) with too few training days get zero exposures: {', '.join(skipped)}.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        linked = truth.W_unscaled != 0
+        est, n_total = _ui.subsample_pairs(fit.B_hat, linked, max_points=20000)
+        show_chart(charts.exposure_scatter(est, truth.B_true, linked=linked,
+                                           title=f"Estimated vs true exposure: {name}"), "fig_cm_scatter")
+        if est.size and n_total > int(np.isfinite(est.to_numpy()).sum()):
+            st.caption(f"Showing all linked pairs and a seeded sample of the others ({n_total} pairs in total).")
+    with c2:
+        r2m, r2o, r2t = ev.r2, ev.r2_oracle, truth.r2_true
+        if len(r2m) > 100:
+            top = r2m.sort_values(ascending=False, na_position="last").index[:100]
+            r2m, r2o, r2t = r2m.reindex(top), r2o.reindex(top), r2t.reindex(top)
+            st.caption(f"Showing the 100 assets with the highest OOS R² of {len(ev.r2)}.")
+        show_chart(charts.r2_bars(r2m, r2o, r2t, labels=a_labels, name=name,
+                                  title=f"Out-of-sample R² per asset: {name}"), "fig_cm_r2_inspect")
+        st.caption(f"Bars: {name}. Circles: oracle (true exposures, same training scales). Ticks: population R² "
+                   "of the simulation.")
+
+
 def bks_tab(ctx: dict[str, Any]) -> None:
     cfg = ctx["cfg"]
     b = cfg.bks
@@ -632,12 +903,16 @@ def bks_tab(ctx: dict[str, Any]) -> None:
         "- With no topic signal BKS still scores well above zero, because noise topics' instruments inherit the "
         "assets' betas (D47)."
     )
+    check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days)
+    if not check["can_run"]:
+        st.warning(f"{check['reason']} The direct estimator runs on windows down to one month.")
     if L > 100:
         st.warning(
             f"{L} topics: a BKS run takes from about half a minute to several minutes (measured on 55 assets: "
             "1.5 s at 100 topics, 36 s at 500 topics with 12 grid points). Keep the grid coarse."
         )
-    st.button("Run BKS", key="bks_run_tab", type="primary", on_click=_request_bks)
+    st.button("Run BKS", key="bks_run_tab", type="primary", on_click=_request_bks, disabled=not check["can_run"],
+              help=None if check["can_run"] else "Change the training window first.")
     err = st.session_state.get("bks_error")
     if err and err[0] == ctx["bks_key"]:
         st.error(f"BKS could not run with these settings: {err[1]}")
@@ -856,7 +1131,11 @@ def method_tab(ctx: dict[str, Any]) -> None:
              r"c_{k,n} = \mathrm{sd}_{train}(r_n)\, b_{k,n} \sum_H sh_{k,t}")
     st.markdown(
         "8. **BKS Sparse IPCA** runs on weekly periods with the package stages unchanged; its per-topic split of "
-        "the fitted return is not identified (D52)."
+        "the fitted return is not identified (D52).\n"
+        "9. **Method comparison.** The Compare methods tab scores every method on the same forecast days, with its "
+        "exposures frozen at the training end. BKS enters through its implied exposures: the topic covariances "
+        "that each asset's BKS factor betas imply, turned into exposures with the training covariance of the topic "
+        "shocks (DESIGN.md G.15)."
     )
 
     st.subheader("Limitations (G.12)")
@@ -877,7 +1156,11 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "6. **Short windows.** A one-week window has five daily observations; its OOS correlations and R² are "
         "dominated by noise. The window sweep shows the distribution across windows.\n"
         "7. **BKS identification.** D47 and D52 apply: noise topics' instruments inherit betas, and the per-topic "
-        "split of BKS fitted returns is not identified."
+        "split of BKS fitted returns is not identified.\n"
+        "8. **BKS-implied exposures.** K factors cannot represent independent exposures to every topic, so the "
+        "implied exposures measure how well BKS predicts through the topics, not which topics it identifies. Their "
+        "instruments also weigh the history before the training window, so the comparison with the direct methods "
+        "is not strictly like for like."
     )
 
     st.subheader("Market data")
@@ -950,11 +1233,43 @@ def _store_bks(res: Any, ctx: dict[str, Any], seconds: float, fit: Any = None) -
     st.session_state["bks_error"] = None
 
 
-def main() -> None:
+def shared_settings(on_simulation: bool) -> dict[str, Any]:
+    """Draw the shared sidebar and turn its values into a lab config (both pages).
+
+    Returns the sidebar's values in effect, ``cfg`` (``None`` when the values
+    are invalid), ``errors`` and ``notes`` of :func:`_ui.config_from_values`,
+    the training window, the feasibility placeholder, the reference tables
+    and the settings the Real data page shows (``settings``).
+    """
     _init_state()
     ref_assets, legs, topics_ref, ref_error = _load_reference()
-    sb = sidebar(ref_assets)
+    sb = sidebar(ref_assets, on_simulation=on_simulation)
     values = sb["values"]
+    overrides = tuple(st.session_state["link_overrides"].values())
+    classes = ref_assets["asset_class"] if ref_assets is not None else None
+    cfg, errors, notes = _ui.config_from_values(values, overrides, classes)
+    names = ref_assets["name"].to_dict() if ref_assets is not None else {}
+    return {
+        "values": values,
+        "cfg": cfg,
+        "errors": errors,
+        "notes": notes,
+        "train_window": sb["train_window"],
+        "feas_slot": sb["feas_slot"],
+        "ref_assets": ref_assets,
+        "legs": legs,
+        "topics_ref": topics_ref,
+        "ref_error": ref_error,
+        "settings": {"values": values, "cfg": cfg, "errors": errors, "notes": notes, "asset_classes": classes,
+                     "asset_names": names},
+    }
+
+
+def main() -> None:
+    run = _RUN
+    values = run["values"]
+    ref_assets, legs, topics_ref, ref_error = run["ref_assets"], run["legs"], run["topics_ref"], run["ref_error"]
+    sb = {"feas_slot": run["feas_slot"]}
 
     st.title("Topic-exposure lab")
     st.caption(
@@ -966,9 +1281,7 @@ def main() -> None:
         st.error(f"The reference data could not be read: {ref_error}")
         st.stop()
 
-    overrides = tuple(st.session_state["link_overrides"].values())
-    classes = ref_assets["asset_class"] if ref_assets is not None else None
-    cfg, errors, notes = _ui.config_from_values(values, overrides, classes)
+    cfg, errors, notes = run["cfg"], run["errors"], run["notes"]
     if errors:
         for e in errors:
             st.error(e)
@@ -1006,6 +1319,7 @@ def main() -> None:
         "legs": legs,
         "topics_ref": topics_ref,
         "bks_key": session.stage_key("bks", cfg),
+        "session": session,
     }
 
     feas = ctx["feasibility"]
@@ -1040,10 +1354,12 @@ def main() -> None:
     n_manual = int((sim.topics.table["group"] != "Generic").sum())
     days = ev.return_days
     window = f"{days[0].date()} to {days[-1].date()}" if len(days) else "no return days"
+    n_train = len(pd.bdate_range(cfg.window.train_start, cfg.window.train_end))
     st.markdown(
         f"**{len(market.assets)} assets** ({sources}) · **{len(sim.topics.table)} topics** ({n_manual} manual, "
         f"{len(sim.topics.table) - n_manual} generic) · **{len(sim.links.table)} links** · training "
-        f"{cfg.window.train_start} to {cfg.window.train_end} · forecast {window} (**{ev.n_days} return days**) · "
+        f"{cfg.window.train_start} to {cfg.window.train_end} ({n_train} weekdays) · forecast {window} "
+        f"(**{ev.n_days} return days**) · "
         f"w = {cfg.window.shock_window} · lead {'next day' if cfg.exposure.lead_days else 'same day'} · "
         f"{_ui.METHOD_LABELS[cfg.direct.method].split(' (')[0].lower()}"
     )
@@ -1053,7 +1369,7 @@ def main() -> None:
         st.error("The forecast window has no return day in the data. Move the forecast start earlier.")
         st.stop()
 
-    tabs = st.tabs(["Overview", "Exposure table", "Topic contributions", "BKS", "Lists", "Data and method"])
+    tabs = st.tabs(list(TABS))
     with tabs[0]:
         overview_tab(ctx)
     with tabs[1]:
@@ -1061,11 +1377,27 @@ def main() -> None:
     with tabs[2]:
         contributions_tab(ctx)
     with tabs[3]:
-        bks_tab(ctx)
+        compare_tab(ctx)
     with tabs[4]:
-        lists_tab(ctx)
+        bks_tab(ctx)
     with tabs[5]:
+        lists_tab(ctx)
+    with tabs[6]:
         method_tab(ctx)
 
 
-main()
+def real_data_page() -> None:
+    real_exposures.render(_RUN.get("settings"))
+
+
+# Top level (D82): the simulation lab and the Real data placeholder are separate pages. The sidebar is
+# shared: it is drawn here, before the chosen page runs, and its result goes to the pages through _RUN.
+navigation = st.navigation(
+    [
+        st.Page(main, title="Simulation lab", icon=":material/science:", url_path="simulation", default=True),
+        st.Page(real_data_page, title="Real data", icon=":material/insights:", url_path=REAL_DATA_URL),
+    ],
+    position="top",
+)
+_RUN.update(shared_settings(on_simulation=navigation.url_path != REAL_DATA_URL))
+navigation.run()

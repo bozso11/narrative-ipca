@@ -351,6 +351,11 @@ class WindowConfig:
 
     The forecast window holds the weekdays in
     ``[forecast_start, forecast_start + 7 * forecast_weeks days)``.
+    ``min_train_days`` is the shortest training window allowed: 21 weekdays,
+    about one month (D81). Short windows are allowed but noisy: an exposure's
+    standard error is about ``1 / sqrt(n)`` in standardised units. BKS needs
+    at least :data:`narrative_ipca.exposure_lab.bks.MIN_TRAIN_PERIODS` training
+    weeks on its own.
     """
 
     train_start: str = DATA_START
@@ -358,7 +363,7 @@ class WindowConfig:
     forecast_start: str = "2023-01-02"
     forecast_weeks: int = 4
     shock_window: int = 5
-    min_train_days: int = 250
+    min_train_days: int = 21
 
     def __post_init__(self) -> None:
         _normalise(self)

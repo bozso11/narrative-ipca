@@ -72,6 +72,11 @@ __all__ = [
     "gamma_norm_bars",
     "lambda_path_chart",
     "exposure_scatter",
+    "METHOD_SYMBOLS",
+    "REFERENCE_SYMBOL",
+    "method_styles",
+    "method_r2_dots",
+    "method_sweep_lines",
 ]
 
 # ---------------------------------------------------------------------------
@@ -906,6 +911,7 @@ def r2_bars(
     labels: Mapping[Any, Any] | pd.Series | None = None,
     title: str | None = None,
     clip: float = -1.0,
+    name: str = "Estimator",
 ) -> go.Figure:
     """OOS R2 per asset: estimator bars, oracle markers, population-truth ticks (G.8 point 1).
 
@@ -928,6 +934,9 @@ def r2_bars(
         Title (default "Out-of-sample R² per asset").
     clip:
         Lower display limit of the x axis.
+    name:
+        Legend and hover name of the bars (for example the method's label on
+        the Compare methods tab).
     """
     title = title if title is not None else "Out-of-sample R² per asset"
     est = _float_series(r2)
@@ -970,8 +979,8 @@ def r2_bars(
             orientation="h",
             width=0.62,
             marker={"color": BLUE, "line": {"width": 0}},
-            name="Estimator",
-            hovertext=[f"{_esc(n)}<br>Estimator R²: {_fmt(v, 3)}" for n, v in zip(names, e.to_numpy())],
+            name=_esc(name),
+            hovertext=[f"{_esc(n)}<br>{_esc(name)} R²: {_fmt(v, 3)}" for n, v in zip(names, e.to_numpy())],
             hovertemplate="%{hovertext}<extra></extra>",
         )
     )
@@ -1598,4 +1607,277 @@ def exposure_scatter(
     _style_axes(fig)
     fig.update_xaxes(range=[lo, hi], title={"text": "True exposure (standardised units)"}, **_ZERO_LINE)
     fig.update_yaxes(range=[lo, hi], title={"text": "Estimated exposure"}, scaleanchor="x", scaleratio=1, **_ZERO_LINE)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 10. Method comparison (G.15; G.9 tab 4)
+# ---------------------------------------------------------------------------
+#: Marker symbols of the method charts in slot order: the secondary encoding next to the colour,
+#: because four or five methods can sit close together on one asset.
+METHOD_SYMBOLS: tuple[str, ...] = (
+    "circle",
+    "diamond",
+    "square",
+    "triangle-up",
+    "x",
+    "triangle-down",
+    "star",
+    "hexagon",
+)
+#: Marker of the reference method (the oracle) in :func:`method_r2_dots`: an ink tick.
+REFERENCE_SYMBOL = "line-ns-open"
+
+
+def method_styles(
+    methods: Iterable[Any], reference: Any = "oracle", slots: Iterable[Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Colour, marker symbol and line dash per method, shared by the method charts.
+
+    Methods other than ``reference`` take the categorical slots
+    (:data:`CATEGORICAL`, :data:`METHOD_SYMBOLS`) in the order of ``slots``
+    (then any method not in it, in the order given), or in the order given
+    when ``slots`` is ``None``. Passing the full method list as ``slots``
+    (the dashboard passes :data:`.compare.METHODS`) gives every method a
+    fixed colour and symbol, whatever the selection. The slots are never
+    cycled, so methods past the eighth get no style and are not drawn. The
+    reference method is drawn in ink (tick marker, dashed line).
+
+    Returns
+    -------
+    dict
+        ``str(method) -> {"color", "symbol", "dash", "reference"}`` for the
+        methods in ``methods`` only.
+    """
+    ref = None if reference is None else str(reference)
+    wanted = list(dict.fromkeys(str(x) for x in methods))
+    order = list(dict.fromkeys([str(x) for x in (slots or ())] + wanted))
+    out: dict[str, dict[str, Any]] = {}
+    slot = 0
+    for m in order:
+        if m == ref:
+            out[m] = {"color": INK, "symbol": REFERENCE_SYMBOL, "dash": "dash", "reference": True}
+            continue
+        if slot >= len(CATEGORICAL):
+            if m in wanted:
+                logger.warning("method charts: more than %d methods; %r is not drawn", len(CATEGORICAL), m)
+            continue
+        out[m] = {"color": CATEGORICAL[slot], "symbol": METHOD_SYMBOLS[slot], "dash": "solid", "reference": False}
+        slot += 1
+    return {m: out[m] for m in wanted if m in out}
+
+
+def method_r2_dots(
+    r2: pd.DataFrame,
+    *,
+    labels: Mapping[Any, Any] | pd.Series | None = None,
+    method_labels: Mapping[Any, Any] | None = None,
+    reference: Any = "oracle",
+    title: str | None = None,
+    clip: float = -1.0,
+    slots: Iterable[Any] | None = None,
+) -> go.Figure:
+    """OOS R2 per asset for several methods in one forecast window: a dot plot (G.15).
+
+    Assets are rows, sorted by the reference method's R2 with the largest on
+    top (by the first column when the reference is absent). Each method is
+    one marker series in its slot of :func:`method_styles`; the reference
+    (the oracle) is an ink tick drawn on top. Values below ``clip`` are drawn
+    at ``clip`` and counted in a note under the title; the hover shows the
+    unclipped value.
+
+    Parameters
+    ----------
+    r2:
+        Assets x methods: per-asset uncentered OOS R2
+        (:attr:`.compare.ComparisonResult.r2`). Column order sets the colour
+        slots unless ``slots`` is given.
+    labels:
+        Display names by asset id.
+    method_labels:
+        Display names by method (legend and hover); default the method id.
+    reference:
+        The reference method's column; ``None`` for no reference.
+    title:
+        Title (default "Out-of-sample R² per asset by method").
+    clip:
+        Lower display limit of the x axis.
+    slots:
+        Full method list that fixes each method's colour slot
+        (:func:`method_styles`).
+    """
+    title = title if title is not None else "Out-of-sample R² per asset by method"
+    data = _float_frame(r2)
+    if data.size == 0 or _no_data(data):
+        return _empty_figure("No R² values to show", title=title)
+    data.columns = pd.Index([str(c) for c in data.columns])
+    styles = method_styles(data.columns, reference, slots)
+    cols = [c for c in data.columns if c in styles]
+    ref = str(reference) if reference is not None and str(reference) in cols else None
+    key = data[ref if ref is not None else cols[0]].to_numpy()
+    order = np.lexsort((np.arange(len(key)), np.where(np.isfinite(key), -key, np.inf)))
+    data = data.iloc[order]
+    assets = data.index
+    pos = np.arange(len(assets), dtype=float)
+    names = [_label(labels, a) for a in assets]
+    mnames = {c: _label(method_labels, c) for c in cols}
+
+    vals = data[cols].to_numpy()
+    n_clipped = int(np.sum(np.isfinite(vals) & (vals < clip)))
+    subtitle = (
+        f"{n_clipped} value{'s' if n_clipped != 1 else ''} below {clip:.0%} drawn at {clip:.0%} (hover shows the value)"
+        if n_clipped
+        else None
+    )
+
+    fig = go.Figure()
+    shown: list[np.ndarray] = []
+    draw = [c for c in cols if c != ref] + ([ref] if ref is not None else [])  # the reference on top
+    for c in draw:
+        v = data[c].to_numpy()
+        if not np.isfinite(v).any():
+            continue
+        x = np.where(np.isfinite(v), np.maximum(v, clip), np.nan)
+        shown.append(x)
+        style = styles[c]
+        if style["reference"]:
+            marker = {"symbol": style["symbol"], "size": 16, "color": INK, "line": {"width": 2, "color": INK}}
+        else:
+            marker = {"symbol": style["symbol"], "size": 9, "color": style["color"],
+                      "line": {"width": 1, "color": SURFACE}}
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=pos,
+                mode="markers",
+                marker=marker,
+                name=_esc(mnames[c]),
+                hovertext=[f"{_esc(n)}<br>{_esc(mnames[c])}: R² {_fmt(val, 1, scale=100.0, suffix='%')}"
+                           for n, val in zip(names, v)],
+                hovertemplate="%{hovertext}<extra></extra>",
+            )
+        )
+    if not fig.data:
+        return _empty_figure("No R² values to show", title=title)
+
+    legend = len(fig.data) >= 2
+    height = _header_px(title, subtitle, legend) + 22 * len(assets) + 56
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle, legend=legend))
+    _style_axes(fig)
+    lo, hi = _numeric_range(np.concatenate(shown), pad_share=0.05)
+    fig.update_xaxes(
+        range=[max(lo, clip - 0.05), hi],
+        tickformat=".0%",
+        title={"text": "Out-of-sample R² (share of return variation explained)"},
+        **_ZERO_LINE,
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=pos.tolist(),
+        ticktext=[_esc(_truncate(n, 34)) for n in names],
+        range=[len(assets) - 0.4, -0.6],
+        tickfont={"size": 11, "color": INK},
+    )
+    return fig
+
+
+def method_sweep_lines(
+    r2_sweep_long: pd.DataFrame,
+    *,
+    method_labels: Mapping[Any, Any] | None = None,
+    reference: Any = "oracle",
+    title: str | None = None,
+    empty_message: str = "No forecast windows to show",
+    clip: float = -1.0,
+    slots: Iterable[Any] | None = None,
+) -> go.Figure:
+    """Median OOS R2 over consecutive forecast windows, one line per method (G.8 point 6; G.15).
+
+    Colours and marker symbols follow :func:`method_styles` (in the order of
+    ``slots``, else the order the methods first appear in the frame); the
+    reference (the oracle) is a dashed ink line. One y axis: every line is
+    the same measure. Values below ``clip`` are drawn at ``clip`` and counted
+    in the subtitle, as in :func:`method_r2_dots`, so one method that fails
+    on a short window does not flatten the others; the hover shows the
+    unclipped value.
+
+    Parameters
+    ----------
+    r2_sweep_long:
+        Long frame with columns ``start`` (window start), ``method`` and
+        ``median_r2`` (the cross-asset median OOS R2 of the window), as
+        :attr:`.compare.ComparisonResult.r2_sweep`.
+    method_labels:
+        Display names by method; default the method id.
+    reference:
+        The reference method; ``None`` for no reference.
+    title:
+        Title (default "Median out-of-sample R² across forecast windows").
+    empty_message:
+        Text of the empty figure (for example why no complete window fits).
+    clip:
+        Lower display limit of the y axis.
+    slots:
+        Full method list that fixes each method's colour slot
+        (:func:`method_styles`).
+    """
+    title = title if title is not None else "Median out-of-sample R² across forecast windows"
+    need = {"start", "method", "median_r2"}
+    if (r2_sweep_long is None or not isinstance(r2_sweep_long, pd.DataFrame) or r2_sweep_long.empty
+            or not need <= set(r2_sweep_long.columns)):
+        return _empty_figure(empty_message, title=title)
+    frame = pd.DataFrame({
+        "start": pd.to_datetime(r2_sweep_long["start"], errors="coerce").to_numpy(),
+        "method": r2_sweep_long["method"].astype(str).to_numpy(),
+        "median_r2": _float_series(r2_sweep_long["median_r2"]).to_numpy(),
+    })
+    if _no_data(frame["median_r2"]):
+        return _empty_figure(empty_message, title=title)
+    methods = list(dict.fromkeys(frame["method"]))
+    styles = method_styles(methods, reference, slots)
+    ref = str(reference) if reference is not None else None
+    draw = [m for m in methods if m in styles and m != ref] + ([ref] if ref in styles else [])
+    n_windows = int(frame["start"].nunique())
+    mode = "lines+markers" if n_windows <= 40 else "lines"
+
+    fig = go.Figure()
+    shown: list[np.ndarray] = []
+    n_clipped = 0
+    for m in draw:
+        part = frame[frame["method"] == m].sort_values("start", kind="stable")
+        y = part["median_r2"].to_numpy()
+        if not np.isfinite(y).any():
+            continue
+        n_clipped += int(np.sum(np.isfinite(y) & (y < clip)))
+        y_draw = np.where(np.isfinite(y), np.maximum(y, clip), np.nan)
+        shown.append(y_draw)
+        style = styles[m]
+        name = _esc(_label(method_labels, m))
+        fig.add_trace(
+            go.Scatter(
+                x=part["start"],
+                y=y_draw,
+                customdata=y,
+                mode=mode,
+                line={"color": style["color"], "width": 2, "dash": style["dash"]},
+                marker={"size": 8, "symbol": "circle" if style["reference"] else style["symbol"],
+                        "color": style["color"], "line": {"width": 1.5, "color": SURFACE}},
+                name=name,
+                hovertemplate=f"{name}: %{{customdata:.1%}}<extra></extra>",
+            )
+        )
+    if not fig.data:
+        return _empty_figure(empty_message, title=title)
+    legend = len(fig.data) >= 2
+    subtitle = f"{n_windows} window{'s' if n_windows != 1 else ''}; training fits frozen"
+    if n_clipped:
+        subtitle += (f"; {n_clipped} value{'s' if n_clipped != 1 else ''} below {clip:.0%} drawn at {clip:.0%} "
+                     "(hover shows the value)")
+    fig.update_layout(**{**_base_layout(title, 400, subtitle=subtitle, legend=legend), "hovermode": "x unified"})
+    _style_axes(fig)
+    lo, hi = _numeric_range(np.concatenate(shown), pad_share=0.05)
+    fig.update_yaxes(tickformat=".0%", title={"text": "Median out-of-sample R² over assets"},
+                     range=[max(lo, clip - 0.05), hi], **_ZERO_LINE)
+    fig.update_xaxes(title={"text": "Window start"}, showspikes=True, spikecolor=BASELINE, spikethickness=1,
+                     spikedash="solid", spikemode="across")
     return fig

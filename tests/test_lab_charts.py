@@ -52,6 +52,31 @@ def _path_frame(criterion: bool = True) -> pd.DataFrame:
     return TuningResult.path_frame(SimpleNamespace(path=points))
 
 
+METHODS = ["elastic_net", "ridge", "bks_implied", "oracle"]
+
+
+def _method_r2(n_assets: int = 7, methods: list[str] | None = None, offset: int = 10) -> pd.DataFrame:
+    """Assets x methods OOS R2, the layout of ``ComparisonResult.r2``."""
+    methods = METHODS if methods is None else methods
+    rng = _rng(offset)
+    return pd.DataFrame(
+        rng.uniform(-0.4, 0.5, (n_assets, len(methods))),
+        index=pd.Index([f"A{i}" for i in range(n_assets)], name="asset_id"),
+        columns=pd.Index(methods, name="method"),
+    )
+
+
+def _method_sweep(methods, n_windows: int = 6, offset: int = 11) -> pd.DataFrame:
+    """Long sweep frame (``start``, ``end``, ``method``, ``median_r2``), the layout of ``ComparisonResult.r2_sweep``."""
+    rng = _rng(offset)
+    starts = pd.date_range("2025-07-01", periods=n_windows, freq="28D")
+    return pd.concat(
+        [pd.DataFrame({"start": starts, "end": starts + pd.Timedelta(days=27), "method": m,
+                       "median_r2": rng.normal(0.1, 0.1, n_windows)}) for m in methods],
+        ignore_index=True,
+    )
+
+
 def _normal_figures() -> dict[str, go.Figure]:
     rng = _rng(1)
     values = _exposure_frame()
@@ -70,7 +95,10 @@ def _normal_figures() -> dict[str, go.Figure]:
         }
     )
     B = pd.DataFrame(rng.normal(0.0, 0.2, (8, 6)), index=topics[:8], columns=values.index)
+    r2_methods = _method_r2()
     return {
+        "method_r2_dots": charts.method_r2_dots(r2_methods),
+        "method_sweep_lines": charts.method_sweep_lines(_method_sweep(r2_methods.columns)),
         "exposure_heatmap": charts.exposure_heatmap(values, blank=values.abs() < 0.2),
         "contribution_bars": charts.contribution_bars(
             contrib, true_contrib=contrib * 0.8, realized=0.01, residual=0.01 - contrib.sum(), top_n=8
@@ -106,7 +134,10 @@ def _empty_figures(kind: str) -> dict[str, go.Figure]:
         frame, series = None, None
     sweep = frame if kind != "nan" else pd.DataFrame({"start": pd.date_range("2023-01-02", periods=2), "median_r2": np.nan})
     path = frame if kind != "nan" else pd.DataFrame({"K": [3], "lam": [np.nan], "n_selected": [np.nan]})
+    long_sweep = frame if kind != "nan" else sweep.assign(method="ridge")
     return {
+        "method_r2_dots": charts.method_r2_dots(frame),
+        "method_sweep_lines": charts.method_sweep_lines(long_sweep),
         "exposure_heatmap": charts.exposure_heatmap(frame),
         "contribution_bars": charts.contribution_bars(series, realized=0.01, residual=0.01),
         "r2_bars": charts.r2_bars(series, series),
@@ -128,7 +159,7 @@ def figures() -> dict[str, go.Figure]:
 # All builders
 # ---------------------------------------------------------------------------
 def test_builders_return_figures_on_normal_input(figures: dict[str, go.Figure]) -> None:
-    assert len(figures) == 9
+    assert len(figures) == 11
     for name, fig in figures.items():
         assert isinstance(fig, go.Figure), name
         assert len(fig.data) > 0, name
@@ -387,6 +418,9 @@ def test_r2_bars_sorted_descending_with_clipping_note() -> None:
     subtitle = fig_low.layout.title.subtitle.text if charts._HAS_SUBTITLE else fig_low.layout.title.text
     assert "below -1" in subtitle
     assert _trace(fig_low, "Population truth").marker.color == charts.INK
+    # the bars can carry the method's name (Compare methods tab)
+    named = charts.r2_bars(r2, oracle, name="BKS-implied")
+    assert _trace(named, "BKS-implied").type == "bar" and "BKS-implied R²" in named.data[0].hovertext[0]
 
 
 # ---------------------------------------------------------------------------
@@ -470,3 +504,124 @@ def test_exposure_scatter_linked_split_and_webgl_for_many_points() -> None:
     fig_big = charts.exposure_scatter(big, big)
     assert fig_big.data[0].type == "scattergl"
     assert not fig_big.layout.showlegend
+
+
+# ---------------------------------------------------------------------------
+# Method comparison charts (G.15)
+# ---------------------------------------------------------------------------
+def test_method_styles_fixed_slots_reference_in_ink_never_cycled() -> None:
+    styles = charts.method_styles(["a", "oracle", "b", "c"])
+    assert [styles[m]["color"] for m in ("a", "b", "c")] == list(charts.CATEGORICAL[:3])
+    assert [styles[m]["symbol"] for m in ("a", "b", "c")] == list(charts.METHOD_SYMBOLS[:3])
+    assert styles["oracle"]["color"] == charts.INK and styles["oracle"]["reference"]
+    assert styles["oracle"]["symbol"] == charts.REFERENCE_SYMBOL
+    assert len(set(charts.METHOD_SYMBOLS)) == len(charts.METHOD_SYMBOLS) == len(charts.CATEGORICAL)
+    # nine methods besides the reference: the ninth gets no slot (not drawn) instead of reusing blue
+    many = charts.method_styles([f"m{i}" for i in range(9)] + ["oracle"])
+    assert "m8" not in many and len(many) == 9
+    assert charts.method_styles(["a", "b"], reference=None)["a"]["color"] == charts.CATEGORICAL[0]
+
+
+def test_method_styles_slots_fix_each_method_colour_across_selections() -> None:
+    """With the full method list as slots, adding OLS or dropping ridge does not recolour BKS-implied
+    (review 2026-09-29: without slots it turned from green to amber when OLS was added)."""
+    slots = ("elastic_net", "ridge", "ols", "bks_implied", "oracle")
+    a = charts.method_styles(["elastic_net", "ridge", "bks_implied", "oracle"], slots=slots)
+    b = charts.method_styles(["elastic_net", "ridge", "ols", "bks_implied", "oracle"], slots=slots)
+    c = charts.method_styles(["bks_implied", "elastic_net"], slots=slots)
+    assert a["bks_implied"] == b["bks_implied"] == c["bks_implied"]
+    assert a["bks_implied"]["color"] == charts.CATEGORICAL[3] and b["ols"]["color"] == charts.CATEGORICAL[2]
+    assert set(c) == {"bks_implied", "elastic_net"}  # only the methods asked for
+    assert b["oracle"]["reference"] and b["oracle"]["color"] == charts.INK
+    # a method outside the slots follows them
+    assert charts.method_styles(["new", "ridge"], slots=slots)["new"]["color"] == charts.CATEGORICAL[4]
+    # both charts take the slots
+    r2 = _method_r2(methods=["bks_implied", "elastic_net"])
+    dots = charts.method_r2_dots(r2, slots=slots)
+    assert {t.name: t.marker.color for t in dots.data}["bks_implied"] == charts.CATEGORICAL[3]
+    sweep = charts.method_sweep_lines(_method_sweep(["bks_implied", "elastic_net"]), slots=slots)
+    assert {t.name: t.line.color for t in sweep.data}["bks_implied"] == charts.CATEGORICAL[3]
+
+
+def test_method_r2_dots_sorted_by_oracle_colours_symbols_and_hover() -> None:
+    r2 = _method_r2()
+    labels = {"elastic_net": "Elastic net", "ridge": "Ridge (GCV)", "bks_implied": "BKS-implied",
+              "oracle": "Oracle (true exposures)"}
+    fig = charts.method_r2_dots(r2, labels={"A0": "Energy v World EQ"}, method_labels=labels)
+    # one marker series per method, the oracle last (on top) as an ink tick; legend shown
+    assert [t.name for t in fig.data] == ["Elastic net", "Ridge (GCV)", "BKS-implied", "Oracle (true exposures)"]
+    assert all(t.mode == "markers" for t in fig.data)
+    assert [t.marker.color for t in fig.data[:3]] == list(charts.CATEGORICAL[:3])
+    assert [t.marker.symbol for t in fig.data[:3]] == list(charts.METHOD_SYMBOLS[:3])
+    oracle = fig.data[3]
+    assert oracle.marker.color == charts.INK and oracle.marker.symbol == charts.REFERENCE_SYMBOL
+    assert fig.layout.showlegend
+    # assets sorted by the oracle's R2, highest on top (y position 0 is the top row)
+    expected = r2["oracle"].sort_values(ascending=False).index
+    ticks = list(fig.layout.yaxis.ticktext)
+    assert ticks == [("Energy v World EQ" if a == "A0" else a) for a in expected]
+    assert fig.layout.yaxis.range[0] > fig.layout.yaxis.range[1]
+    np.testing.assert_allclose(np.asarray(oracle.x, dtype=float), r2.loc[expected, "oracle"].to_numpy())
+    np.testing.assert_allclose(np.asarray(fig.data[0].x, dtype=float), r2.loc[expected, "elastic_net"].to_numpy())
+    assert "Elastic net: R²" in fig.data[0].hovertext[0]
+    assert fig.layout.xaxis.tickformat == ".0%"
+
+
+def test_method_r2_dots_clipping_missing_reference_and_missing_values() -> None:
+    r2 = _method_r2(methods=["ridge", "elastic_net"])
+    r2.iloc[2, 0] = -4.0
+    r2.iloc[3, 1] = np.nan
+    fig = charts.method_r2_dots(r2)  # no oracle column: sorted by the first column, all in colour
+    assert [t.name for t in fig.data] == ["ridge", "elastic_net"]
+    assert [t.marker.color for t in fig.data] == list(charts.CATEGORICAL[:2])
+    xs = np.asarray(fig.data[0].x, dtype=float)
+    assert np.nanmin(xs) == -1.0  # drawn at the clip
+    finite = xs[np.isfinite(xs)]
+    assert list(finite) == sorted(finite, reverse=True)
+    subtitle = fig.layout.title.subtitle.text if charts._HAS_SUBTITLE else fig.layout.title.text
+    assert "1 value below -100%" in subtitle
+    assert "-400.0%" in " ".join(fig.data[0].hovertext)  # the hover keeps the value
+    # a single method: no legend
+    assert not charts.method_r2_dots(r2[["ridge"]]).layout.showlegend
+
+
+def test_method_sweep_lines_colours_match_the_dots_and_reference_is_dashed_ink() -> None:
+    long = _method_sweep(METHODS)
+    shuffled = long.sample(frac=1.0, random_state=0)  # row order must not matter within a method
+    fig = charts.method_sweep_lines(shuffled.sort_values("method", key=lambda s: s.map(METHODS.index), kind="stable"),
+                                    method_labels={"oracle": "Oracle"})
+    assert [t.name for t in fig.data] == ["elastic_net", "ridge", "bks_implied", "Oracle"]
+    dots = charts.method_r2_dots(_method_r2())
+    assert [t.line.color for t in fig.data] == [t.marker.color for t in dots.data]
+    assert [t.line.dash for t in fig.data] == ["solid", "solid", "solid", "dash"]
+    assert fig.data[3].line.color == charts.INK
+    for t in fig.data:  # sorted by window start
+        x = pd.to_datetime(pd.Series(t.x))
+        assert x.is_monotonic_increasing and len(x) == 6
+    part = long[long["method"] == "ridge"].sort_values("start")
+    np.testing.assert_allclose(np.asarray(fig.data[1].y, dtype=float), part["median_r2"].to_numpy())
+    assert fig.layout.showlegend and fig.layout.hovermode == "x unified"
+    assert fig.layout.yaxis.tickformat == ".0%"
+    # one method: no legend; missing columns or no finite value: the empty figure with the message
+    assert not charts.method_sweep_lines(_method_sweep(["ridge"])).layout.showlegend
+    empty = charts.method_sweep_lines(long.drop(columns="method"), empty_message="No complete 4-week window")
+    assert len(empty.data) == 0 and empty.layout.annotations[0].text == "No complete 4-week window"
+
+
+def test_method_sweep_lines_clip_a_failing_method() -> None:
+    """One method far below -100% is drawn at the clip, so the other lines keep their scale; the hover
+    keeps the value (review 2026-09-29: a -4,653% ridge line flattened the oracle)."""
+    long = _method_sweep(["ridge", "oracle"])
+    long.loc[long["method"] == "ridge", "median_r2"] = -46.5
+    fig = charts.method_sweep_lines(long)
+    ridge = next(t for t in fig.data if t.name == "ridge")
+    np.testing.assert_allclose(np.asarray(ridge.y, dtype=float), -1.0)
+    np.testing.assert_allclose(np.asarray(ridge.customdata, dtype=float), -46.5)
+    assert "customdata" in ridge.hovertemplate
+    assert fig.layout.yaxis.range[0] == pytest.approx(-1.05)
+    subtitle = fig.layout.title.subtitle.text if charts._HAS_SUBTITLE else fig.layout.title.text
+    assert "6 values below -100% drawn at -100%" in subtitle
+    # nothing below the clip: no note, and the range follows the data
+    plain = charts.method_sweep_lines(_method_sweep(["ridge", "oracle"]))
+    text = plain.layout.title.subtitle.text if charts._HAS_SUBTITLE else plain.layout.title.text
+    assert "below" not in text and plain.layout.yaxis.range[0] > -1.05

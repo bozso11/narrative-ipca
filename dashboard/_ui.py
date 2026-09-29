@@ -1,4 +1,4 @@
-"""Pure helpers of the topic-exposure lab dashboard (DESIGN.md G.9; D66-D70).
+"""Pure helpers of the topic-exposure lab dashboard (DESIGN.md G.9, G.15; D66-D70, D83-D85).
 
 No Streamlit imports: everything here maps widget values and lab results to
 configurations, tables and figures, so it can be tested without a running
@@ -13,13 +13,16 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+import re
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from narrative_ipca.exposure_lab import bks as lab_bks
 from narrative_ipca.exposure_lab import charts
+from narrative_ipca.exposure_lab import compare as lab_compare
 from narrative_ipca.exposure_lab.config import (
     DATA_END,
     DATA_START,
@@ -32,8 +35,10 @@ from narrative_ipca.exposure_lab.config import (
     UniverseConfig,
     WindowConfig,
 )
+from narrative_ipca.config import ShockConfig
 from narrative_ipca.exposure_lab.evaluate import median_finite
 from narrative_ipca.exposure_lab.reference import ASSET_CLASSES
+from narrative_ipca.shocks import attention_shocks
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +82,187 @@ HEATMAP_COLORS: dict[str, str] = {
 #: 2026-09-29 on 55 assets: 25 s at 520 topics, 0.5 s at 20 topics).
 CV_SECONDS_PER_TOPIC_ASSET = 25.0 / (520 * 55)
 
+#: Training windows shorter than this many weekdays get a noise note (D81).
+SHORT_TRAINING_DAYS = 250
+
+# Time windows of the dashboard (owner request 2026-09-29). These are dashboard
+# defaults only: the library's WindowConfig defaults stay as they are for the
+# scripts and tests.
+#: Default training end (cut-off) of the dashboard.
+DEFAULT_TRAIN_END = "2025-06-30"
+#: Default training length in calendar months.
+DEFAULT_TRAIN_MONTHS = 6
+#: Default forecast start and length of the dashboard.
+DEFAULT_FORECAST_START = "2025-07-01"
+DEFAULT_FORECAST_WEEKS = 4
+#: Training lengths offered, in calendar months (one month to 10 years).
+TRAIN_MONTHS: tuple[int, ...] = (1, 2, 3, 4, 6, 9, 12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120)
+
+
+def train_months_label(months: int) -> str:
+    """Training length in words: 1 -> "1 month", 12 -> "1 year", 18 -> "18 months", 24 -> "2 years"."""
+    m = int(months)
+    if m == 12:
+        return "1 year"
+    if m >= 24 and m % 12 == 0:
+        return f"{m // 12} years"
+    return "1 month" if m == 1 else f"{m} months"
+
+
+def plural(n: int, word: str, words: str | None = None) -> str:
+    """``"1 window"``, ``"2 windows"``: the count with the word in the right number."""
+    return f"{int(n)} {word if int(n) == 1 else (words or word + 's')}"
+
+
+def first_shock_day(shock_window: int) -> dt.date:
+    """First day of the data with an observed topic shock: the shock needs ``w`` earlier days (D9).
+
+    Found with the package's :func:`narrative_ipca.shocks.attention_shocks` on
+    a probe series, so its rule is not restated here.
+    """
+    w = int(shock_window)
+    cal = pd.bdate_range(DATA_START, periods=w + 5)
+    probe = pd.DataFrame({"x": np.arange(len(cal), dtype=float) ** 2}, index=cal)
+    first = attention_shocks(probe, ShockConfig(window=w, standardize=False)).z["x"].first_valid_index()
+    return pd.Timestamp(first).date()
+
+
+def shock_days(train_start: Any, train_end: Any, shock_window: int) -> int:
+    """Weekdays of the training window that carry a topic shock (all of them away from the data start)."""
+    ts = max(pd.Timestamp(train_start), pd.Timestamp(first_shock_day(shock_window)))
+    te = pd.Timestamp(train_end)
+    return len(pd.bdate_range(ts, te)) if ts <= te else 0
+
+
+def earliest_train_end(shock_window: int, min_days: int | None = None) -> dt.date:
+    """Earliest cut-off whose training window can hold ``min_days`` shock days (default 21, D81)."""
+    min_days = WindowConfig().min_train_days if min_days is None else int(min_days)
+    return pd.bdate_range(first_shock_day(shock_window), periods=min_days)[-1].date()
+
+
+def training_window(train_end: Any, months: int, min_days: int | None = None) -> dict[str, Any]:
+    """Training window that reaches ``months`` calendar months back from the cut-off.
+
+    The start is ``(cut-off + 1 day) - months``, so a month-end cut-off gives
+    whole calendar months (2025-06-30 and 6 months: 2025-01-01 to
+    2025-06-30). Two corrections follow, each stated in ``text``:
+
+    1. When the window has fewer than ``min_days`` weekdays (a February
+       month has 20), the start moves back until it has ``min_days``
+       (default ``WindowConfig().min_train_days``, 21; D81).
+    2. When the start falls before the first day of the data
+       (:data:`DATA_START`), it is clipped to that day.
+
+    Parameters
+    ----------
+    train_end:
+        Training end (cut-off), inclusive.
+    months:
+        Training length in calendar months.
+    min_days:
+        Fewest weekdays; ``None`` uses ``WindowConfig().min_train_days``.
+
+    Returns
+    -------
+    dict
+        ``start`` and ``end`` (``datetime.date``), ``n_days`` (weekdays in
+        the window), ``nominal_start`` (before the corrections),
+        ``extended`` and ``clipped`` (bool), ``note`` (the correction in
+        words, ``""`` when none) and ``text`` (the caption).
+    """
+    min_days = WindowConfig().min_train_days if min_days is None else int(min_days)
+    te = pd.Timestamp(train_end).normalize()
+    nominal = te + pd.Timedelta(days=1) - pd.DateOffset(months=int(months))
+    ts = nominal
+    extended = clipped = False
+    if len(pd.bdate_range(ts, te)) < min_days:
+        earliest = pd.bdate_range(end=te, periods=min_days)[0]
+        if earliest < ts:
+            ts, extended = earliest, True
+    d0 = pd.Timestamp(DATA_START)
+    if ts < d0:
+        ts, clipped = d0, True
+    n = len(pd.bdate_range(ts, te)) if ts <= te else 0
+    note = ""
+    if clipped:
+        note = (f"{train_months_label(months)} would start on {nominal.date()}, before the data; the window starts "
+                f"on the first day of the data, {DATA_START}.")
+    elif extended:
+        note = f"The start moved back from {nominal.date()} to reach the minimum of {min_days} weekdays."
+    text = f"Training window: {ts.date()} to {te.date()} ({plural(n, 'weekday')})." + (f" {note}" if note else "")
+    return {
+        "start": ts.date(),
+        "end": te.date(),
+        "n_days": n,
+        "nominal_start": nominal.date(),
+        "extended": extended,
+        "clipped": clipped,
+        "note": note,
+        "text": text,
+    }
+
+
+def bks_training_check(
+    train_start: Any, train_end: Any, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0
+) -> dict[str, Any]:
+    """Whether BKS can run on this training window, and why not in plain words (G.7.2; D17).
+
+    BKS needs :data:`narrative_ipca.exposure_lab.bks.MIN_TRAIN_PERIODS`
+    training weeks that it can use: weeks that end inside the window and
+    after its burn-in at the start of the data
+    (:func:`narrative_ipca.exposure_lab.bks.training_weeks`; on the lab's
+    data the first usable week ends on 2016-04-08).
+
+    Returns
+    -------
+    dict
+        ``weeks`` (Fridays in the window), ``n_weeks`` (weeks BKS can use),
+        ``first_week`` (the first week any BKS fit can use), ``can_run`` and
+        ``reason`` (``""`` when BKS can run).
+    """
+    b = BKSLabConfig() if bks_cfg is None else bks_cfg
+    ts, te = pd.Timestamp(train_start), pd.Timestamp(train_end)
+    weeks = len(pd.date_range(ts, te, freq="W-FRI")) if ts <= te else 0
+    n, first = lab_bks.training_weeks(ts, te, b, lead_days)
+    min_weeks = int(lab_bks.MIN_TRAIN_PERIODS)
+    reason = ""
+    if n < min_weeks and weeks < min_weeks:
+        reason = f"BKS needs at least {min_weeks} training weeks; the training window has {weeks}."
+    elif n < min_weeks:
+        start = "" if pd.isna(first) else f", so its first usable week ends on {pd.Timestamp(first).date()}"
+        reason = (
+            f"BKS needs at least {min_weeks} training weeks and can use {n} of this window's {weeks}. It skips the "
+            f"first {int(b.burn_in_weeks)} weeks of the data to warm up its instruments{start}. Move the cut-off "
+            "later."
+        )
+    return {"weeks": weeks, "n_weeks": n, "first_week": first, "can_run": n >= min_weeks, "reason": reason}
+
+
+def short_training_note(
+    train_start: Any, train_end: Any, n_topics: int, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0
+) -> str | None:
+    """Plain-words note on a training window shorter than about a year (D81), or ``None``.
+
+    States the standard error of one exposure (about ``1/sqrt(n)`` in
+    standardised units, ``n`` the training weekdays), the default elastic-net
+    penalty ``sqrt(2 ln L / n)`` (``L`` the number of topics), and whether BKS
+    can run (:func:`bks_training_check`, with ``bks_cfg`` default
+    ``BKSLabConfig()``).
+    """
+    ts, te = pd.Timestamp(train_start), pd.Timestamp(train_end)
+    n = len(pd.bdate_range(ts, te))
+    if n <= 0 or n >= SHORT_TRAINING_DAYS:
+        return None
+    check = bks_training_check(ts, te, bks_cfg, lead_days)
+    penalty = math.sqrt(2.0 * math.log(max(int(n_topics), 2)) / n)
+    bks = "BKS can run." if check["can_run"] else check["reason"]
+    return (
+        f"Short training window ({plural(n, 'weekday')}, {plural(check['weeks'], 'week')}):\n\n"
+        f"- one exposure's standard error is about 1/sqrt(n) = {1.0 / math.sqrt(n):.2f} (a strong link is about 0.32);\n"
+        f"- the default elastic-net penalty sqrt(2 ln L / n) = {penalty:.2f} sets most exposures to zero;\n"
+        f"- {bks}"
+    )
+
 METRICS: tuple[str, ...] = (
     "OOS correlation",
     "Estimated exposure",
@@ -94,10 +280,12 @@ HEATMAP_DEFAULT_MAX_ROWS = 60
 def default_values() -> dict[str, Any]:
     """Default value of every sidebar control, keyed by widget key (``sb_`` prefix).
 
-    The values reproduce ``LabConfig()`` (DESIGN.md G.9): listed real assets,
-    20 manual topics, three betas 0.35 / 0.15 / 0.05, training 2015-01-02 to
-    2022-12-30, forecast 2023-01-02 for 4 weeks, ``w = 5``, elastic net with
-    the universal penalty.
+    The time windows are the dashboard's own defaults (owner request
+    2026-09-29): training 6 months to the cut-off 2025-06-30 (2025-01-01 to
+    2025-06-30), forecast 2025-07-01 for 4 weeks. Everything else reproduces
+    ``LabConfig()`` (DESIGN.md G.9): listed real assets, 20 manual topics,
+    three betas 0.35 / 0.15 / 0.05, ``w = 5``, elastic net with the universal
+    penalty.
     """
     c = LabConfig()
     u, t, e, w, d, b = c.universe, c.topics, c.exposure, c.window, c.direct, c.bks
@@ -119,10 +307,10 @@ def default_values() -> dict[str, Any]:
         "sb_noise_df": float(e.noise_df),
         "sb_exposure_seed": int(e.seed),
         "sb_noise_seed": int(e.noise_seed),
-        "sb_train_start": dt.date.fromisoformat(w.train_start),
-        "sb_train_end": dt.date.fromisoformat(w.train_end),
-        "sb_forecast_start": dt.date.fromisoformat(w.forecast_start),
-        "sb_forecast_weeks": int(w.forecast_weeks),
+        "sb_train_end": dt.date.fromisoformat(DEFAULT_TRAIN_END),
+        "sb_train_months": DEFAULT_TRAIN_MONTHS,
+        "sb_forecast_start": dt.date.fromisoformat(DEFAULT_FORECAST_START),
+        "sb_forecast_weeks": DEFAULT_FORECAST_WEEKS,
         "sb_shock_window": int(w.shock_window),
         "sb_method": d.method,
         "sb_penalty": d.penalty,
@@ -184,7 +372,9 @@ def config_from_values(
     Parameters
     ----------
     v:
-        Sidebar values keyed by widget key (see :func:`default_values`).
+        Sidebar values keyed by widget key (see :func:`default_values`). The
+        training window comes from the cut-off ``sb_train_end`` and the
+        length ``sb_train_months`` (:func:`training_window`).
     overrides:
         Session link edits ``(topic_id, asset_id, tier, sign)``.
     asset_classes:
@@ -202,14 +392,15 @@ def config_from_values(
     notes: list[str] = []
 
     # windows first: the most common invalid combinations, in plain words
-    ts, te = pd.Timestamp(v["sb_train_start"]), pd.Timestamp(v["sb_train_end"])
+    if v.get("sb_train_end") is None or v.get("sb_forecast_start") is None:
+        return None, ["Choose a training end (cut-off) and a forecast start."], notes
+    tw = training_window(v["sb_train_end"], int(v["sb_train_months"]))
+    ts, te = pd.Timestamp(tw["start"]), pd.Timestamp(tw["end"])
     fs = pd.Timestamp(v["sb_forecast_start"])
     weeks = int(v["sb_forecast_weeks"])
     d0, d1 = pd.Timestamp(DATA_START), pd.Timestamp(DATA_END)
-    if ts < d0 or te > d1:
-        errors.append(f"The training window must lie within the data, {DATA_START} to {DATA_END}.")
-    if not ts < te:
-        errors.append(f"Training start ({ts.date()}) must be before training end ({te.date()}).")
+    if te < d0 or te > d1:
+        errors.append(f"The training end (cut-off, {te.date()}) must lie within the data, {DATA_START} to {DATA_END}.")
     if not fs > te:
         errors.append(f"Forecast start ({fs.date()}) must be after training end ({te.date()}).")
     if fs > d1:
@@ -219,8 +410,20 @@ def config_from_values(
         notes.append(
             f"The forecast window runs past the last day of the data ({DATA_END}); it has {n_days} return day(s)."
         )
-    if ts < te and len(pd.bdate_range(ts, te)) < WindowConfig().min_train_days:
-        errors.append(f"The training window needs at least {WindowConfig().min_train_days} weekdays (about one year).")
+    min_days = WindowConfig().min_train_days
+    w = int(v["sb_shock_window"])
+    if d0 <= te <= d1 and tw["n_days"] < min_days:
+        errors.append(
+            f"The training window {ts.date()} to {te.date()} has {plural(tw['n_days'], 'weekday')}; it needs at "
+            f"least {min_days} (about one month). Move the cut-off to {earliest_train_end(w, min_days)} or later."
+        )
+    elif d0 <= te <= d1 and shock_days(ts, te, w) < min_days:
+        errors.append(
+            f"The training window {ts.date()} to {te.date()} has {plural(shock_days(ts, te, w), 'weekday')} with a "
+            f"topic shock; it needs at least {min_days}. The shock needs {plural(w, 'earlier day')}, so the data's "
+            f"first shock is on {first_shock_day(w)}. Move the cut-off to {earliest_train_end(w, min_days)} or "
+            "later."
+        )
     if v["sb_manual"] == "none" and int(v["sb_n_generic_topics"]) < MIN_GENERIC_TOPICS_ALONE:
         errors.append(f"With no manual topic set, choose at least {MIN_GENERIC_TOPICS_ALONE} generic topics.")
     if errors:
@@ -299,6 +502,214 @@ def config_from_values(
         bks=parts["BKS model"],
     )
     return cfg, errors, notes
+
+
+# ---------------------------------------------------------------------------
+# Shared settings on the Real data page (G.14)
+# ---------------------------------------------------------------------------
+#: The line under the "Settings in use" table of the Real data page.
+SIMULATION_ONLY_NOTE = (
+    "Simulation-only settings (price source, generic assets and topics, betas and link seeds) do not apply to "
+    "real data."
+)
+
+
+def settings_in_use(
+    v: dict[str, Any],
+    asset_classes: pd.Series | None = None,
+    asset_names: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """The sidebar settings that will apply to real data, as a three-column table.
+
+    Groups, in order: time windows (cut-off, length, the resulting training
+    window, forecast start and length, shock window), direct estimator
+    (method and its penalty settings), BKS model (``K``, half-life and weekly
+    ``xi``, lambda rule, grid) and asset selection (listed assets, classes,
+    left-out assets). Simulation-only settings are left out
+    (:data:`SIMULATION_ONLY_NOTE`).
+
+    Parameters
+    ----------
+    v:
+        Sidebar values keyed by widget key (see :func:`default_values`).
+    asset_classes:
+        ``asset_class`` by listed asset id, for the count of listed assets;
+        ``None`` omits the count.
+    asset_names:
+        Display name by asset id, for the left-out assets.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``Group``, ``Setting``, ``Value`` (all text).
+    """
+    names = asset_names or {}
+    rows: list[tuple[str, str, str]] = []
+
+    g = "Time windows"
+    months = int(v["sb_train_months"])
+    rows.append((g, "Training end (cut-off)", _iso(v["sb_train_end"])))
+    rows.append((g, "Training length", train_months_label(months)))
+    tw = training_window(v["sb_train_end"], months)
+    rows.append((g, "Training window", f"{tw['start']} to {tw['end']} ({tw['n_days']} weekdays)"
+                 + (f". {tw['note']}" if tw["note"] else "")))
+    weeks = int(v["sb_forecast_weeks"])
+    fs = pd.Timestamp(v["sb_forecast_start"])
+    rows.append((g, "Forecast start", _iso(fs)))
+    rows.append((g, "Forecast length", f"{weeks} week{'s' if weeks != 1 else ''} "
+                 f"({fs.date()} to {(fs + pd.Timedelta(days=7 * weeks - 1)).date()})"))
+    rows.append((g, "Shock window w", f"{int(v['sb_shock_window'])} days"))
+
+    g = "Direct estimator"
+    method = str(v["sb_method"])
+    label = METHOD_LABELS.get(method, method)
+    if method == "oracle":
+        label += "; not available on real data (there is no truth)"
+    rows.append((g, "Method", label))
+    if method == "elastic_net":
+        penalty = str(v["sb_penalty"])
+        rows.append((g, "Penalty rule", PENALTY_LABELS.get(penalty, penalty)))
+        if penalty == "fixed":
+            rows.append((g, "Penalty alpha", f"{float(v['sb_alpha']):.3f}"))
+        rows.append((g, "L1 ratio", f"{float(v['sb_l1_ratio']):.2f}"))
+    elif method == "ridge":
+        ridge = ("chosen by generalised cross-validation" if bool(v["sb_ridge_gcv"])
+                 else f"{float(v['sb_ridge_lambda']):.4f}")
+        rows.append((g, "Ridge lambda", ridge))
+    rows.append((g, "Selection threshold tau", f"{float(v['sb_select_tau']):.2f}"))
+
+    g = "BKS model"
+    hl = float(v["sb_bks_half_life"])
+    rule = str(v["sb_bks_rule"])
+    rows.append((g, "Factors K", str(int(v["sb_bks_K"]))))
+    rows.append((g, "Kernel half-life", f"{hl:g} months (weekly xi = {BKSLabConfig(half_life_months=hl).xi_weekly:.4f})"))
+    rule_text = LAMBDA_RULE_LABELS.get(rule, rule)
+    if rule == "tolerance":
+        rule_text += f", x = {float(v['sb_bks_tolerance']):.1%}"
+    elif rule == "fixed":
+        rule_text += f", lambda = {float(v['sb_bks_lam']):.4g}"
+    rows.append((g, "Lambda rule", rule_text))
+    rows.append((g, "Lambda grid", f"{int(v['sb_bks_n_lambdas'])} points, smallest / largest "
+                 f"{float(v['sb_bks_ratio']):g}"))
+    rows.append((g, "Penalise the intercept", "yes" if bool(v["sb_bks_pen_int"]) else "no"))
+
+    g = "Asset selection"
+    classes = list(v.get("sb_asset_classes") or [])
+    dropped = [str(a) for a in (v.get("sb_drop_assets") or [])]
+    if asset_classes is not None:
+        kept = listed_subset(asset_classes, classes, dropped)
+        n_kept = len(asset_classes) if kept is None else len(kept)
+        listed = f"{n_kept} of {len(asset_classes)}"
+    else:
+        listed = "all listed assets after the filters below"
+    if v.get("sb_asset_source") == "generic":
+        listed += " (the simulation uses generic assets; real data uses the listed assets)"
+    rows.append((g, "Listed assets", listed))
+    all_classes = set(classes) >= set(ASSET_CLASSES)
+    rows.append((g, "Asset classes", "all" if all_classes else (", ".join(classes) or "none")))
+    rows.append((g, "Left-out assets", ", ".join(names.get(a, a) for a in dropped) or "none"))
+    return pd.DataFrame(rows, columns=["Group", "Setting", "Value"])
+
+
+# ---------------------------------------------------------------------------
+# Compare methods tab (G.9 tab 4, G.15)
+# ---------------------------------------------------------------------------
+#: Methods the Compare methods tab shows by default (OLS is offered too).
+COMPARE_DEFAULT_METHODS: tuple[str, ...] = ("elastic_net", "ridge", lab_bks.IMPLIED_METHOD, "oracle")
+
+#: Columns of the comparison table: (summary column, heading, kind). Kinds: ``pct`` (share shown in
+#: percent), ``num2`` and ``num3`` (decimals), ``int``, ``sec`` (seconds) and ``text``.
+#: The out-of-sample columns come first, so they stay on screen at laptop width.
+COMPARISON_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("label", "Method", "text"),
+    ("r2_median_window", "Median OOS R², this window", "pct"),
+    ("r2_median_all_windows", "Median OOS R², all windows", "pct"),
+    ("share_windows_above_oracle", "Windows above the oracle", "pct"),
+    ("n_selected", "Selected pairs", "int"),
+    ("coverage", "Coverage", "pct"),
+    ("sign_agreement", "Sign agreement", "pct"),
+    ("mcc", "MCC", "num2"),
+    ("spearman", "Spearman vs truth", "num2"),
+    ("rmse", "RMSE vs truth", "num3"),
+    ("fit_seconds", "Fit time (s)", "sec"),
+    ("note", "Note", "text"),
+)
+
+
+def method_option_label(method: str, direct: DirectConfig | None = None) -> str:
+    """Label of a method in the Compare methods controls.
+
+    The sidebar's direct method keeps its own settings in the comparison
+    (:func:`narrative_ipca.exposure_lab.compare.method_config`), so its label
+    names a non-default penalty rule ("Elastic net (CV)", "Ridge (fixed
+    lambda)"); every other method has its default label.
+    """
+    label = lab_compare.METHOD_LABELS.get(method, method)
+    if direct is None or direct.method != method:
+        return label
+    if method == "elastic_net" and direct.penalty == "cv":
+        return "Elastic net (CV)"
+    if method == "elastic_net" and direct.penalty == "fixed":
+        return "Elastic net (fixed alpha)"
+    if method == "ridge" and direct.ridge_lambda is not None:
+        return "Ridge (fixed lambda)"
+    return label
+
+
+def comparison_table(summary: pd.DataFrame, notes: dict[str, str] | None = None) -> pd.DataFrame:
+    """The comparison summary as the table of the Compare methods tab.
+
+    Parameters
+    ----------
+    summary:
+        :attr:`narrative_ipca.exposure_lab.compare.ComparisonResult.summary`
+        (one row per method, oracle last).
+    notes:
+        Method -> note that replaces the summary's note (for example the
+        dashboard's own reason why BKS-implied is not available).
+
+    Returns
+    -------
+    pd.DataFrame
+        The columns of :data:`COMPARISON_COLUMNS` under their headings, in
+        the summary's row order, indexed by method. Shares are in percent
+        (``pct`` columns times 100); unavailable methods have missing numbers
+        and their reason in ``Note`` (:func:`unavailable_note`).
+    """
+    out = pd.DataFrame(index=pd.Index([str(m) for m in summary.index], name="method"))
+    for col, head, kind in COMPARISON_COLUMNS:
+        s = summary[col] if col in summary.columns else pd.Series(np.nan, index=summary.index)
+        s = s.set_axis(out.index)
+        if kind == "text":
+            out[head] = s.fillna("").astype(str)
+        else:
+            vals = pd.to_numeric(s, errors="coerce").astype(float)
+            out[head] = vals * 100.0 if kind == "pct" else vals
+    if "available" in summary.columns:
+        avail = summary["available"].set_axis(out.index).astype(bool)
+        out.loc[~avail, "Note"] = [unavailable_note(n) for n in out.loc[~avail, "Note"]]
+    for m, text in (notes or {}).items():
+        if str(m) in out.index:
+            out.loc[str(m), "Note"] = str(text)
+    return out
+
+
+_OLS_REFUSED = re.compile(r"ols refused: L = (\d+) topics >= n_train / 2")
+
+
+def unavailable_note(note: str) -> str:
+    """A method's reason for being unavailable, in plain words (the OLS refusal of ``fit_direct`` reworded)."""
+    m = _OLS_REFUSED.search(str(note))
+    if m:
+        return (f"Not fitted: OLS needs fewer topics than half the training days, and {m.group(1)} topics is too "
+                "many for this training window. Use elastic net or ridge.")
+    return str(note)
+
+
+def comparison_column_formats() -> dict[str, str]:
+    """Number format per heading of :func:`comparison_table` (printf style, for ``st.column_config``)."""
+    fmt = {"pct": "%.1f%%", "num2": "%.2f", "num3": "%.3f", "int": "%d", "sec": "%.3f"}
+    return {head: fmt[kind] for _, head, kind in COMPARISON_COLUMNS if kind in fmt}
 
 
 # ---------------------------------------------------------------------------

@@ -271,6 +271,19 @@ def test_short_training_window_raises(panel, cfg):
         bks.fit_bks(panel, cfg.bks, "2016-03-31")
 
 
+def test_min_train_periods_is_about_six_months(panel, cfg):
+    """24 training weeks fit, 23 do not; a six-month window (25 or 26 week ends) passes (2026-09-29)."""
+    assert bks.MIN_TRAIN_PERIODS == 24
+    p = pd.DatetimeIndex(panel.panel.periods)
+    i = int(np.searchsorted(p, pd.Timestamp("2021-01-01")))
+    f = bks.fit_bks(panel, cfg.bks, p[i + 23], train_start=p[i])
+    assert f.meta["n_train_periods"] == 24
+    with pytest.raises(ValueError, match=r"only 23 weekly periods .*\(need >= 24\)"):
+        bks.fit_bks(panel, cfg.bks, p[i + 22], train_start=p[i])
+    f6 = bks.fit_bks(panel, cfg.bks, "2021-06-30", train_start="2021-01-01")
+    assert f6.meta["n_train_periods"] in (25, 26)
+
+
 def test_midweek_forecast_start_warns(panel, fit):
     w = WindowConfig(forecast_start="2023-01-04", forecast_weeks=1)  # Wednesday
     r = bks.evaluate_bks(panel, fit, w)

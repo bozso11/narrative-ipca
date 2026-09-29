@@ -31,6 +31,7 @@ from narrative_ipca.exposure_lab.dgp import observed_shocks, simulate_lab, truth
 from narrative_ipca.exposure_lab.direct import (
     MIN_TRAIN_OBS,
     RIDGE_GCV_GRID,
+    _fit_ridge,
     fit_direct,
     shock_matrix,
     training_pairs,
@@ -291,11 +292,51 @@ def test_ridge_gcv_picks_the_grid_minimum(base: Run) -> None:
             A = np.linalg.inv(Xc.T @ Xc + n * lam * np.eye(L))
             H = Xc @ A @ Xc.T
             resid = y - H @ y
-            scores.append((resid @ resid / n) / (1.0 - np.trace(H) / n) ** 2)
+            scores.append((resid @ resid / n) / (1.0 - (np.trace(H) + 1.0) / n) ** 2)  # + 1: the intercept
         lam_best = RIDGE_GCV_GRID[int(np.argmin(scores))]
         assert fit.penalty.iloc[j] == pytest.approx(lam_best)
         b = np.linalg.solve(Xc.T @ Xc + n * lam_best * np.eye(L), Xc.T @ y)
         assert np.allclose(fit.B_hat.iloc[:, j].to_numpy(), b, atol=1e-10)
+
+
+def test_ridge_gcv_counts_the_intercept_when_topics_fill_the_window() -> None:
+    """21 days and 20 topics: the centred shocks span the centred returns, so GCV without the intercept's
+    degree of freedom tends to 0 as lambda -> 0 and picks the grid's lower edge (review 2026-09-29: 47 of
+    55 assets on a one-month dashboard window, median OOS R2 -2,824%)."""
+    rng = np.random.default_rng([11, 3])
+    n, L, m = 21, 20, 40
+    X = rng.standard_normal((n, L))
+    B = np.zeros((L, m))
+    B[:3] = 0.4
+    Y = X @ B + rng.standard_normal((n, m))
+    coef, icpt, lam, at_edge = _fit_ridge(X, Y, None)
+    Xc, Yc = X - X.mean(axis=0), Y - Y.mean(axis=0)
+    at_lower_without = 0
+    for j in range(m):
+        with_icpt, without = [], []
+        for g in RIDGE_GCV_GRID:
+            H = Xc @ np.linalg.solve(Xc.T @ Xc + n * g * np.eye(L), Xc.T)
+            r = Yc[:, j] - H @ Yc[:, j]
+            with_icpt.append((r @ r / n) / (1.0 - (np.trace(H) + 1.0) / n) ** 2)
+            without.append((r @ r / n) / (1.0 - np.trace(H) / n) ** 2)
+        assert lam[j] == pytest.approx(RIDGE_GCV_GRID[int(np.argmin(with_icpt))])
+        at_lower_without += int(np.argmin(without) == 0)
+    assert at_lower_without / m > 0.8  # the old rule: mostly the lower edge
+    assert np.mean(lam == RIDGE_GCV_GRID[0]) < 0.25 and np.median(lam) > 0.1
+    assert at_edge == int(np.sum((lam == RIDGE_GCV_GRID[0]) | (lam == RIDGE_GCV_GRID[-1])))
+
+
+def test_ridge_gcv_on_a_one_month_window() -> None:
+    """The lab route on 21 training days with 20 topics: the lower-edge count is recorded and the
+    out-of-sample fit stays sane (measured 2026-09-29: median OOS R2 9.6%, oracle 35.4%)."""
+    win = WindowConfig(train_start="2022-12-02", train_end="2022-12-30", forecast_start="2023-01-02")
+    run = _run(_cfg(window=win))
+    fit = _fit(run, method="ridge")
+    assert int(fit.n_train.min()) == 21 and len(fit.B_hat.index) == 20
+    assert fit.meta["gcv_at_lower_edge"] == int(np.sum(fit.penalty.to_numpy() == RIDGE_GCV_GRID[0]))
+    assert fit.meta["gcv_at_lower_edge"] <= 3
+    ev = evaluate_window(run.sim, run.shocks, fit, win, run.truth)
+    assert np.isfinite(ev.r2).all() and float(np.median(ev.r2)) > -0.25
 
 
 def test_ols_matches_least_squares(base: Run) -> None:
