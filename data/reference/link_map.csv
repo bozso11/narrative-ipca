@@ -1,0 +1,96 @@
+topic_id,asset_id,tier,sign,mechanism
+S1,ENERGY_v_WEQ,strong,1,Energy news moves energy equities against the world index.
+S1,NOK_v_USD,moderate,1,Norway's terms of trade rise and fall with oil.
+S1,CAD_v_USD,moderate,1,Canada is a large oil exporter.
+S1,COP_v_USD,weak,1,Oil is Colombia's main export.
+S1,MXN_v_USD,weak,1,Oil revenue supports Mexico's public finances.
+S1,UK_EQ_v_WEQ,weak,1,The UK index carries a large energy weight.
+S1,JAPAN_v_WEQ,weak,-1,Japan imports most of its energy.
+S1,INR_v_USD,weak,-1,India's current account worsens with higher oil prices.
+S2,MATERIALS_v_WEQ,strong,1,Materials news moves materials equities against the world index.
+S2,AUSTRALIA_v_WEQ,moderate,1,The Australian index is mining-heavy.
+S2,AUD_v_USD,moderate,1,AUD is a commodity currency.
+S2,CLP_v_USD,moderate,1,Copper is Chile's main export.
+S2,ZAR_v_USD,weak,1,South Africa exports metals.
+S2,BRL_v_USD,weak,1,Iron ore is a large Brazilian export.
+S3,INDUSTRIALS_v_WEQ,strong,1,Industrials news moves industrial equities against the world index.
+S3,JAPAN_v_WEQ,weak,1,The Japanese index is machinery-heavy.
+S3,KRW_v_USD,weak,1,Korea exports manufactured goods.
+S4,CONS_DISC_v_WEQ,strong,1,Consumer discretionary news moves the sector against the world index.
+S4,US_SMID_v_WEQ,weak,1,Smaller US companies depend on domestic consumer spending.
+S4,CONS_STAPLES_v_WEQ,weak,-1,Investors rotate out of defensives when discretionary demand is strong.
+S5,CONS_STAPLES_v_WEQ,strong,1,Consumer staples news moves the sector against the world index.
+S5,SWISS_LARGE_v_WEQ,moderate,1,Nestle is a large weight in the Swiss index.
+S5,UK_EQ_v_WEQ,weak,1,The UK index carries large staples names.
+S6,HEALTHCARE_v_WEQ,strong,1,Healthcare news moves the sector against the world index.
+S6,SWISS_LARGE_v_WEQ,moderate,1,Roche and Novartis are large weights in the Swiss index.
+S6,QUALITY_v_WEQ,weak,1,Quality indices overweight pharmaceuticals.
+S7,FINANCIALS_v_WEQ,strong,1,Financials news moves the sector against the world index.
+S7,VALUE_v_WEQ,moderate,1,Banks are a large part of value indices.
+S7,EMU_v_WEQ,weak,1,The euro area index is bank-heavy.
+S7,UK_EQ_v_WEQ,weak,1,The UK index carries large banks and insurers.
+S8,INFO_TECH_v_WEQ,strong,1,Technology news moves the sector against the world index.
+S8,US_LARGE_v_WEQ,moderate,1,US large caps are concentrated in mega-cap technology.
+S8,TWD_v_USD,moderate,1,Taiwan's exports are dominated by semiconductors.
+S8,KRW_v_USD,weak,1,Korea is a large memory-chip exporter.
+S8,VALUE_v_WEQ,weak,-1,Technology strength is growth strength and value lags.
+S9,COMM_SERV_v_WEQ,strong,1,Communication services news moves the sector against the world index.
+S9,US_LARGE_v_WEQ,weak,1,Large internet platforms sit in the US large-cap index.
+S10,UTILITIES_v_WEQ,strong,1,Utilities news moves the sector against the world index.
+S10,REAL_ESTATE_v_WEQ,weak,1,Utilities and real estate trade together as bond proxies.
+S11,REAL_ESTATE_v_WEQ,strong,1,Real estate news moves the sector against the world index.
+S11,UTILITIES_v_WEQ,weak,1,Real estate and utilities trade together as bond proxies.
+A1,GLOBAL_EQUITY,strong,1,Read as improving growth news: equities rise.
+A1,GLOBAL_DURATION,moderate,-1,Higher expected growth lifts bond yields.
+A1,EM_EQ_v_WEQ,moderate,1,Emerging markets are high-beta to global growth.
+A1,INDUSTRIALS_v_WEQ,weak,1,Cyclical sectors lead when growth expectations rise.
+A1,AUD_v_USD,weak,1,AUD trades as a global growth proxy.
+A1,CONS_STAPLES_v_WEQ,weak,-1,Defensive sectors lag when growth expectations rise.
+A2,GLOBAL_DURATION,strong,-1,Higher inflation expectations lift nominal yields.
+A2,REAL_ESTATE_v_WEQ,moderate,-1,Real estate valuations are rate-sensitive.
+A2,VALUE_v_WEQ,weak,1,Value stocks have shorter cash-flow duration.
+A2,ENERGY_v_WEQ,weak,1,Energy prices feed inflation expectations.
+A2,INFO_TECH_v_WEQ,weak,-1,Long-duration growth equities lose when yields rise.
+A3,GLOBAL_DURATION,strong,-1,Read as tightening news: policy rates and yields rise.
+A3,USD,moderate,1,US policy tightening supports the dollar.
+A3,EM_FX_v_USD,moderate,-1,Tighter global liquidity weighs on EM currencies.
+A3,REAL_ESTATE_v_WEQ,weak,-1,Higher financing costs hurt real estate.
+A3,FINANCIALS_v_WEQ,weak,1,Higher rates widen bank interest margins.
+A3,US_7_10Y_v_GDUR,weak,-1,US Treasuries react more than the global index to Fed news.
+A4,GLOBAL_EQUITY,strong,-1,Read as stress news: equities fall.
+A4,GLOBAL_CREDIT,strong,-1,Credit spreads widen in stress.
+A4,GLOBAL_DURATION,moderate,1,Flight to quality lifts government bonds.
+A4,JPY_v_USD,moderate,1,JPY is a safe-haven currency.
+A4,CHF_v_USD,moderate,1,CHF is a safe-haven currency.
+A4,EM_FX_v_USD,moderate,-1,EM currencies sell off in risk aversion.
+A4,EMD_LOCAL_v_GCREDIT,weak,-1,Local-currency EM debt carries both FX and risk-off losses.
+A4,AUD_v_USD,weak,-1,AUD is a risk-sensitive currency.
+A4,QUALITY_v_WEQ,weak,1,Quality stocks outperform in stress.
+A4,US_SMID_v_WEQ,weak,-1,Smaller companies underperform in stress.
+A5,CNY_v_USD,strong,1,Read as improving China news: the renminbi strengthens.
+A5,EM_EQ_v_WEQ,moderate,1,China is the largest weight in EM equities.
+A5,AUD_v_USD,moderate,1,China is Australia's largest export market.
+A5,MATERIALS_v_WEQ,moderate,1,China is the marginal buyer of industrial metals.
+A5,KRW_v_USD,weak,1,Korea exports heavily to China.
+A5,TWD_v_USD,weak,1,Taiwan exports heavily to China.
+A5,CLP_v_USD,weak,1,Copper demand is driven by China.
+A5,AUSTRALIA_v_WEQ,weak,1,Australian miners depend on Chinese demand.
+A6,ENERGY_v_WEQ,moderate,1,Read as geopolitical risk news: energy supply risk lifts energy equities.
+A6,CHF_v_USD,moderate,1,CHF is a safe-haven currency.
+A6,GLOBAL_EQUITY,moderate,-1,Geopolitical risk weighs on equities.
+A6,EMU_v_WEQ,weak,-1,Europe is close to the main conflict and energy-supply risks.
+A6,CZK_v_USD,weak,-1,Central European currencies are exposed to regional conflict.
+A6,INDUSTRIALS_v_WEQ,weak,1,Defence companies sit in industrials.
+B1,GLOBAL_EQUITY,strong,1,Read as positive earnings news: equities rise.
+B1,QUALITY_v_WEQ,moderate,1,Profitability is the core of quality indices.
+B1,US_LARGE_v_WEQ,weak,1,US large caps carry the highest earnings growth.
+B1,GLOBAL_CREDIT,weak,1,Stronger earnings improve credit quality.
+B2,INFO_TECH_v_WEQ,strong,1,Read as rising capex and R&D news: technology equipment and software benefit.
+B2,INDUSTRIALS_v_WEQ,moderate,1,Capital goods makers benefit from investment spending.
+B2,TWD_v_USD,weak,1,Taiwanese chipmakers benefit from the technology capex cycle.
+B2,KRW_v_USD,weak,1,Korean chipmakers benefit from the technology capex cycle.
+B2,MATERIALS_v_WEQ,weak,1,Investment spending raises demand for industrial inputs.
+B3,GLOBAL_CREDIT,strong,-1,Read as heavier issuance news: supply widens credit spreads.
+B3,US_SMID_v_WEQ,moderate,-1,Smaller companies are the most financing-sensitive.
+B3,FINANCIALS_v_WEQ,weak,1,Banks and brokers earn fees on issuance.
+B3,VALUE_v_WEQ,weak,-1,Value firms carry more debt: heavier issuance and wider spreads weigh on them.

@@ -123,6 +123,59 @@ reports under `reports/simulation/full/`. In short:
 4. Loading rows, impact vectors and latent states are not identified by the
    model (D52); the implied betas `c Gamma` are.
 
+## Topic-exposure lab and dashboard (2026-09-29)
+
+An interactive lab that shows how much of an asset's return variation news
+topics explain out of sample. The spec and decisions are in `DESIGN.md` Part G.
+
+- **Assets**: the 55 listed multi-asset spread trades ("A v B" is long leg A,
+  short leg B; outrights and "XXX v USD" pairs are long against cash), with
+  real daily prices 2015-01-02 to 2025-12-31 for every leg, or 2-500 generic
+  assets. Artificial returns replace a leg that fails to download.
+- **Topics**: the 20 manual topics of the AM NLP Sentiment Analytics report
+  (sector S1-S11, economic A1-A6 and B1-B3), any subset of them, and/or 0-500
+  generic topics.
+- **Simulation**: each topic's attention is built from the returns of the
+  assets it is linked to, plus noise. Links come in three tiers (strong,
+  moderate, weak) with one to three exposure values ("betas").
+- **Estimators**: the research plan's direct exposure regression (elastic net
+  by default) and BKS Sparse IPCA, both fitted on a training window and scored
+  on a separate forecast window of 1-12 weeks.
+- **Views**: explained variation per asset, an asset x topic exposure table in
+  the layout of the desk example, and a per-asset ranking of topic
+  contributions.
+
+Install and run (from the repository root):
+
+```bash
+pip install -e ".[dev,lab]"
+```
+
+```bash
+python -m streamlit run dashboard/app.py
+```
+
+Headless run of one configuration (JSON or YAML `LabConfig`, optional BKS):
+
+```bash
+python scripts/run_lab.py --config my_lab.json --bks --out output/lab
+```
+
+Regenerate the market data (about 20 seconds online; `--offline` rebuilds from
+`data/market/raw/`):
+
+```bash
+python scripts/fetch_market_data.py
+```
+
+| Path | Content |
+|---|---|
+| `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, charts, cached session |
+| `dashboard/` | the Streamlit app (`app.py`) and its pure helpers (`_ui.py`) |
+| `data/reference/` | assets (image order), legs with benchmark index and proxy, the 20 manual topics, the default link map |
+| `data/market/` | daily leg levels and returns, asset returns, raw downloads and `manifest.json`; `README.md` there has sources, conventions, QA and open items |
+| `tests/test_lab_*.py` | lab tests, including Monte Carlo checks of the simulation truth |
+
 ## Layout
 
 | Path | Content |

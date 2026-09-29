@@ -1,0 +1,56 @@
+order,asset_id,name,long_leg,short_leg,asset_class,sub_class
+1,REAL_ESTATE_v_WEQ,Real Estate Global v World EQ,eq_real_estate,eq_world,Equity,sector
+2,GLOBAL_DURATION,Global Duration,dur_global,cash,Fixed income,duration
+3,CHF_v_USD,CHF v USD,fx_chf,cash,FX,currency
+4,EM_FX_v_USD,EM v USD,fx_em_basket,cash,FX,currency
+5,GLOBAL_EQUITY,Global Equity,eq_acwi,cash,Equity,broad
+6,INFO_TECH_v_WEQ,Information Technology Global v World EQ,eq_info_tech,eq_world,Equity,sector
+7,HEALTHCARE_v_WEQ,Healthcare Global v World EQ,eq_healthcare,eq_world,Equity,sector
+8,UK_7_10Y_v_GDUR,UK 7-10y v Global Duration,gov_uk_7_10,dur_global,Fixed income,govt 7-10y spread
+9,ZAR_v_USD,ZAR v USD,fx_zar,cash,FX,currency
+10,CONS_DISC_v_WEQ,Consumer Discretionary Global v World EQ,eq_cons_disc,eq_world,Equity,sector
+11,EMU_v_WEQ,EMU v World EQ,eq_emu,eq_world,Equity,region
+12,FINANCIALS_v_WEQ,Financials Global v World EQ,eq_financials,eq_world,Equity,sector
+13,INDUSTRIALS_v_WEQ,Industrials Global v World EQ,eq_industrials,eq_world,Equity,sector
+14,CONS_STAPLES_v_WEQ,Consumer Staples Global v World EQ,eq_cons_staples,eq_world,Equity,sector
+15,UTILITIES_v_WEQ,Utilities Global v World EQ,eq_utilities,eq_world,Equity,sector
+16,SWISS_LARGE_v_WEQ,Switzerland Large Cap v World EQ,eq_switzerland,eq_world,Equity,region
+17,US_SMID_v_WEQ,US Small and Mid Cap v World EQ,eq_us_smid,eq_world,Equity,size
+18,SEK_v_USD,SEK v USD,fx_sek,cash,FX,currency
+19,COMM_SERV_v_WEQ,Communication Services Global v World EQ,eq_comm_services,eq_world,Equity,sector
+20,EMD_LOCAL_v_GCREDIT,EMD local currency v Global Credit,emd_local,cr_global,Fixed income,EMD
+21,EM_EQ_v_WEQ,EM v World EQ,eq_em,eq_world,Equity,region
+22,MATERIALS_v_WEQ,Materials Global v World EQ,eq_materials,eq_world,Equity,sector
+23,CAD_v_USD,CAD v USD,fx_cad,cash,FX,currency
+24,JAPAN_v_WEQ,Japan v World EQ,eq_japan,eq_world,Equity,region
+25,GLOBAL_CREDIT,Global Credit,cr_global,cash,Fixed income,credit
+26,AUSTRALIA_v_WEQ,Australia v World EQ,eq_australia,eq_world,Equity,region
+27,QUALITY_v_WEQ,Quality v World EQ,eq_quality,eq_world,Equity,style
+28,VALUE_v_WEQ,Value v World EQ,eq_value,eq_world,Equity,style
+29,ENERGY_v_WEQ,Energy Global v World EQ,eq_energy,eq_world,Equity,sector
+30,EUR_IG_v_GCREDIT,EUR IG v Global Credit,cr_eur_ig,cr_global,Fixed income,credit
+31,IT_7_10Y_v_GDUR,IT 7-10y v Global Duration,gov_it_7_10,dur_global,Fixed income,govt 7-10y spread
+32,NOK_v_USD,NOK v USD,fx_nok,cash,FX,currency
+33,AUD_v_USD,AUD v USD,fx_aud,cash,FX,currency
+34,NZD_v_USD,NZD v USD,fx_nzd,cash,FX,currency
+35,MXN_v_USD,MXN v USD,fx_mxn,cash,FX,currency
+36,BRL_v_USD,BRL v USD,fx_brl,cash,FX,currency
+37,COP_v_USD,COP v USD,fx_cop,cash,FX,currency
+38,CLP_v_USD,CLP v USD,fx_clp,cash,FX,currency
+39,KRW_v_USD,KRW v USD,fx_krw,cash,FX,currency
+40,CNY_v_USD,CNY v USD,fx_cny,cash,FX,currency
+41,IDR_v_USD,IDR v USD,fx_idr,cash,FX,currency
+42,THB_v_USD,THB v USD,fx_thb,cash,FX,currency
+43,CZK_v_USD,CZK v USD,fx_czk,cash,FX,currency
+44,TWD_v_USD,TWD v USD,fx_twd,cash,FX,currency
+45,INR_v_USD,INR v USD,fx_inr,cash,FX,currency
+46,US_LARGE_v_WEQ,US Large Cap v World EQ,eq_us_large,eq_world,Equity,region
+47,UK_EQ_v_WEQ,UK v World EQ,eq_uk,eq_world,Equity,region
+48,US_7_10Y_v_GDUR,US 7-10y v Global Duration,gov_us_7_10,dur_global,Fixed income,govt 7-10y spread
+49,CH_7_10Y_v_GDUR,CH 7-10y v Global Duration,gov_ch_7_10,dur_global,Fixed income,govt 7-10y spread
+50,DE_7_10Y_v_GDUR,DE 7-10y v Global Duration,gov_de_7_10,dur_global,Fixed income,govt 7-10y spread
+51,JP_7_10Y_v_GDUR,JP 7-10y v Global Duration,gov_jp_7_10,dur_global,Fixed income,govt 7-10y spread
+52,EUR_v_USD,EUR v USD,fx_eur,cash,FX,currency
+53,JPY_v_USD,JPY v USD,fx_jpy,cash,FX,currency
+54,GBP_v_USD,GBP v USD,fx_gbp,cash,FX,currency
+55,USD,USD,usd_dxy,cash,FX,dollar

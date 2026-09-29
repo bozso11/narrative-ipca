@@ -2,6 +2,8 @@
 output/
 runs/
 *.parquet
+# The lab's market data store is committed (DESIGN.md D55).
+!data/market/*.parquet
 *.npz
 reports/**/artefacts/
 
@@ -30,3 +32,10 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Market data CSV copies are regenerable from the parquet files (DESIGN.md D55).
+data/market/*.csv
+data/market/.cache/
