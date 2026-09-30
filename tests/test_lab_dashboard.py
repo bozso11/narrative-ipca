@@ -854,6 +854,29 @@ HOW_TO_READ_LEADS: dict[str, str] = {
     "fig_bks_r2": "How to read the R² comparison:",
     "fig_bks_split": "How to read the per-topic split:",
     "real_heatmap": "How to read the preview:",
+    # the BKS trace page (D90)
+    "fig_tr_ladder": "How to read the ladder:",
+    "fig_tr_inputs": "How to read the inputs chart:",
+    "fig_tr_truth": "How to read the truth chart:",
+    "fig_tr_divisor": "How to read the divisor chart:",
+    "fig_tr_shocks": "How to read the shocks chart:",
+    "fig_tr_instrument": "How to read the instrument chart:",
+    "fig_tr_kernel": "How to read the kernel chart:",
+    "fig_tr_instr_truth": "How to read the instrument scatter:",
+    "fig_tr_design": "How to read the design heatmap:",
+    "fig_tr_stability": "How to read the stability chart:",
+    "fig_tr_path": "How to read the lambda path and its noise:",
+    "fig_tr_coef_path": "How to read the Gamma path:",
+    "fig_tr_gamma": "How to read the Gamma heatmap:",
+    "fig_tr_kkt": "How to read the optimum check:",
+    "fig_tr_factors": "How to read the factor chart:",
+    "fig_tr_week_r2": "How to read the weekly R² chart:",
+    "fig_tr_week_scatter": "How to read the week scatter:",
+    "fig_tr_oos_factors": "How to read the forecast factors:",
+    "fig_tr_chain": "How to read the chain chart:",
+    "fig_tr_capture": "How to read the direction chart:",
+    "fig_tr_implied_scatter": "How to read the implied scatter:",
+    "fig_tr_sigma": "How to read the Sigma_z chart:",
 }
 
 
@@ -1432,3 +1455,251 @@ def test_app_real_data_page_shares_the_sidebar():
     at.date_input(key="sb_forecast_start").set_value(dt.date(2025, 6, 2)).run()
     _assert_clean(at)
     assert any("must be after training end" in w.value for w in at.warning)
+
+
+# ---------------------------------------------------------------------------
+# The BKS trace page (D90)
+# ---------------------------------------------------------------------------
+#: Steps of the trace page in order, as the step radio labels them (``trace.STEPS``).
+TRACE_STEPS: dict[str, str] = {
+    "summary": "Summary", "inputs": "1 Inputs", "align": "2 Alignment and scaling", "shocks": "3 Attention shocks",
+    "instruments": "4 Instruments", "panel": "5 Weekly panel", "fit": "6 Fit and lambda",
+    "forecast": "7 Forecast weeks", "implied": "8 Implied sensitivities",
+}
+
+#: The charts of each step of the trace page (tuned lambda), by chart key.
+TRACE_STEP_CHARTS: dict[str, set[str]] = {
+    "summary": {"fig_tr_ladder"},
+    "inputs": {"fig_tr_inputs", "fig_tr_truth"},
+    "align": {"fig_tr_divisor"},
+    "shocks": {"fig_tr_shocks"},
+    "instruments": {"fig_tr_instrument", "fig_tr_kernel", "fig_tr_instr_truth"},
+    "panel": {"fig_tr_design", "fig_tr_stability"},
+    "fit": {"fig_tr_path", "fig_tr_coef_path", "fig_tr_gamma", "fig_tr_kkt", "fig_tr_factors"},
+    "forecast": {"fig_tr_week_r2", "fig_tr_week_scatter", "fig_tr_oos_factors"},
+    "implied": {"fig_tr_chain", "fig_tr_capture", "fig_tr_implied_scatter", "fig_tr_sigma"},
+}
+
+#: The "How to read" captions (``_ui.HOW_TRACE_*``) each step of the trace page shows.
+TRACE_STEP_CAPTIONS: dict[str, tuple[str, ...]] = {
+    "summary": ("HOW_TRACE_STATUS", "HOW_TRACE_LADDER", "HOW_TRACE_LADDER_TABLE", "HOW_TRACE_FINDINGS",
+                "HOW_TRACE_CHECKS"),
+    "inputs": ("HOW_TRACE_SETTINGS", "HOW_TRACE_SHAPES", "HOW_TRACE_INPUTS", "HOW_TRACE_TRUTH", "HOW_TRACE_CHECKS"),
+    "align": ("HOW_TRACE_DIVISOR", "HOW_TRACE_UNITS", "HOW_TRACE_CHECKS"),
+    "shocks": ("HOW_TRACE_SHOCKS", "HOW_TRACE_SHOCK_TABLE", "HOW_TRACE_CHECKS"),
+    "instruments": ("HOW_TRACE_INSTRUMENT", "HOW_TRACE_KERNEL", "HOW_TRACE_INSTR_TRUTH", "HOW_TRACE_INSTR_ROW",
+                    "HOW_TRACE_CHECKS"),
+    "panel": ("HOW_TRACE_PAIRING", "HOW_TRACE_DESIGN", "HOW_TRACE_STABILITY", "HOW_TRACE_CHECKS"),
+    "fit": ("HOW_TRACE_PATH", "HOW_TRACE_COEF_PATH", "HOW_TRACE_GAMMA", "HOW_TRACE_KKT", "HOW_TRACE_FACTORS",
+            "HOW_TRACE_PATH_TABLE", "HOW_TRACE_CHECKS"),
+    "forecast": ("HOW_TRACE_WEEK_R2", "HOW_TRACE_WEEK_SCATTER", "HOW_TRACE_OOS_FACTORS", "HOW_TRACE_WEEK_TABLE",
+                 "HOW_TRACE_CHECKS"),
+    "implied": ("HOW_TRACE_CHAIN", "HOW_TRACE_SHARES", "HOW_TRACE_CAPTURE", "HOW_TRACE_IMPLIED_SCATTER",
+                "HOW_TRACE_SIGMA", "HOW_TRACE_SIGMA_TABLE", "HOW_TRACE_CHAIN_TABLE", "HOW_TRACE_CHECKS"),
+}
+
+
+def _trace_page(at) -> None:
+    """Point a run AppTest at the BKS trace page and run it."""
+    _open_page(at, "bks-trace")
+    at.run()
+
+
+def _step(at, step: str) -> None:
+    """Show one step of the trace page; it must render cleanly under its own subheader."""
+    at.radio(key="tr_step").set_value(step).run()
+    _assert_clean(at)
+    assert TRACE_STEPS[step] in [s.value for s in at.main.subheader], step
+
+
+def test_trace_step_captions_cover_every_trace_caption():
+    """Every HOW_TRACE_* caption of _ui belongs to a step of the trace page (and nothing else is listed)."""
+    listed = {n for names in TRACE_STEP_CAPTIONS.values() for n in names}
+    assert listed == {n for n in dir(_ui) if n.startswith("HOW_TRACE_")}
+    assert set(TRACE_STEP_CHARTS) == set(TRACE_STEPS) == set(TRACE_STEP_CAPTIONS)
+    assert {k for keys in TRACE_STEP_CHARTS.values() for k in keys} == {
+        k for k in HOW_TO_READ_LEADS if k.startswith("fig_tr_")}
+    from narrative_ipca.exposure_lab import trace as lab_trace
+
+    assert lab_trace.STEPS == TRACE_STEPS
+
+
+def test_app_trace_page_before_a_run():
+    """D90: before a run the trace page asks for one and never fits by itself; its Run BKS and the sidebar's are
+    enabled, and it links back to the Simulation lab."""
+    at = _app().run()
+    _generic_sidebar(at)
+    _trace_page(at)
+    _assert_clean(at)
+    assert at.title[0].value == "BKS trace"
+    assert any(i.value.startswith("Press Run BKS (here or in the sidebar)") for i in at.info)
+    assert not at.button(key="tr_run_bks").disabled and not at.button(key="sb_run_bks").disabled
+    assert "Back to the Simulation lab" in [label for label, _ in _page_links(at.main)]
+    assert "Chosen lambda" not in [m.label for m in at.metric]  # no fit was started
+    assert not at.get("plotly_chart") and "tr_step" not in [r.key for r in at.radio]
+    assert "bks_requested" not in at.session_state
+
+
+def test_app_trace_page_traces_the_run_step_by_step():
+    """D90: after the trace page's Run BKS every step renders with its charts, each chart with its "How to read"
+    caption, every step's HOW_TRACE_* captions, a "What happens here" caption and a link to the next step; the
+    page says "topic sensitivity", never "exposure"; the BKS tab then shows the same run."""
+    at = _app().run()
+    _generic_sidebar(at)
+    _trace_page(at)
+    at.button(key="tr_run_bks").click().run()
+    _assert_clean(at)
+    assert "bks_requested" not in at.session_state  # the trace page handled the request itself
+    assert "Chosen lambda" in [m.label for m in at.metric]
+    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) in [c.value for c in at.caption]
+    assert at.radio(key="tr_step").value == "summary"
+    assert list(at.radio(key="tr_step").options) == list(TRACE_STEPS.values())
+    assert any(m.value.startswith("**Full history before the cut-off** · K = 3 · lambda") for m in at.markdown)
+
+    texts: list[tuple[str, str]] = []
+    for step, charts in TRACE_STEP_CHARTS.items():
+        _step(at, step)
+        assert _assert_how_to_read(at.main) == charts, step
+        caps = [c.value for c in at.main.caption]
+        for name in TRACE_STEP_CAPTIONS[step]:
+            assert _ui.how_to_read(*getattr(_ui, name)) in caps, (step, name)
+        assert sum(c.startswith("What happens here:\n\n- Inputs: ") for c in caps) == 1, step
+        assert sum(c.startswith("Next: ") for c in caps) == 1, step
+        assert at.main.dataframe, step  # every step has at least its checks table
+        texts += _visible_texts(at)
+    found = [(k, t[:120]) for k, t in texts if "exposure" in t.lower()]
+    assert not found, found
+
+    # the summary leads with the answer: the identity checks hold, and where BKS departs
+    _step(at, "summary")
+    status = at.main.dataframe[0].value
+    assert list(status["Step"]) == list(TRACE_STEPS.values())[1:]
+    assert set(status["Reading"]) <= {"as expected", "departs", "off"} and "off" not in set(status["Reading"])
+    assert any(m.value.startswith("**The code does what the formulas say.** All ") for m in at.main.markdown)
+    ladder = next(d.value for d in at.main.dataframe if "Variant" in d.value.columns)
+    assert "BKS-implied (production)" in list(ladder["Variant"])
+    assert "Direct method: Elastic net (benchmark)" in list(ladder["Variant"])
+    checks = at.main.dataframe[-1].value
+    assert list(checks.columns[:3]) == ["Step", "Check", "Status"]
+    assert set(checks["Status"]) <= {"ok", "off", "info"} and set(checks["Kind"]) <= {"identity", "diagnostic"}
+
+    # focus controls: the topic follows the asset's largest true sensitivity until the user picks one
+    values = at.session_state["_values"]
+    cfg, _, _ = _ui.config_from_values(values, (), None)
+    B = LabSession().truth(cfg).B_true
+    _step(at, "inputs")
+    asset = at.selectbox(key="bks_asset").value
+    assert at.selectbox(key="tr_topic").value == str(B[asset].abs().idxmax())
+    other = [a for a in at.selectbox(key="bks_asset").options if a != at.selectbox(key="bks_asset").format_func(asset)]
+    at.selectbox(key="bks_asset").set_value(str(B.columns[-1])).run()
+    _assert_clean(at)
+    assert at.selectbox(key="tr_topic").value == str(B[str(B.columns[-1])].abs().idxmax()) and other
+    picked = str(B.index[-1])
+    at.selectbox(key="tr_topic").set_value(picked).run()
+    at.selectbox(key="bks_asset").set_value(asset).run()
+    _assert_clean(at)
+    assert at.selectbox(key="tr_topic").value == picked  # the user's choice stays
+    # the week controls: the return week follows the Eq. 5 rows' week, the forecast week the first one
+    _step(at, "instruments")
+    week = at.selectbox(key="tr_week")
+    assert "(last training week" in week.format_func(week.value)
+    _step(at, "forecast")
+    assert at.selectbox(key="tr_fweek").value == at.selectbox(key="tr_fweek").options[0]
+    _step(at, "shocks")
+    at.checkbox(key="tr_shock_all").check().run()
+    _assert_clean(at)
+
+    # back on the Simulation lab the BKS tab shows the same run, not a stale one
+    _open_page(at, "")
+    at.run()
+    _assert_clean(at)
+    bks = at.tabs[4]
+    assert "Chosen lambda" in [m.label for m in bks.metric]
+    assert not [w for w in bks.warning if "Settings changed" in w.value]
+
+
+def test_app_trace_page_training_history_and_lambda_zero():
+    """D88, D90: a training-history run and a fixed lambda of 0 trace cleanly through every step; the fixed rule
+    has no lambda path, lambda 0 no optimum check."""
+    at = _app().run()
+    _generic_sidebar(at)
+    _trace_page(at)
+    at.radio(key="sb_bks_history").set_value("training").run()
+    _assert_clean(at)
+    assert any(i.value.startswith("Press Run BKS") for i in at.info)  # a new history needs its own fit
+    at.button(key="tr_run_bks").click().run()
+    _assert_clean(at)
+    assert any(m.value.startswith("**Training window only**") for m in at.markdown)
+    for step in TRACE_STEPS:
+        _step(at, step)
+        assert set(_assert_how_to_read(at.main)) == TRACE_STEP_CHARTS[step], step
+
+    at.radio(key="sb_bks_rule").set_value("fixed").run()
+    at.number_input(key="sb_bks_lam").set_value(0.0).run()
+    at.button(key="tr_run_bks").click().run()
+    _assert_clean(at)
+    for step in TRACE_STEPS:
+        _step(at, step)
+        _assert_how_to_read(at.main)
+    _step(at, "fit")
+    shown = set(_chart_captions(at.main))
+    assert not shown & {"fig_tr_path", "fig_tr_coef_path", "fig_tr_kkt"}
+    assert {"fig_tr_gamma", "fig_tr_factors"} <= shown
+    caps = [c.value for c in at.main.caption]
+    assert any(c.startswith("Fixed lambda (0): there is no lambda path") for c in caps)
+    assert any(c.startswith("At lambda = 0 there is no penalty") for c in caps)
+
+
+def test_app_compare_tab_links_to_the_trace():
+    """D88, D90: the Compare tab's inspect section links to the trace; a BKS-implied variant with another
+    covariance history than the sidebar's opens the trace with that history, reusing the Compare run's fit."""
+    at = _app().run()
+    _generic_sidebar(at)
+    at.button(key="cm_run_bks").click().run()
+    _assert_clean(at)
+    at.selectbox(key="cm_inspect").set_value("bks_implied").run()
+    _assert_clean(at)
+    assert ("Trace the BKS-implied sensitivities step by step", "bks-trace") in _page_links(at.tabs[3])
+    at.selectbox(key="cm_inspect").set_value("bks_implied_train").run()
+    _assert_clean(at)
+    assert not _page_links(at.tabs[3])
+    at.button(key="cm_trace").click().run()
+    _assert_clean(at)
+    assert at.title[0].value == "BKS trace"
+    assert at.radio(key="sb_bks_history").value == "training"
+    assert "Chosen lambda" in [m.label for m in at.metric]  # traced from the Compare run's fit, no new run
+    assert any(m.value.startswith("**Training window only**") for m in at.markdown)
+    assert at.radio(key="tr_step").value == "summary"
+
+
+@needs_market
+def test_app_trace_page_on_the_defaults():
+    """D90, G.15.1: on the dashboard defaults the summary answers where BKS departs: every identity check holds;
+    the ladder puts BKS-implied (Spearman about 0.19) below the instruments alone (about 0.91) and the direct
+    method; the findings name the lost directions and the lambda choice."""
+    at = _app().run()
+    _trace_page(at)
+    at.button(key="tr_run_bks").click().run()
+    _assert_clean(at)
+    assert _assert_how_to_read(at.main) == {"fig_tr_ladder"}
+    spec = next(el.proto.spec for el in at.get("plotly_chart") if str(el.proto.id).endswith("fig_tr_ladder"))
+    assert "BKS-implied (production)" in spec and "Direct method: Elastic net (benchmark)" in spec
+    ladder = next(d.value for d in at.main.dataframe if "Variant" in d.value.columns).set_index("Variant")
+    assert round(float(ladder.loc["BKS-implied (production)", "Spearman"]), 2) == 0.19
+    assert round(float(ladder.loc["Instruments, shocks' covariance over the same history", "Spearman"]), 2) == 0.91
+    assert float(ladder.loc["Direct method: Elastic net (benchmark)", "Spearman"]) > 0.5
+    assert list(ladder.index).index("Direct method: Elastic net (benchmark)") > list(ladder.index).index(
+        "BKS-implied (production)")
+    assert any(m.value.startswith("**The code does what the formulas say.** All ") for m in at.main.markdown)
+    findings = "\n".join(m.value for m in at.main.markdown)
+    assert "**Departure, 8 Implied sensitivities: The fit's directions keep little of the instruments.**" in findings
+    assert "Departure, 6 Fit and lambda" in findings and "Note, 8 Implied sensitivities" in findings
+    assert findings.index("Departure, ") < findings.index("Note, ")
+    status = at.main.dataframe[0].value.set_index("Step")
+    assert status.loc["8 Implied sensitivities", "Reading"] == "departs"
+    assert status.loc["5 Weekly panel", "Reading"] == "as expected"
+    # the steps render on the listed universe too (55 assets, 20 manual topics)
+    for step in ("instruments", "fit", "implied"):
+        _step(at, step)
+        assert _assert_how_to_read(at.main) == TRACE_STEP_CHARTS[step], step
+    assert at.selectbox(key="bks_asset").value == _ui.DEFAULT_CONTRIB_ASSET

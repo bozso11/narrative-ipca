@@ -2457,8 +2457,14 @@ chain. Measured 2026-09-30 on the dashboard defaults, full history, noise
 seed 0 (Spearman / median OOS R2): true 1.00 / 23.2%; window 0.78 / 25.8%;
 instruments with their own `Sigma_z` 0.91 / 25.1%; with the training
 `Sigma_z` 0.71 / 11.2%; best three directions 0.69 / 19.8%; least-squares
-inversion of the betas 0.69; the fit's directions and production 0.19 /
-7.0%. The all-zero matrix has a smaller RMSE (0.078) than production (0.091).
+inversion of the betas 0.68 / 17.9%; the fit's directions and production
+0.19 / 7.0%. The all-zero matrix has a smaller RMSE (0.078) than production
+(0.091). The same three betas that Eq. 5 turns into sensitivities with
+Spearman 0.19 give 0.68 through the least-squares inversion, which keeps 89%
+of the instruments' squared norm against Eq. 5's 38%: the topic information
+is in the betas, and the Eq. 5 inversion (an orthogonal projection onto the
+span of `Gamma_tilde`, which IPCA tilts towards the instruments' weak
+directions) loses it. This refines G.15.1 point 1.
 
 **Checks.** Identity checks must hold whatever the settings; an identity
 check that is off points to a defect in the code. Diagnostic checks compare a

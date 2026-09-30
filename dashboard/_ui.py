@@ -2113,3 +2113,471 @@ HOW_REAL_PREVIEW: tuple[str, Bullets] = ("How to read the preview:", (
      "are. Rows follow data/reference/assets.csv, with other assets at the end.",
      "a file with 60 topics shows the first 40 and the title ends '(showing 40 of 60 topics)'."),
 ))
+
+
+# --- BKS trace page (D90) ---------------------------------------------------------
+# The examples are the dashboard defaults' BKS run (full history, seed 0), traced on the page: Energy Global v
+# World EQ with S1 Energy, lambda 0.2773 with 10 of 20 topics, 26 training weeks, 4 forecast weeks, 55 assets x
+# 20 topics, 92% of the kernel weight before 2025-01-01. They were checked against the trace of that run.
+HOW_TRACE_STATUS: tuple[str, Bullets] = ("How to read the status table:", (
+    ("One row per step: what it computes, how many of its graded checks hold ('info' checks are not counted) and "
+     "this run's key numbers.",
+     "on the defaults, 6 Fit and lambda reads '12 of 12 ok' and 'lambda 0.2773, 10 of 20 topics, in-sample Sharpe "
+     "2.91'."),
+    ("Reading: 'as expected' when every check holds and no departure is found; 'departs' when a diagnostic check "
+     "is off or a finding marks a departure, a property of the method measured against its reference; 'off' when "
+     "an identity check fails, which points to a defect in the code.",
+     "on the defaults, 6 Fit and lambda and 8 Implied sensitivities read 'departs', the other six steps 'as "
+     "expected', and no step reads 'off'."),
+))
+
+HOW_TRACE_LADDER: tuple[str, Bullets] = ("How to read the ladder:", (
+    ("Rows run from what the data allow (top) to what BKS delivers: the true sensitivities, the best a "
+     "training-window estimator could find, the instruments used directly as topic covariances (with the shocks' "
+     "covariance over the same kernel-weighted days, then over the training days as production does), their best "
+     "K directions, the fit's K loadings inverted by least squares, the fit's own K directions, and the "
+     "production BKS-implied result.",
+     "on the defaults the Spearman values read 1.00, 0.78, 0.91, 0.71, 0.69, 0.68, 0.19 and 0.19 from top to "
+     "bottom."),
+    ("The drop from one row to the next is what that step costs; the largest drop is where the signal is lost.",
+     "from 'BKS betas, least-squares inversion' (0.68) to 'BKS directions, no constant' (0.19) the Spearman falls "
+     "by 0.49: the same 3 loadings keep the ranking when inverted by least squares and lose it in the projection "
+     "BKS Eq. 5 uses."),
+    ("Left panel: the Spearman rank correlation with the true sensitivities over all topic-asset pairs. Right "
+     "panel: the median over assets of the OOS R² on the forecast window's return days, with the sensitivities "
+     "frozen at the cut-off, as in the Compare methods tab. The table below gives the rows' full names.",
+     "BKS-implied reads 0.19 and 7.0%, where the true sensitivities read 1.00 and 23.2%."),
+    ("The ladder need not fall at every row: the full-history instruments see about ten years of kernel-weighted "
+     "days, more than any estimator of the training window, so they can beat the window's own best.",
+     "'Best a training window allows' scores 0.78 and the instruments with the same-history shocks' covariance "
+     "0.91."),
+    ("Blue: the production BKS-implied row. Black: the true sensitivities and the two benchmarks, which are not "
+     "steps of the chain: the sidebar's direct method and 'All zero' (every sensitivity 0, so its median OOS R² is "
+     "exactly 0 and it has no Spearman). Grey: the steps in between. The hover gives the change from the row "
+     "above.",
+     "the elastic net benchmark reads 0.55 and 16.8%, and 'All zero' 0.0%."),
+))
+
+HOW_TRACE_LADDER_TABLE: tuple[str, Bullets] = ("How to read the ladder table:", (
+    ("The chart's rows with their numbers. The change columns are this row minus the row above, the cost of that "
+     "step; they are empty for the first row and for the benchmarks.",
+     "'BKS directions, no constant' shows a change in Spearman of -0.494 (0.191 minus 0.685) and in R² of -10.9 "
+     "points (7.0% minus 17.9%)."),
+    ("RMSE: the root mean squared difference from the true sensitivities over all pairs, in standardised units. A "
+     "row with a larger RMSE than 'All zero' misses the truth by more than the sensitivities themselves.",
+     "BKS-implied has an RMSE of 0.0914, against 0.0784 for all zero and 0.0547 for the elastic net."),
+    ("Median OOS R² is in percent and its change in percentage points; 'What it is' says how each row is built.",
+     "the true sensitivities score 23.2%, so BKS-implied at 7.0% keeps less than a third of what the truth "
+     "explains."),
+))
+
+HOW_TRACE_FINDINGS: tuple[str, Bullets] = ("How to read the findings:", (
+    ("Departures come first: places where this run's result is not what it should be, with the reference it is "
+     "measured against and this run's numbers. They follow from how the method works, not from a coding error.",
+     "on the defaults, step 8 lists 'The fit's directions keep little of the instruments': 38% of the "
+     "instruments' squared norm against 91% for the best 3 directions."),
+    ("Notes follow: facts that explain a number or limit a reference, without a departure.",
+     "a step 8 note says the implied sensitivities use the instruments of the week ending 2025-06-20, 7 trading "
+     "days before the training end."),
+    ("A finding named 'Check off' appears only when an identity check fails; it names the check and its numbers.",
+     "the defaults have none."),
+))
+
+HOW_TRACE_CHECKS: tuple[str, Bullets] = ("How to read the checks:", (
+    ("One row per check: its status and kind, the observed value, the reference, the tolerance, what should "
+     "hold and a note. Most observed values are the largest difference between the run and an independent "
+     "recomputation, relative to the largest value.",
+     "'Panel instruments = brute-force kernel covariance' observes 1.5e-15 against a tolerance of 1e-10: ok."),
+    ("Status: 'ok' within the tolerance, 'off' outside it, 'info' shown for context and never graded.",
+     "'Unit conversion is approximate' is info: 0.41, the largest gap of the conversion from 1."),
+    ("Kind: an identity must hold up to rounding, so 'off' points to a code defect; a diagnostic describes the "
+     "run, so 'off' means the run departs from what the method assumes.",
+     "'Every factor is alive' is a diagnostic: the smallest over the largest factor variance is 0.37 on the "
+     "defaults and would be off below 1e-6."),
+    ("Values near 1e-16 are the rounding error of the arithmetic, not differences.",
+     "'Objective recompute' observes 1.4e-16: the reported and the recomputed objective agree to about 16 "
+     "digits."),
+))
+
+HOW_TRACE_SETTINGS: tuple[str, Bullets] = ("How to read the settings table:", (
+    ("One row per setting the BKS run uses, as the steps below apply them; they come from the sidebar.",
+     "'Kernel half-life (months) -> weekly decay xi' reads '69 -> 0.997684': each week further back weighs 0.23% "
+     "less."),
+    ("Training weeks are the return weeks ending inside the training window; forecast weeks are calendar weeks, "
+     "so their days need not match the forecast window's days.",
+     "'Training weeks' reads '26 (2025-01-03 to 2025-06-27)', and the first forecast week, ending 2025-07-04, "
+     "starts on Monday 2025-06-30, the day before the forecast window."),
+    ("'Forecast ridge' is the ridge of each forecast week's factor fit: 2, or 0 at lambda 0.",
+     "a fixed lambda of 0 shows a forecast ridge of 0."),
+))
+
+HOW_TRACE_SHAPES: tuple[str, Bullets] = ("How to read the sizes table:", (
+    ("Counts of days, weeks and rows at each stage, with their date ranges.",
+     "55 assets in each of the 26 training weeks give 1,430 training rows."),
+    ("The panel's days start after the volatility warm-up and its return weeks after the burn-in, so the first "
+     "year of the full history feeds instruments only.",
+     "the simulation starts on 2015-01-02, the panel's days on 2015-04-01 and its return weeks on 2016-04-08."),
+    ("'Training return days of the direct estimator' are the days whose shocks give Sigma_z in step 8.",
+     "129 days, 2025-01-01 to 2025-06-30."),
+))
+
+HOW_TRACE_INPUTS: tuple[str, Bullets] = ("How to read the inputs chart:", (
+    ("Top: the simulated attention of the chosen topic, every day; bottom: the chosen asset's daily return. BKS "
+     "and the direct methods start from these data only.",
+     "S1 Energy's attention stays between 0.08 and 0.31 around a mean of 0.20."),
+    ("Shaded: the training window and the forecast window. The days before the training start are history only "
+     "the full-history BKS uses.",
+     "on the defaults, training runs from 2025-01-01 to 2025-06-30 and the forecast window from 2025-07-01 to "
+     "2025-07-28; the ten years before 2025 enter only the full-history instruments."),
+    ("The topic follows the asset, its topic with the largest true sensitivity, until you pick one.",
+     "for Energy Global v World EQ the topic is S1 Energy, with a true sensitivity of 0.35."),
+))
+
+HOW_TRACE_TRUTH: tuple[str, Bullets] = ("How to read the truth chart:", (
+    ("Per topic, three reference values for the chosen asset: the set sensitivity W from the link map, the true "
+     "sensitivity B_true the simulation produces, and B_true in the training scales the estimators use.",
+     "Energy Global v World EQ has W = 0.35 and B_true = 0.35 for S1 Energy, 0.36 in training units."),
+    ("B_true includes spillovers: a topic without a link can have a true sensitivity, because asset returns and "
+     "topic shocks are correlated.",
+     "S7 Financials has no link to Energy Global v World EQ (W = 0) and still a true sensitivity of 0.11."),
+    ("Training units: B_true times the asset's full-sample over its training volatility, times the shock's "
+     "training over its full-sample standard deviation. The implied sensitivities of step 8 are in these units.",
+     "A6 has B_true = 0.105 and 0.117 in training units on Energy Global v World EQ."),
+    ("With more than 30 topics, the 30 with the largest values are shown.",
+     "with 520 topics the chart keeps 30 and says so in its subtitle."),
+))
+
+HOW_TRACE_DIVISOR: tuple[str, Bullets] = ("How to read the divisor chart:", (
+    ("Top, solid: the divisor of each daily return. Under the full history it is the trailing 252-day volatility "
+     "known the day before; under the training history the asset's training standard deviation, a flat line. "
+     "Dashed: the training return scale that standardises the sensitivities; dotted: the full-sample volatility, "
+     "the unit of B_true.",
+     "for Energy Global v World EQ the divisor is 0.99% on 2025-01-02 and 1.11% on 2025-06-27, against a "
+     "training scale of 1.14% and a full-sample volatility of 1.23%."),
+    ("Bottom: the scaled return, the return divided by the divisor; with a good divisor its standard deviation is "
+     "near 1.",
+     "Energy Global v World EQ's scaled returns have a standard deviation of 1.10 over the training window."),
+    ("Step 8 converts back with one number per asset, the mean divisor over its training return days, while the "
+     "instruments mix about ten years of divisors; the units table below measures the gap.",
+     "a training-mean divisor of 1.04% against a kernel-weighted mean divisor of 1.22% for Energy Global v World "
+     "EQ."),
+))
+
+HOW_TRACE_UNITS: tuple[str, Bullets] = ("How to read the units table:", (
+    ("One row per asset, the chosen asset first. Mean divisor d: the mean divisor over the asset's training return "
+     "days, which step 8 multiplies by; training return scale and full-sample volatility as in the chart.",
+     "Energy Global v World EQ: d = 0.0104, training scale 0.0114 and full-sample volatility 0.0123."),
+    ("d / training scale is below 1 when the trailing volatility over the training days was lower than the "
+     "training standard deviation.",
+     "0.91 for Energy Global v World EQ, and 0.54 to 1.10 across the 55 assets."),
+    ("Conversion u: d times the kernel-weighted mean of 1 over the divisor on the instrument's days. At 1 the "
+     "conversion would be exact.",
+     "0.95 for Energy Global v World EQ, and 0.64 to 1.41 across assets."),
+    ("Exact-unit ratio: the instruments times d over the same kernel covariance computed with raw returns (a "
+     "least-squares ratio over the asset's topics); 1 is exact, as under the training history. Kernel mean "
+     "divisor: the divisor averaged with the kernel's weights; the last column is the exact-unit ratio with it in "
+     "place of d.",
+     "0.78 for Energy Global v World EQ (median 0.97, range 0.51 to 1.30 across assets); its kernel mean divisor "
+     "0.0122 would give 0.92 (0.92 to 1.09 across assets)."),
+    ("'Zero (no training row)' marks assets without a row in the training weeks; they get zero sensitivities.",
+     "no asset on the defaults."),
+))
+
+HOW_TRACE_SHOCKS: tuple[str, Bullets] = ("How to read the shocks chart:", (
+    ("Top: the shock the BKS panel uses and, dotted, the direct estimator's shock of the same attention day. They "
+     "should lie on top of each other; the check 'BKS shocks = direct shocks shifted by the lead' measures the "
+     "gap.",
+     "S1 Energy's shock on 2025-06-27 is -0.0209 on both lines."),
+    ("Bottom: the same shock split into its designed signal part, which the returns load on, and its noise part "
+     "(news noise plus the slow drift of attention). The two add up to the shock.",
+     "on 2025-06-27, -0.0209 splits into a signal part of -0.0055 and a noise part of -0.0155."),
+    ("The chart runs from three months before the training start to the forecast end; 'Show all days' shows the "
+     "whole history.",
+     "on the defaults, from 2024-10-01 to 2025-07-28."),
+))
+
+HOW_TRACE_SHOCK_TABLE: tuple[str, Bullets] = ("How to read the shocks table:", (
+    ("Training sd and population sd: the shock's standard deviation over the training days, which the estimators "
+     "standardise with, and over the whole simulation, which B_true uses. A ratio away from 1 changes the units "
+     "of the sensitivities.",
+     "S5's training sd is 1.41 times its population sd (0.031 against 0.022)."),
+    ("Correlation with the designed shock against the truth's attenuation: the two should agree to a few "
+     "hundredths.",
+     "S1 Energy: 0.902 against 0.901."),
+    ("Signal share: the share of the shock's variance that is designed signal; the rest is noise.",
+     "29% for S1 Energy and 6% for A6."),
+))
+
+HOW_TRACE_INSTRUMENT: tuple[str, Bullets] = ("How to read the instrument chart:", (
+    ("One point per instrument week: the kernel covariance of the asset's scaled return with the topic's shock, "
+     "recomputed for every week (line), the panel's value (dots, which must sit on the line) and the population "
+     "reference (dashed).",
+     "Energy Global v World EQ and S1 Energy in the week ending 2025-06-20: 0.00881 on the line and in the panel, "
+     "against a reference of 0.00881."),
+    ("With a half-life of 69 months each new week adds little weight, so the line moves slowly.",
+     "from the week ending 2025-06-13 to the week ending 2025-07-18 the value moves from 0.00884 to 0.00875."),
+    ("Shaded: the instrument weeks that feed the training rows and the forecast rows, one week before their "
+     "return weeks. The dashed vertical line marks the instrument of the chosen return week.",
+     "the training rows use the instrument weeks ending 2024-12-27 to 2025-06-20."),
+    ("The line starts once 60 days are available; the dots start after the 52-week burn-in.",
+     "the line starts at the week ending 2015-07-03 (62 days), the dots at the week ending 2016-04-01."),
+))
+
+HOW_TRACE_KERNEL: tuple[str, Bullets] = ("How to read the kernel chart:", (
+    ("Top: the weight of each day in the chosen week's instrument, xi to the power of the weeks back, normalised to "
+     "sum to 1. The last day of the instrument week is left out, and later days weigh nothing.",
+     "for the week ending 2025-06-20 the last day used is 2025-06-19, and it weighs 3.4 times as much as the first "
+     "day, 2015-04-08."),
+    ("Bottom: the running sum of each day's contribution, the weight times the return's and the shock's "
+     "deviations from their weighted means. It ends at the instrument; the dashed line is the panel's value.",
+     "for Energy Global v World EQ and S1 Energy the sum ends at 0.00881, the panel's value."),
+    ("The subtitle gives the share of the weight before the training start and the effective number of days (1 "
+     "over the sum of the squared weights).",
+     "92% of the weight lies before 2025-01-01, and the 2,662 days count as 2,369 effective days."),
+))
+
+HOW_TRACE_INSTR_TRUTH: tuple[str, Bullets] = ("How to read the instrument scatter:", (
+    ("One point per asset and topic: across, the population reference (the simulation's covariance of the shock "
+     "with the return, divided by the asset's divisor); up, the instrument the implied sensitivities use. Orange: "
+     "the chosen asset.",
+     "Energy Global v World EQ's S1 Energy point sits at (0.00881, 0.00881)."),
+    ("The subtitle gives the least-squares slope and the correlation; on the diagonal an instrument equals its "
+     "population value.",
+     "on the defaults the slope is 1.07 and the correlation 0.98."),
+    ("Under the full history the reference divides by the full-sample volatility while the panel divides by a "
+     "trailing one, so the match is close but not exact. Under the training history the instruments are "
+     "covariances over a few months and scatter more.",
+     "the training-history run of the defaults correlates 0.70."),
+))
+
+HOW_TRACE_INSTR_ROW: tuple[str, Bullets] = ("How to read the instrument row:", (
+    ("One row per topic for the chosen asset and return week: the panel's value, the same covariance recomputed by "
+     "direct summation over the days, and their difference, which should be rounding only.",
+     "S1 Energy on Energy Global v World EQ: 0.00881 in both, a difference of 3e-17."),
+    ("Population reference: what the instrument should be with unlimited data. Signal part and noise part: the "
+     "covariance with the shock's designed signal and with its noise; they add up to the recomputed value.",
+     "S1 Energy: reference 0.00881, signal part 0.00891 and noise part -0.00010."),
+))
+
+HOW_TRACE_PAIRING: tuple[str, Bullets] = ("How to read the pairing table:", (
+    ("One row per return week, from four weeks before the first training week to the last forecast week. Each "
+     "return week's row uses the instruments of the week before, whose kernel window ends one day before that "
+     "week's end.",
+     "the return week ending 2025-06-27 starts on 2025-06-23 and uses the instrument week ending 2025-06-20, with "
+     "a kernel window up to 2025-06-19."),
+    ("Weekly return (panel): the week's sum of scaled daily returns in the panel; Recomputed: the same sum from the "
+     "daily data; Raw return: the sum of the unscaled daily returns, in percent.",
+     "Energy Global v World EQ in the week ending 2025-06-27: -5.78 in the panel and recomputed, -6.33% raw."),
+    ("Role: training, forecast, other (in the panel but not used) or not in panel; 'Assets that week' counts the "
+     "week's rows.",
+     "the four weeks before 2025-01-03 read 'other', with 55 assets each."),
+))
+
+HOW_TRACE_DESIGN: tuple[str, Bullets] = ("How to read the design heatmap:", (
+    ("One row per asset of the chosen return week and one column per instrument: the constant and each topic's "
+     "instrument, divided by its standard deviation over the training rows. The fit multiplies these rows by "
+     "Gamma.",
+     "Energy Global v World EQ's S1 Energy cell reads 3.16: its instrument is 3.16 training standard deviations."),
+    ("Blue is positive and red negative, on a scale symmetric around zero; the outlined row is the chosen asset.",
+     "in the week ending 2025-06-27 the topic cells run from -4.3 to 6.0."),
+))
+
+HOW_TRACE_STABILITY: tuple[str, Bullets] = ("How to read the stability chart:", (
+    ("Left: how much each topic's instrument changes over the training weeks (the mean over assets of its "
+     "standard deviation over the weeks), over how much it differs across assets. Near 0 the fit sees the same "
+     "cross-section every week.",
+     "0.03 to 0.08 on the defaults: over 26 weeks the instruments move by less than a tenth of their spread "
+     "across assets."),
+    ("Right: the instrument's mean over the training rows divided by its standard deviation. Far from 0, much of "
+     "the instrument is a level shared by all assets, like the constant.",
+     "S2 at 0.88 and A3 at -0.62."),
+))
+
+HOW_TRACE_PATH: tuple[str, Bullets] = ("How to read the lambda path and its noise:", (
+    ("Top panel: the in-sample Sharpe ratio at each grid lambda, with a band of one standard error. Filled points "
+     "are inside the tolerance band; the ring marks the best point, the diamond the chosen one, and the dashed "
+     "horizontal line the lowest Sharpe ratio inside the band. A dotted line marks the band's relative reading "
+     "(the tolerance times the best value) when it differs; the two differ below a best Sharpe ratio of 1.",
+     "on the defaults the Sharpe ratio runs from 2.35 to 2.97 with a standard error of about 1.47; both readings "
+     "put the band floor at 2.91, and the chosen lambda 0.277 keeps 10 topics."),
+    ("Grey band 'No priced signal' with its dashed median: the 5% to 95% range of the in-sample Sharpe ratio that "
+     "K factors reach over the training weeks when no factor is priced. A path inside it cannot tell the lambdas "
+     "apart.",
+     "with 3 factors over 26 weeks the range is 0.87 to 4.44 around a median of 2.30, and the whole path lies "
+     "inside it."),
+    ("Middle panel: the number of topics selected. Bottom panel: the implied sensitivities refitted at each lambda: "
+     "their Spearman with the true sensitivities, the share of the instruments the fit's directions keep and "
+     "their median OOS R² (as fractions).",
+     "at the chosen lambda: Spearman 0.19, kept share 0.38 and median OOS R² 0.07."),
+    ("The x-axis is logarithmic, from the grid ratio times lambda max up to lambda max.",
+     "12 points from 0.034 to 3.42."),
+))
+
+HOW_TRACE_COEF_PATH: tuple[str, Bullets] = ("How to read the Gamma path:", (
+    ("One line per instrument: the length of its Gamma row times its training standard deviation, at each grid "
+     "lambda. A line at zero is a dropped instrument.",
+     "A3 falls from 0.97 at the smallest lambda to 0.24 at the chosen one."),
+    ("Coloured: the instruments largest at the chosen lambda (at most 8); dark grey: the other selected ones; "
+     "light grey: the rest. The dashed vertical line marks the chosen lambda.",
+     "at lambda 0.277 the 10 selected topics have a line above zero and the constant is at zero."),
+    ("At large lambda few topics survive, and they need not be the topics that move the assets most.",
+     "at lambda 3.42 only A5 China Macro remains, while S1 Energy, which has as many links in the link map (8), "
+     "is already dropped at lambda 0.12."),
+))
+
+HOW_TRACE_GAMMA: tuple[str, Bullets] = ("How to read the Gamma heatmap:", (
+    ("Rows: the constant and each topic's instrument; columns: the K factors. Each cell is Gamma times the "
+     "instrument's training standard deviation: how far a one-standard-deviation move of that instrument shifts "
+     "that factor loading.",
+     "A1 has 0.214 in factor 1: an asset whose A1 instrument is one standard deviation higher has a factor 1 "
+     "loading 0.214 higher."),
+    ("Rows of zeros are the dropped instruments; bold rows are the selected topics.",
+     "10 of 20 topic rows are not zero at lambda 0.2773, and the constant's row is zero under the full history."),
+))
+
+HOW_TRACE_KKT: tuple[str, Bullets] = ("How to read the optimum check:", (
+    ("For each instrument, the length of the fit's gradient over its penalty. At the optimum a kept topic sits at "
+     "exactly 1 and a dropped one at 1 or below; the dashed line marks 1.",
+     "the 10 kept topics lie between 0.9995 and 1.0001 and the dropped ones at 0.94 or below."),
+    ("A dropped topic close to 1 would enter the fit at a slightly smaller lambda; the subtitle names the "
+     "closest.",
+     "A6 at 0.94 is the next to enter."),
+))
+
+HOW_TRACE_FACTORS: tuple[str, Bullets] = ("How to read the factor chart:", (
+    ("Top: the K factor values of each training week; bottom: their running sums, where a steady drift is a mean "
+     "the Sharpe criterion rewards.",
+     "factor 2 has a mean of 0.61 and a standard deviation of 1.91 over the 26 weeks, an annualised Sharpe ratio "
+     "of 2.31 on its own."),
+    ("The factors are in canonical form: uncorrelated, factor 1 with the largest variance, every mean at least 0.",
+     "their standard deviations are 2.01, 1.91 and 1.23."),
+))
+
+HOW_TRACE_PATH_TABLE: tuple[str, Bullets] = ("How to read the path table:", (
+    ("One row per grid lambda: the Sharpe ratio, its standard error, the topics selected, the in-sample R², the "
+     "objective against the objective of Gamma = 0, and the solver's sweeps.",
+     "the chosen row, lambda 0.2773, has a Sharpe ratio of 2.910, 10 topics and an in-sample R² of 44.7%; the "
+     "best row, lambda 0.1200, has 2.967 with 13 topics."),
+    ("Flags: Chosen, Best, In band (inside the tolerance band), Grid edge (the point is the first or last of the "
+     "grid), Above Gamma = 0 (a fit that stopped above the all-zero objective, a spurious stationary point), "
+     "Converged and Rank cut (the Sharpe criterion dropped a factor direction).",
+     "lambda 3.419 is flagged above Gamma = 0: an objective of 4,821.3 against 4,691.6."),
+    ("The null columns repeat the Sharpe range reachable with no priced factor. The last columns refit the "
+     "implied sensitivities at each lambda: kept share, Spearman, median OOS R², and the rank and smallest "
+     "standardised singular value of Gamma's topic rows (near 0, the fit uses fewer than K directions).",
+     "the null range 0.87 to 4.44 holds every Sharpe ratio of the path; from lambda 0.64 Gamma's rank drops to 2 "
+     "and its smallest singular value to about 0."),
+))
+
+HOW_TRACE_WEEK_R2: tuple[str, Bullets] = ("How to read the weekly R² chart:", (
+    ("One group of bars per forecast week: the R² over all the week's assets in panel units, and the same with "
+     "the topic instruments shuffled across assets (the reference).",
+     "the week ending 2025-07-04 reads 20.2% against 6.3% shuffled."),
+    ("Each week's K factors are fitted to that week's returns, so both bars are above zero even without topic "
+     "signal; the gap is what the instruments add.",
+     "over the four weeks the pooled R² is 27.8% against 9.1% shuffled."),
+    ("Third bar: the same forecasts in return units against the exact weekly returns (sums of the raw daily "
+     "returns). Under the full history the return units are approximate, so it differs from the first bar; the "
+     "line under the caption gives both pooled values.",
+     "21.8% for the week ending 2025-07-04; pooled 23.0% against 27.8% in panel units."),
+))
+
+HOW_TRACE_WEEK_SCATTER: tuple[str, Bullets] = ("How to read the week scatter:", (
+    ("One point per asset of the chosen forecast week: across, the fitted weekly return; up, the realised one, "
+     "both in panel units (sums of scaled daily returns). Orange: the chosen asset.",
+     "Energy Global v World EQ in the week ending 2025-07-04: fitted -0.07, realised 0.48."),
+    ("The week's R² is 1 minus the squared misses over the squared realised returns; the subtitle gives it with "
+     "the shuffled reference.",
+     "20.2% for the week ending 2025-07-04, shuffled 6.3%."),
+))
+
+HOW_TRACE_OOS_FACTORS: tuple[str, Bullets] = ("How to read the forecast factors:", (
+    ("Each forecast week's K factor values, fitted to that week's own returns with the loadings frozen; they are "
+     "fitted, not forecast.",
+     "factor 3 is -1.21 in the week ending 2025-07-11."),
+    ("Compare their size with the training factors of step 6: the ridge of 2 pulls them towards 0.",
+     "the forecast values stay within -1.24 and 0.83, while the training factors have standard deviations of 1.2 "
+     "to 2.0."),
+))
+
+HOW_TRACE_WEEK_TABLE: tuple[str, Bullets] = ("How to read the week table:", (
+    ("One row per asset of the chosen forecast week, the chosen asset first: the realised and fitted weekly "
+     "returns in panel units and their difference.",
+     "Energy Global v World EQ in the week ending 2025-07-04: realised 0.477, fitted -0.067, residual 0.544."),
+    ("Loadings 1 to K: the asset's instruments times Gamma; the fitted return is the loadings times the week's "
+     "factors.",
+     "0.179 × 0.688 + 0.228 × (-0.411) - 0.240 × 0.402 = -0.067."),
+))
+
+HOW_TRACE_CHAIN: tuple[str, Bullets] = ("How to read the chain chart:", (
+    ("Per topic for the chosen asset: the true sensitivity, the instruments used directly as topic covariances "
+     "with the shocks' covariance over the same history (the best practical row of the ladder), the fit's K "
+     "betas turned back into topic covariances by least squares instead of the Eq. 5 projection, the "
+     "BKS-implied sensitivity and the sidebar's direct method.",
+     "Energy Global v World EQ and S1 Energy: true 0.35, instruments alone 0.32, least-squares inversion 0.07, "
+     "BKS-implied -0.03."),
+    ("A topic the fit dropped lies outside the fit's K directions, so the projection sets its covariance to zero; "
+     "its implied sensitivity then comes only from its correlation with other topics' shocks.",
+     "S1 Energy is not among the 10 selected topics: its projected covariance with Energy Global v World EQ is 0 "
+     "and its implied sensitivity -0.03."),
+))
+
+HOW_TRACE_SHARES: tuple[str, Bullets] = ("How to read the shares table:", (
+    ("The share of the instruments' squared norm, over all assets, that K directions in topic space keep: the "
+     "fit's own directions (what BKS Eq. 5 keeps), the best K directions, a least-squares reconstruction from the "
+     "same K loadings, and K random directions.",
+     "37.9% for the fit's directions, 91.4% for the best 3, 89.1% by least squares and 15.0% for 3 random "
+     "directions of 20."),
+    ("The last row is the chosen asset's own share for the fit's directions.",
+     "15.4% for Energy Global v World EQ, whose largest instrument, S1 Energy, is a topic the fit dropped."),
+))
+
+HOW_TRACE_CAPTURE: tuple[str, Bullets] = ("How to read the direction chart:", (
+    ("Top: the principal directions of the instruments across assets, largest first, and each one's share of "
+     "their squared norm; the first K together give the best K share.",
+     "55.8%, 27.5% and 8.0% for the first three directions, 91.4% together."),
+    ("Bottom: how much of each direction lies inside the fit's K directions; 100% would be all of it.",
+     "31%, 53% and 65% of the first three: the fit's directions miss much of where the instruments vary."),
+))
+
+HOW_TRACE_IMPLIED_SCATTER: tuple[str, Bullets] = ("How to read the implied scatter:", (
+    ("One point per topic-asset pair: across, the true sensitivity; up, the BKS-implied one, in standardised "
+     "units. Orange: the chosen asset's topics.",
+     "Energy Global v World EQ's S1 Energy point sits at (0.35, -0.03)."),
+    ("The subtitle gives the least-squares slope and the correlation over all pairs; on the diagonal the implied "
+     "sensitivity equals the truth.",
+     "on the defaults the slope is 0.39 and the correlation 0.36."),
+))
+
+HOW_TRACE_SIGMA: tuple[str, Bullets] = ("How to read the Sigma_z chart:", (
+    ("Per topic: the shock's variance over the training days and over the days the instruments weigh (their "
+     "kernel), each divided by the population variance. Step 8 divides by the training-day covariance, while the "
+     "instruments average the kernel's days.",
+     "S5's variance is 1.98 times the population value over the training days, but 1.07 times over the kernel's "
+     "days."),
+    ("The dashed line at 1 is the population. With a long kernel the kernel bar stays near 1, while the training "
+     "bar moves with six months of data.",
+     "S9 reads 0.70 over the training days and 1.02 over the kernel."),
+))
+
+HOW_TRACE_SIGMA_TABLE: tuple[str, Bullets] = ("How to read the Sigma_z table:", (
+    ("Per topic: the ratios of the chart (training and kernel variance over the population) and training over "
+     "kernel, the mismatch step 8 carries.",
+     "S5: 1.98, 1.07 and 1.85."),
+    ("The last column is the largest difference between the training-day and the kernel correlation of this "
+     "topic's shock with another topic's shock: Sigma_z differs off its diagonal too.",
+     "A1 reaches 0.30."),
+))
+
+HOW_TRACE_CHAIN_TABLE: tuple[str, Bullets] = ("How to read the chain table:", (
+    ("The columns follow BKS Eq. 5 for the chosen asset: its instrument (panel units), the part inside the fit's K "
+     "directions, the constant's part, their sum m, the least-squares covariance from the same betas for "
+     "comparison, m in return units, the raw b after the shocks' covariance, the BKS-implied sensitivity and the "
+     "least-squares inversion's.",
+     "S7 Financials on Energy Global v World EQ: instrument 0.0027, projected 0.0019, m 0.0019, least-squares "
+     "covariance 0.0030, BKS-implied 0.060 and least-squares inversion 0.122."),
+    ("Then the references in standardised units: the true sensitivity (also in training units), the window "
+     "truth, the instruments alone with the training-day and with the same-history Sigma_z, and the direct "
+     "method.",
+     "S7 Financials: true 0.107, window truth -0.001, instruments alone 0.104 and 0.048."),
+))

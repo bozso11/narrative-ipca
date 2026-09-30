@@ -1051,8 +1051,12 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         st.caption(_ui.how_r2_bars(name, overview=False))
 
 
-def bks_tiles(res: Any) -> None:
-    """The six tiles of a BKS run and their "How to read" caption (BKS tab and BKS trace page)."""
+def bks_tiles(res: Any, caption_expander: bool = False) -> None:
+    """The six tiles of a BKS run and their "How to read" caption (BKS tab and BKS trace page).
+
+    ``caption_expander``: the caption goes in a collapsed "How to read the tiles" expander right under the tiles
+    (the trace page, where the tiles sit above the step selector on every step).
+    """
     m = st.columns(6)
     m[0].metric("Chosen lambda", f"{res.lam:.4g}", border=True)
     m[1].metric("Factors K", f"{res.K}", border=True)
@@ -1064,7 +1068,11 @@ def bks_tiles(res: Any) -> None:
     m[5].metric("Same, instruments shuffled", _ui.fmt_pct(res.meta.get("shuffled_r2_pooled")), border=True,
                 help="Reference: the topic instruments shuffled across assets within each week (20 shuffles). The "
                 "gap to the pooled OOS R² is what the instruments add beyond K freely fitted weekly factors.")
-    st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
+    if caption_expander:
+        with st.expander("How to read the tiles"):
+            st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
+    else:
+        st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
 
 
 def bks_tab(ctx: dict[str, Any]) -> None:
