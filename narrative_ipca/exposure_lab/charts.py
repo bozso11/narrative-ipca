@@ -1,9 +1,17 @@
-"""Plotly figure builders for the topic-sensitivity lab (DESIGN.md G.9, G.13; D52, D67-D70).
+"""Plotly figure builders for the topic-sensitivity lab (DESIGN.md G.9, G.13, G.16; D52, D67-D70, D90).
 
 Pure functions from pandas objects to ``plotly.graph_objects.Figure``. No
 Streamlit imports: the dashboard (``dashboard/app.py``) only displays what
 these functions return. Every builder returns an annotated empty figure
 instead of raising when its input is ``None``, empty or entirely missing.
+
+Section 11 holds the generic builders of the BKS trace page (G.16, D90):
+stacked line panels over a date or numeric axis (:func:`line_panels`), a
+signed matrix (:func:`matrix_heatmap`), the reference ladder
+(:func:`ladder_chart`), a scatter against the 45-degree line
+(:func:`identity_scatter`), grouped bars (:func:`grouped_bars`), the lambda
+path with its noise band (:func:`lambda_trace_chart`) and the Gamma row norms
+along the path (:func:`coefficient_path_chart`).
 
 Visual system (light theme, one set of tokens for every chart)
 ---------------------------------------------------------------
@@ -32,13 +40,20 @@ Validity boundaries
   of :func:`contribution_bars` are the caller's job.
 * :func:`contribution_bars` can also show the BKS per-topic split, which is not
   identified (D52); the caller states that caveat through ``subtitle``.
+* Size limits of the trace builders keep a 500 x 500 run displayable, and
+  each is noted in the subtitle: :func:`matrix_heatmap` shows at most
+  ``max_rows`` x ``max_cols`` cells, :func:`grouped_bars` at most
+  :data:`MAX_BAR_ROWS` rows unless ``top_n`` is given, and
+  :func:`identity_scatter` draws at most :data:`MAX_SCATTER_POINTS` points
+  (its slope and correlation use every point).
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import date
 from typing import Any
 
 import numpy as np
@@ -77,6 +92,15 @@ __all__ = [
     "method_styles",
     "method_r2_dots",
     "method_sweep_lines",
+    "MAX_BAR_ROWS",
+    "MAX_SCATTER_POINTS",
+    "line_panels",
+    "matrix_heatmap",
+    "ladder_chart",
+    "identity_scatter",
+    "grouped_bars",
+    "lambda_trace_chart",
+    "coefficient_path_chart",
 ]
 
 # ---------------------------------------------------------------------------
@@ -259,6 +283,8 @@ def _header_px(title: str | None, subtitle: str | None = None, legend: bool = Fa
         y += _TITLE_PX
         if subtitle:
             y += _SUBTITLE_PX
+    elif subtitle:
+        y += _SUBTITLE_PX  # a subtitle without a title takes the title's place (notes of the trace builders)
     if legend:
         y += _LEGEND_PX
     return max(16, y + 8)
@@ -292,7 +318,8 @@ def _base_layout(
     height:
         Figure height in pixels; the width is left to the container.
     subtitle:
-        Optional second title line in secondary ink (notes, caveats).
+        Optional second title line in secondary ink (notes, caveats); without
+        a title it is drawn alone in the title's place.
     legend:
         ``True`` shows a horizontal legend row under the title.
     extra_top:
@@ -331,6 +358,19 @@ def _base_layout(
         "barcornerradius": 4,
     }
     text = _title_text(title, subtitle)
+    if not text and subtitle:
+        # no title: the subtitle alone, in the subtitle's style, where the title would be
+        layout["title"] = {
+            "text": _esc(subtitle),
+            "x": 0.0,
+            "xref": "container",
+            "xanchor": "left",
+            "y": 1.0 - _TITLE_TOP_PX / height,
+            "yref": "container",
+            "yanchor": "top",
+            "pad": {"l": 12},
+            "font": {"family": FONT_FAMILY, "size": 12, "color": INK_SECONDARY},
+        }
     if text:
         layout["title"] = {
             "text": text,
@@ -349,7 +389,7 @@ def _base_layout(
                 "font": {"family": FONT_FAMILY, "size": 12, "color": INK_SECONDARY},
             }
     if legend:
-        legend_top = _TITLE_TOP_PX + (_TITLE_PX if title else 0) + (_SUBTITLE_PX if title and subtitle else 0) + 2
+        legend_top = _TITLE_TOP_PX + (_TITLE_PX if title else 0) + (_SUBTITLE_PX if subtitle else 0) + 2
         layout["legend"] = {
             "orientation": "h",
             "xref": "container",
@@ -415,8 +455,10 @@ def _empty_figure(message: str, *, title: str | None = None, height: int = 240) 
     return fig
 
 
-def _cell_text_trace(z: np.ndarray, zmax: float, *, font_size: int, name: str) -> go.Scatter | None:
-    """Text marks for the finite cells of ``z``: two decimals, white on strong cells, ink otherwise."""
+def _cell_text_trace(
+    z: np.ndarray, zmax: float, *, font_size: int, name: str, decimals: int = 2
+) -> go.Scatter | None:
+    """Text marks for the finite cells of ``z``: ``decimals`` places, white on strong cells, ink otherwise."""
     rows, cols = np.nonzero(np.isfinite(z))
     if rows.size == 0:
         return None
@@ -426,7 +468,7 @@ def _cell_text_trace(z: np.ndarray, zmax: float, *, font_size: int, name: str) -
         x=cols,
         y=rows,
         mode="text",
-        text=[_fmt(v, 2) for v in vals],
+        text=[_fmt(v, decimals) for v in vals],
         textfont={"family": FONT_FAMILY, "size": font_size, "color": colors.tolist()},
         hoverinfo="skip",
         showlegend=False,
@@ -1881,4 +1923,1513 @@ def method_sweep_lines(
                      range=[max(lo, clip - 0.05), hi], **_ZERO_LINE)
     fig.update_xaxes(title={"text": "Window start"}, showspikes=True, spikecolor=BASELINE, spikethickness=1,
                      spikedash="solid", spikemode="across")
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 11. BKS trace page (G.16; D90)
+# ---------------------------------------------------------------------------
+#: Most bar rows of :func:`grouped_bars` when the caller gives no ``top_n`` (the largest are kept).
+MAX_BAR_ROWS = 120
+#: Most points drawn by :func:`identity_scatter`; its slope and correlation use every point.
+MAX_SCATTER_POINTS = 20_000
+#: Most stacked panels of :func:`line_panels`.
+MAX_LINE_PANELS = 3
+#: Row label length of :func:`ladder_chart` (its labels are whole phrases; the hover shows the full name).
+LADDER_LABEL_CHARS = 60
+
+_DASHES = ("solid", "dash", "dot", "dashdot", "longdash")
+_LINE_MODES = ("lines", "markers", "lines+markers")
+#: Opacity of the shaded windows of :func:`line_panels`, alternating so adjacent windows differ.
+_SHADE_OPACITY = (0.5, 1.0)
+#: Plot height in pixels per panel of :func:`line_panels`, by number of panels.
+_PANEL_PX = {1: 300, 2: 190, 3: 150}
+_SUBPLOT_TITLE_PX = 22
+_NOTE_FONT = {"family": FONT_FAMILY, "size": 10, "color": INK_SECONDARY}
+_NOTE_BG = "rgba(252,252,251,0.85)"  # SURFACE, slightly transparent, behind notes drawn over data
+_NOTE_ROW_PX = 15
+# Widths assumed when estimating wrapped legend rows and overlapping notes (the container sets the real width).
+_LEGEND_WIDTH_PX = 760
+_LEGEND_ROW_PX = 20
+_PLOT_WIDTH_PX = 700
+
+
+def _rgba(color: str, alpha: float) -> str:
+    """A ``#rrggbb`` colour as ``rgba(r,g,b,alpha)``; other colour strings are returned unchanged."""
+    c = str(color).lstrip("#")
+    if len(c) != 6:
+        return str(color)
+    try:
+        r, g, b = (int(c[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return str(color)
+    return f"rgba({r},{g},{b},{alpha:g})"
+
+
+def _x_position(value: Any) -> Any:
+    """Shape x position: a Plotly date string for dates, a float for numbers, strings unchanged."""
+    if isinstance(value, (pd.Timestamp, np.datetime64, date)):
+        return _date_str(value)
+    if isinstance(value, str):
+        return value
+    return _to_float(value)
+
+
+def _annotation_x(value: Any, log_axis: bool) -> Any:
+    """Annotation x position; on a log axis Plotly places annotations at ``log10(x)`` (shapes at ``x``)."""
+    if log_axis:
+        v = _to_float(value)
+        return math.log10(v) if v > 0 else float("nan")
+    return _x_position(value)
+
+
+def _missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, pd.Timestamp, np.datetime64, date)):
+        return pd.isna(value)
+    return not np.isfinite(_to_float(value))
+
+
+def _category_name(mapping: Mapping[Any, Any] | pd.Series | None, key: Any) -> str:
+    """Display name of a category; timestamps without a mapped name read as dates."""
+    if mapping is not None:
+        text = mapping.get(key)
+        if text is not None and not (isinstance(text, float) and math.isnan(text)):
+            return str(text)
+    if isinstance(key, (pd.Timestamp, np.datetime64, date)):
+        return _date_str(key)
+    return str(key)
+
+
+def _point_name(labels: Mapping[Any, Any] | pd.Series | None, key: Any) -> str:
+    """Name of a point; a tuple key (MultiIndex) joins the names of its parts with a middle dot."""
+    if isinstance(key, tuple):
+        if labels is not None:
+            text = labels.get(key)
+            if text is not None and not (isinstance(text, float) and math.isnan(text)):
+                return str(text)
+        return " · ".join(_category_name(labels, part) for part in key)
+    return _category_name(labels, key)
+
+
+def _key_set(keys: Any) -> set[str]:
+    """``keys`` as a set of strings: one key (a string or a scalar) or an iterable of keys (list, tuple,
+    set, Index); ``None`` for none. A single MultiIndex key (a tuple) goes in a list: ``[("T1", "A2")]``."""
+    if keys is None:
+        return set()
+    if isinstance(keys, (str, bytes)) or not isinstance(keys, Iterable):
+        return {str(keys)}
+    return {str(k) for k in keys}
+
+
+def _in_keys(key: Any, keys: set[str]) -> bool:
+    """``key`` is in ``keys``; a tuple key (MultiIndex) also matches when any of its parts is."""
+    if str(key) in keys:
+        return True
+    return isinstance(key, tuple) and any(str(part) in keys for part in key)
+
+
+def _with_note(subtitle: str | None, note: str | None) -> str | None:
+    """``subtitle`` and ``note`` joined by a semicolon (either may be empty)."""
+    parts = [p for p in (subtitle, note) if p]
+    return "; ".join(parts) if parts else None
+
+
+def _fmt_sig(value: float, digits: int = 3) -> str:
+    """``value`` with ``digits`` significant digits (trailing zeros kept, thousands grouped); empty when missing."""
+    if value is None or not np.isfinite(value):
+        return ""
+    v = float(value) + 0.0
+    if abs(v) >= 10 ** digits:
+        return f"{v:,.0f}"
+    return f"{v:#.{digits}g}".rstrip(".")
+
+
+def _auto_decimals(max_abs: float) -> int:
+    """Decimals for value labels: 2 from about 0.1 up, then one more per decade, at most 4."""
+    if not np.isfinite(max_abs) or max_abs <= 0:
+        return 2
+    return int(np.clip(1 - math.floor(math.log10(max_abs)), 2, 4))
+
+
+def _legend_extra_px(fig: go.Figure) -> int:
+    """Pixels for the legend rows past the first, estimated from the legend names at an assumed width."""
+    rows, used = 1, 0.0
+    for t in fig.data:
+        if t.showlegend is False or not t.name:
+            continue
+        w = 46.0 + 6.2 * len(str(t.name))
+        if used and used + w > _LEGEND_WIDTH_PX:
+            rows += 1
+            used = 0.0
+        used += w
+    return (rows - 1) * _LEGEND_ROW_PX
+
+
+def _note_rows(spans: Sequence[tuple[float, float]]) -> list[int]:
+    """Row of each note (0 = top) so that notes in one row do not overlap; spans are shares of the plot width."""
+    rows: list[list[tuple[float, float]]] = []
+    out: list[int] = []
+    for a, b in spans:
+        for r, taken in enumerate(rows):
+            if all(b <= c or a >= d for c, d in taken):
+                taken.append((a, b))
+                out.append(r)
+                break
+        else:
+            rows.append([(a, b)])
+            out.append(len(rows) - 1)
+    return out
+
+
+def _bar_range(values: Iterable[float], *, pad_share: float) -> tuple[float, float]:
+    """Value-axis range of bars: :func:`_numeric_range`, starting at 0 when every value has one sign."""
+    arr = np.asarray(list(values), dtype=float)
+    arr = arr[np.isfinite(arr)]
+    lo, hi = _numeric_range(arr, pad_share=pad_share)
+    if arr.size and arr.min() >= 0:
+        lo = 0.0
+    if arr.size and arr.max() <= 0:
+        hi = 0.0
+    return lo, hi
+
+
+def _panel_refs(i: int) -> tuple[str, str]:
+    """``(xref, yref)`` axis names of subplot ``i`` (1-based) of ``make_subplots``."""
+    return ("x", "y") if i == 1 else (f"x{i}", f"y{i}")
+
+
+def _align_subplot_titles(fig: go.Figure) -> None:
+    """Left-align the subplot titles of ``make_subplots`` at the left edge of their panel, in secondary ink.
+
+    Call it right after ``make_subplots``, before any other annotation.
+    """
+    layout = fig.layout.to_plotly_json()
+    domains = [tuple(v["domain"]) for k, v in layout.items() if k.startswith("xaxis") and "domain" in v]
+    for ann in fig.layout.annotations:
+        x = float(ann.x)
+        start = next((d0 for d0, d1 in domains if abs((d0 + d1) / 2.0 - x) < 1e-6), 0.0)
+        ann.update(x=start, xanchor="left", font={"family": FONT_FAMILY, "size": 12, "color": INK_SECONDARY})
+
+
+def _positive_index(s: pd.Series) -> pd.Series:
+    """Rows of ``s`` whose index is a positive number (for a log x axis)."""
+    pos = pd.to_numeric(pd.Series(s.index, index=s.index), errors="coerce").to_numpy(dtype=float)
+    return s[np.isfinite(pos) & (pos > 0)]
+
+
+def _sorted_index(s: pd.Series) -> pd.Series:
+    if s.index.is_monotonic_increasing:
+        return s
+    try:
+        return s.sort_index(kind="stable")
+    except TypeError:
+        return s
+
+
+def _lambda_frame(obj: Any) -> pd.DataFrame:
+    """Float frame indexed by a positive ``lam`` (from a ``lam`` column or the index), sorted ascending."""
+    if obj is None or not isinstance(obj, (pd.DataFrame, pd.Series)) or len(obj) == 0:
+        return pd.DataFrame(dtype=float)
+    df = obj.to_frame() if isinstance(obj, pd.Series) else obj
+    if "lam" in df.columns:
+        lam = pd.to_numeric(df["lam"], errors="coerce").to_numpy(dtype=float)
+        df = df.drop(columns="lam")
+    else:
+        lam = pd.to_numeric(pd.Series(df.index), errors="coerce").to_numpy(dtype=float)
+    num = _float_frame(df)
+    num.index = pd.Index(lam, name="lam")
+    num = num[np.isfinite(lam) & (lam > 0)]
+    return num.sort_index(kind="stable")
+
+
+def _nearest_lambda(lams: np.ndarray, lam: float | None, *, rel_tol: float = 0.05) -> int | None:
+    """Position of the grid value nearest ``lam`` in log space; ``None`` when none is within ``rel_tol``."""
+    if lam is None or lams.size == 0:
+        return None
+    v = _to_float(lam)
+    if not (np.isfinite(v) and v > 0):
+        return None
+    gap = np.abs(np.log(lams) - math.log(v))
+    i = int(np.argmin(gap))
+    return i if gap[i] <= math.log1p(rel_tol) else None
+
+
+def _vertical_lines(
+    fig: go.Figure, x: Any, n_panels: int, *, dash: str = "dash", color: str = INK_SECONDARY
+) -> None:
+    """A vertical line at ``x`` across every panel (subplots ``1..n_panels``)."""
+    xv = _x_position(x)
+    for i in range(1, n_panels + 1):
+        xref, yref = _panel_refs(i)
+        fig.add_shape(
+            type="line", xref=xref, yref=f"{yref} domain", x0=xv, x1=xv, y0=0, y1=1,
+            line={"color": color, "width": 1, "dash": dash},
+        )
+
+
+def _top_note(
+    fig: go.Figure, x: Any, text: str, *, log_axis: bool = False, row: int = 0, right: bool = False
+) -> None:
+    """A small secondary-ink note at the top of the first panel in note row ``row``.
+
+    It starts at ``x`` (``right=False``) or ends there (``right=True``, for
+    notes near the right edge of the plot).
+    """
+    xa = _annotation_x(x, log_axis)
+    if _missing(xa):
+        return
+    fig.add_annotation(
+        x=xa, xref="x", y=1.0, yref="y domain", text=_esc(text), showarrow=False,
+        xanchor="right" if right else "left", yanchor="top", xshift=-4 if right else 4,
+        yshift=-2 - _NOTE_ROW_PX * row, font=_NOTE_FONT, bgcolor=_NOTE_BG,
+    )
+
+
+def _x_number(value: Any, *, is_date: bool, log_axis: bool) -> float:
+    """``value`` on a linear scale of the x axis (nanoseconds for dates, ``log10`` on a log axis); NaN if unknown."""
+    try:
+        if is_date:
+            return float(pd.Timestamp(value).value)
+        v = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    if log_axis:
+        return math.log10(v) if v > 0 else float("nan")
+    return v
+
+
+def line_panels(
+    panels: Sequence[Mapping[str, Any]] | None,
+    *,
+    shade: Iterable[tuple[Any, Any, str]] = (),
+    markers: Iterable[tuple[Any, str]] = (),
+    x_title: str | None = None,
+    x_log: bool = False,
+    title: str | None = None,
+    subtitle: str | None = None,
+    height: int | None = None,
+) -> go.Figure:
+    """One to three stacked line panels sharing the x axis, with shaded windows and dashed markers (G.16).
+
+    The generic time-series view of the BKS trace page: daily attention and
+    returns, the divisor, the shocks, an instrument over the weeks, a kernel
+    profile, the fitted factors. Each panel has its own y axis (no secondary
+    axis); the x axis is shared, a date axis when any series has a
+    DatetimeIndex, else numeric (or logarithmic with ``x_log``). Missing
+    values break the line (gaps, not interpolation).
+
+    Parameters
+    ----------
+    panels:
+        Top to bottom, at most :data:`MAX_LINE_PANELS`; each a mapping with
+
+        * ``"series"``: ``Mapping[name, pd.Series]``, drawn at each Series'
+          own index (the name is the legend and hover name);
+        * ``"y_title"``: the panel's y axis title;
+        * ``"styles"`` (optional): ``Mapping[name, dict]`` with any of
+          ``color``, ``dash`` (``"solid"``, ``"dash"``, ``"dot"``),
+          ``mode`` (``"lines"``, ``"markers"``, ``"lines+markers"``;
+          default lines with markers up to 40 points), ``width``,
+          ``fill`` (``"tozeroy"``) and ``opacity``;
+        * ``"zero_line"`` (optional): draw the zero line;
+        * ``"title"`` (optional): a subplot title, left-aligned above the panel;
+        * ``"tickformat"`` / ``"hoverformat"`` (optional): d3 formats of the
+          y values, for example ``".1%"`` for shares in percent (the hover
+          then defaults to ``".2%"``, else ``".4g"``).
+
+        Series without a finite value are skipped and panels left without a
+        series are dropped. Colours follow :data:`CATEGORICAL` in order of
+        first appearance across panels; the same name keeps its colour (and
+        one legend entry) in every panel. Names past the eighth slot without
+        an explicit colour are drawn in muted ink (never cycled).
+    shade:
+        ``(start, end, label)`` windows (for example training and forecast)
+        drawn as light rectangles on every panel, the label at the top of
+        the first panel. Adjacent windows alternate two tones.
+    markers:
+        ``(x, label)`` vertical dashed lines on every panel (for example the
+        instrument week or the training start), labelled at the top of the
+        first panel. Window and marker labels that would overlap (at an
+        assumed plot width of 700 px) go to separate rows; a label that would
+        run past the right edge ends at its x instead of starting there.
+    x_title:
+        Title of the bottom x axis.
+    x_log:
+        Logarithmic x axis; points with a non-positive x are dropped.
+    title, subtitle:
+        Figure title (default none) and a second line.
+    height:
+        Figure height in pixels (default from the number of panels).
+
+    Returns
+    -------
+    go.Figure
+        One trace per series and panel (``Scattergl`` above 3,000 points),
+        unified hover along x.
+    """
+    items = list(panels or [])
+    if len(items) > MAX_LINE_PANELS:
+        logger.warning("line_panels: %d panels given; showing the first %d", len(items), MAX_LINE_PANELS)
+        items = items[:MAX_LINE_PANELS]
+    prepared: list[tuple[Mapping[str, Any], list[tuple[str, dict[str, Any], pd.Series]]]] = []
+    for panel in items:
+        series = panel.get("series")
+        if series is None:
+            series = {}
+        elif isinstance(series, pd.Series):
+            series = {series.name if series.name is not None else "value": series}
+        styles = panel.get("styles") or {}
+        kept: list[tuple[str, dict[str, Any], pd.Series]] = []
+        for key, obj in dict(series).items():
+            s = _float_series(obj)
+            if not isinstance(s.index, pd.DatetimeIndex) and s.index.inferred_type in ("date", "datetime64"):
+                s = s.set_axis(pd.DatetimeIndex(s.index))  # datetime.date objects: a date axis all the same
+            if x_log and not s.empty:
+                s = _positive_index(s)
+            if _no_data(s):
+                continue
+            style = styles.get(key, styles.get(str(key)))
+            kept.append((str(key), dict(style or {}), _sorted_index(s)))
+        if kept:
+            prepared.append((panel, kept))
+    if not prepared:
+        return _empty_figure("No series to show", title=title)
+
+    names = list(dict.fromkeys(name for _, kept in prepared for name, _, _ in kept))
+    explicit: dict[str, str] = {}
+    for _, kept in prepared:
+        for name, style, _ in kept:
+            c = style.get("color")
+            if c and name not in explicit:
+                explicit[name] = str(c)
+    colors: dict[str, str] = {}
+    slot = 0
+    for name in names:
+        if name in explicit:
+            colors[name] = explicit[name]
+        elif slot < len(CATEGORICAL):
+            colors[name] = CATEGORICAL[slot]
+            slot += 1
+        else:
+            logger.warning("line_panels: more than %d series without a colour; %r is drawn muted",
+                           len(CATEGORICAL), name)
+            colors[name] = INK_MUTED
+    legend = len(names) >= 2
+    is_date = any(isinstance(s.index, pd.DatetimeIndex) for _, kept in prepared for _, _, s in kept)
+
+    n = len(prepared)
+    titles = [str(panel.get("title") or "") for panel, _ in prepared]
+    has_titles = any(titles)
+    gap_px = 52 if has_titles else 30
+    plot_px = n * _PANEL_PX[n] + (n - 1) * gap_px
+    fig = make_subplots(
+        rows=n,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=gap_px / plot_px if n > 1 else 0.0,
+        subplot_titles=[_esc(t) for t in titles] if has_titles else None,
+    )
+    if has_titles:
+        _align_subplot_titles(fig)
+
+    seen: set[str] = set()
+    for i, (panel, kept) in enumerate(prepared, start=1):
+        tickformat = str(panel.get("tickformat") or "")
+        fmt = str(panel.get("hoverformat") or (".2%" if "%" in tickformat else ".4g"))
+        for name, style, s in kept:
+            color = str(style.get("color") or colors[name])
+            n_pts = len(s)
+            mode = style.get("mode") if style.get("mode") in _LINE_MODES else (
+                "lines+markers" if n_pts <= 40 else "lines")
+            dash = style.get("dash") if style.get("dash") in _DASHES else "solid"
+            width = _to_float(style.get("width", 1.5 if n_pts <= 1000 else 1.0))
+            opacity = _to_float(style.get("opacity", 1.0))
+            trace_cls = go.Scattergl if n_pts > 3000 else go.Scatter
+            marker: dict[str, Any] = {"size": 6, "color": color}
+            if trace_cls is go.Scatter:
+                marker["line"] = {"width": 1, "color": SURFACE}
+            extra: dict[str, Any] = {}
+            if style.get("fill") == "tozeroy":
+                extra = {"fill": "tozeroy", "fillcolor": _rgba(color, 0.18)}
+            x = s.index if isinstance(s.index, pd.DatetimeIndex) else s.index.to_numpy()
+            fig.add_trace(
+                trace_cls(
+                    x=x,
+                    y=s.to_numpy(),
+                    mode=mode,
+                    line={"color": color, "width": width if np.isfinite(width) else 1.5, "dash": dash},
+                    marker=marker,
+                    opacity=opacity if np.isfinite(opacity) else 1.0,
+                    name=_esc(_truncate(name, 40)),
+                    legendgroup=name,
+                    showlegend=legend and name not in seen,
+                    hovertemplate=f"{_esc(name)}: %{{y:{fmt}}}<extra></extra>",
+                    **extra,
+                ),
+                row=i,
+                col=1,
+            )
+            seen.add(name)
+
+    extra_top = (_SUBPLOT_TITLE_PX if titles[0] else 0) + (_legend_extra_px(fig) if legend else 0)
+    if height is None:
+        height = _header_px(title, subtitle, legend) + extra_top + plot_px + 72
+    fig.update_layout(**{**_base_layout(title, height, subtitle=subtitle, legend=legend, extra_top=extra_top),
+                         "hovermode": "x unified"})
+    _style_axes(fig)
+    for i, (panel, _) in enumerate(prepared, start=1):
+        y_axis: dict[str, Any] = {"title": {"text": _esc(panel.get("y_title") or "")}}
+        if panel.get("zero_line"):
+            y_axis.update(_ZERO_LINE)
+        if panel.get("tickformat"):
+            y_axis["tickformat"] = str(panel["tickformat"])
+        fig.update_yaxes(**y_axis, row=i, col=1)
+    fig.update_xaxes(showspikes=True, spikecolor=BASELINE, spikethickness=1, spikedash="solid", spikemode="across",
+                     hoverformat="%Y-%m-%d" if is_date else ".4g")
+    if x_log:
+        fig.update_xaxes(type="log")
+    if x_title:
+        fig.update_xaxes(title={"text": _esc(x_title)}, row=n, col=1)
+
+    # Windows and markers on every panel; their labels in rows at the top of the first panel, placed so
+    # that labels in one row do not overlap (at an assumed plot width) and none runs past the right edge.
+    windows = [(tuple(item) + (None, None, None))[:3] for item in (shade or ())]
+    windows = [w for w in windows if not (_missing(w[0]) or _missing(w[1]))]
+    lines = [(tuple(item) + (None, None))[:2] for item in (markers or ())]
+    lines = [m for m in lines if not _missing(m[0])]
+    xs = [_x_number(v, is_date=is_date, log_axis=x_log) for _, kept in prepared for _, _, s in kept
+          for v in (s.index[0], s.index[-1])]
+    xs += [_x_number(v, is_date=is_date, log_axis=x_log) for w in windows for v in w[:2]]
+    xs += [_x_number(m[0], is_date=is_date, log_axis=x_log) for m in lines]
+    finite = [v for v in xs if np.isfinite(v)]
+    lo, hi = (min(finite), max(finite)) if finite else (0.0, 1.0)
+    span = hi - lo if hi > lo else 1.0
+
+    def share(v: Any) -> float:
+        return (_x_number(v, is_date=is_date, log_axis=x_log) - lo) / span
+
+    notes: list[tuple[Any, str, bool, tuple[float, float]]] = []  # (x, label, ends at x, span)
+
+    def add_note(start: Any, end: Any, label: str) -> None:
+        """Queue a label starting at ``start``, or ending at ``end`` when it would run past the right edge."""
+        w = (6.0 * len(label) + 12) / _PLOT_WIDTH_PX
+        a = share(start)
+        if not np.isfinite(a):
+            notes.append((start, label, False, (0.0, 1.0)))
+        elif a + w > 1.0:
+            b = share(end)
+            notes.append((end, label, True, (b - w, b)))
+        else:
+            notes.append((start, label, False, (a, a + w)))
+
+    for j, (start, end, label) in enumerate(windows):
+        for i in range(1, n + 1):
+            xref, yref = _panel_refs(i)
+            fig.add_shape(
+                type="rect", xref=xref, yref=f"{yref} domain", x0=_x_position(start), x1=_x_position(end),
+                y0=0, y1=1, fillcolor=GRIDLINE, opacity=_SHADE_OPACITY[j % 2], line={"width": 0}, layer="below",
+            )
+        if label:
+            add_note(start, end, str(label))
+    for x, label in lines:
+        _vertical_lines(fig, x, n)
+        if label:
+            add_note(x, x, str(label))
+    for (x, label, right, _), row in zip(notes, _note_rows([nt[3] for nt in notes])):
+        _top_note(fig, x, label, log_axis=x_log, row=row, right=right)
+    return fig
+
+
+def matrix_heatmap(
+    values: pd.DataFrame,
+    *,
+    row_labels: Mapping[Any, Any] | pd.Series | None = None,
+    col_labels: Mapping[Any, Any] | pd.Series | None = None,
+    value_label: str = "value",
+    zmax: float | None = None,
+    show_text: bool | None = None,
+    max_rows: int | None = 80,
+    max_cols: int | None = 45,
+    title: str | None = None,
+    subtitle: str | None = None,
+    row_title: str | None = None,
+    col_title: str | None = None,
+    highlight_rows: Iterable[Any] = (),
+    decimals: int | None = None,
+) -> go.Figure:
+    """A signed matrix as a heatmap: rows top-down, column labels on top, highlighted rows outlined (G.16).
+
+    Used on the trace page for the design matrix of one return week (assets
+    x instruments) and the standardised ``Gamma`` (instruments x factors).
+    Colours use :data:`DIVERGING_COLORSCALE`, symmetric around 0; missing
+    cells are blank.
+
+    Parameters
+    ----------
+    values:
+        Any rows x columns frame of signed numbers, in display order.
+    row_labels, col_labels:
+        Display names by row key and by column key (dict or Series); row
+        labels are cut at :data:`ROW_LABEL_CHARS` and column labels at
+        :data:`COL_LABEL_CHARS` characters (the hover shows the full name).
+    value_label:
+        Name of the cell value (colour bar and hover).
+    zmax:
+        The colour scale runs from ``-zmax`` to ``zmax``; default the
+        largest displayed ``|value|``.
+    show_text:
+        Print the values in the cells; default when at most 400 cells are
+        displayed.
+    max_rows, max_cols:
+        Keep the first ``max_rows`` rows and ``max_cols`` columns (``None``
+        keeps all); highlighted rows beyond the limit replace the last kept
+        rows. The subtitle notes "showing X of Y rows" and "X of Y columns".
+    title, subtitle:
+        Figure title (default none) and a second line; the truncation note
+        is appended to the subtitle.
+    row_title, col_title:
+        Axis titles for the rows (left) and the columns (above the labels).
+    highlight_rows:
+        Row keys drawn with a bold label and an ink outline (for example the
+        selected asset).
+    decimals:
+        Decimals of the cell text; default from the size of ``zmax`` (2 from
+        about 0.1 up, at most 4). The hover shows four significant digits.
+
+    Returns
+    -------
+    go.Figure
+        One heatmap trace named ``value_label`` (``coloraxis``) and, with
+        cell text, a text trace named ``"<value_label> values"``.
+    """
+    vals = _float_frame(values)
+    if vals.size == 0 or _no_data(vals):
+        return _empty_figure(f"No {value_label} values to show", title=title)
+
+    n_rows_total, n_cols_total = vals.shape
+    keys = _key_set(highlight_rows)
+    is_high = np.array([_in_keys(k, keys) for k in vals.index], dtype=bool)
+    keep = np.ones(n_rows_total, dtype=bool)
+    notes: list[str] = []
+    if max_rows is not None and int(max_rows) > 0 and n_rows_total > int(max_rows):
+        k = int(max_rows)
+        keep[:] = False
+        keep[:k] = True
+        missing = np.flatnonzero(is_high & ~keep)
+        if missing.size:
+            droppable = np.flatnonzero(keep & ~is_high)[::-1][: missing.size]
+            keep[droppable] = False
+            keep[missing[: droppable.size]] = True
+        notes.append(f"showing {int(keep.sum())} of {n_rows_total} rows"
+                     + (" (the highlighted rows included)" if missing.size else ""))
+        logger.info("matrix_heatmap: showing %d of %d rows", int(keep.sum()), n_rows_total)
+    n_cols = n_cols_total
+    if max_cols is not None and int(max_cols) > 0 and n_cols_total > int(max_cols):
+        n_cols = int(max_cols)
+        notes.append(f"showing {n_cols} of {n_cols_total} columns")
+        logger.info("matrix_heatmap: showing %d of %d columns", n_cols, n_cols_total)
+    view = vals.iloc[np.flatnonzero(keep), :n_cols]
+    is_high = is_high[keep]
+    z = view.to_numpy()
+    n_rows = z.shape[0]
+    subtitle_text = _with_note(subtitle, ", ".join(notes) if notes else None)
+
+    if zmax is None or not np.isfinite(zmax) or zmax <= 0:
+        m = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else float("nan")
+        zmax = m if np.isfinite(m) and m > 0 else 1.0
+    zmax = float(zmax)
+    if show_text is None:
+        show_text = z.size <= 400
+    decimals = _auto_decimals(zmax) if decimals is None else int(decimals)
+    row_h = 24 if show_text else int(max(12, min(22, 720 // max(n_rows, 1))))
+    tick_size = 11 if row_h >= 16 else 9
+
+    row_full = [_category_name(row_labels, r) for r in view.index]
+    col_full = [_category_name(col_labels, c) for c in view.columns]
+    row_ticks = [
+        f"<b>{_esc(_truncate(t, ROW_LABEL_CHARS))}</b>" if h else _esc(_truncate(t, ROW_LABEL_CHARS))
+        for t, h in zip(row_full, is_high)
+    ]
+    col_ticks = [_esc(_truncate(t, COL_LABEL_CHARS)) for t in col_full]
+    hover = [
+        [f"{_esc(r)}<br>{_esc(c)}<br>{_esc(value_label)}: {z[i, j]:.4g}" for j, c in enumerate(col_full)]
+        for i, r in enumerate(row_full)
+    ]
+    max_len = max((len(t) for t in col_ticks), default=4)
+    rotate = max_len * 6.5 + 8 > 640.0 / max(n_cols, 1)
+    label_px = (int(6.3 * max_len) + 14 if rotate else 22) + (20 if col_title else 0)
+    plot_h = row_h * n_rows
+    bottom = 16
+    header = _header_px(title, subtitle_text)
+    height = max(200, header + label_px + plot_h + bottom)
+
+    fig = go.Figure()
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle_text, extra_top=label_px, margin={"b": bottom}))
+    _style_axes(fig)
+    fig.add_trace(
+        go.Heatmap(
+            z=z,
+            x=list(range(n_cols)),
+            y=list(range(n_rows)),
+            coloraxis="coloraxis",
+            xgap=CELL_GAP_PX if n_cols <= 60 else 1,
+            ygap=CELL_GAP_PX if row_h >= 14 else 1,
+            hoverongaps=False,
+            hovertext=hover,
+            hovertemplate="%{hovertext}<extra></extra>",
+            name=value_label,
+        )
+    )
+    if show_text:
+        text_trace = _cell_text_trace(z, zmax, font_size=10 if n_cols <= 30 else 9, name=f"{value_label} values",
+                                      decimals=decimals)
+        if text_trace is not None:
+            fig.add_trace(text_trace)
+    for i in np.flatnonzero(is_high):
+        fig.add_shape(type="rect", xref="x", yref="y", x0=-0.5, x1=n_cols - 0.5, y0=i - 0.5, y1=i + 0.5,
+                      line={"color": INK, "width": 1.5}, fillcolor="rgba(0,0,0,0)")
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(n_cols)),
+        ticktext=col_ticks,
+        range=[-0.5, n_cols - 0.5],
+        showgrid=False,
+        side="top",
+        tickangle=-90 if rotate else 0,
+        tickfont={"size": 11, "color": INK},
+        title={"text": _esc(col_title) if col_title else None, "standoff": 6},
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(n_rows)),
+        ticktext=row_ticks,
+        range=[n_rows - 0.5, -0.5],
+        showgrid=False,
+        tickfont={"size": tick_size, "color": INK},
+        title={"text": _esc(row_title) if row_title else None, "standoff": 6},
+    )
+    fig.update_layout(
+        coloraxis={
+            "colorscale": [list(p) for p in DIVERGING_COLORSCALE],
+            "cmin": -zmax,
+            "cmax": zmax,
+            "colorbar": {
+                "title": {"text": _esc(value_label), "side": "top", "font": {"size": 11, "color": INK_SECONDARY}},
+                "thickness": 10,
+                "lenmode": "pixels",
+                "len": int(max(80, min(220, plot_h))),
+                "y": 1.0,
+                "yanchor": "top",
+                "x": 1.01,
+                "xanchor": "left",
+                "outlinewidth": 0,
+                "tickfont": {"size": 10, "color": INK_SECONDARY},
+            },
+        },
+    )
+    return fig
+
+
+def ladder_chart(
+    ladder: pd.DataFrame | None,
+    *,
+    metrics: Sequence[tuple[str, str]] = (
+        ("spearman", "Spearman with true sensitivities"),
+        ("median_r2", "Median OOS R²"),
+    ),
+    label_col: str = "label",
+    highlight: Any = None,
+    reference: Any = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> go.Figure:
+    """The reference ladder: one row per variant, one horizontal-bar panel per metric side by side (G.16).
+
+    Rows keep the order of ``ladder`` (top to bottom, from what is
+    achievable to what BKS delivers), so the drop between two rows is the
+    signal lost at that step. The highlighted variant is blue, the reference
+    variants (for example the true sensitivities) ink, the others muted.
+
+    Parameters
+    ----------
+    ladder:
+        One row per variant (index: variant key), with the metric columns,
+        an optional ``label_col`` (display name) and optional
+        ``d_<metric>`` columns (change from the row above, shown in the
+        hover).
+    metrics:
+        ``(column, panel title)`` pairs, one panel each, left to right.
+        Columns missing or without a finite value are skipped. Metrics whose
+        key ends with ``"r2"`` are shown in percent.
+    label_col:
+        Column with the row names (cut at :data:`LADDER_LABEL_CHARS`
+        characters); default the index keys.
+    highlight:
+        Index key drawn in blue with a bold label (for example
+        ``"bks_implied"``).
+    reference:
+        Index key or keys drawn in ink (for example ``"oracle"``).
+    title, subtitle:
+        Figure title (default "Reference ladder") and a second line.
+
+    Returns
+    -------
+    go.Figure
+        One bar trace per metric (``xaxis``, ``xaxis2``, ...), sharing the
+        y axis; no legend (the colours are roles, named in the caption).
+    """
+    title = title if title is not None else "Reference ladder"
+    if ladder is None or not isinstance(ladder, pd.DataFrame) or ladder.empty:
+        return _empty_figure("No ladder values to show", title=title)
+    shown = [(str(key), str(name)) for key, name in metrics
+             if key in ladder.columns and not _no_data(_float_series(ladder[key]))]
+    if not shown:
+        return _empty_figure("No ladder values to show", title=title)
+
+    keys = list(ladder.index)
+    names_map = ladder[label_col] if label_col in ladder.columns else None
+    names = [_category_name(names_map, k) for k in keys]
+    refs = _key_set(reference)
+    high = None if highlight is None else str(highlight)
+    colors = [BLUE if str(k) == high else INK if str(k) in refs else INK_MUTED for k in keys]
+    pos = np.arange(len(keys), dtype=float)
+
+    fig = make_subplots(rows=1, cols=len(shown), shared_yaxes=True, horizontal_spacing=0.06,
+                        subplot_titles=[_esc(name) for _, name in shown])
+    _align_subplot_titles(fig)
+    for j, (key, name) in enumerate(shown, start=1):
+        v = _float_series(ladder[key]).to_numpy()
+        d_col = f"d_{key}"
+        d = _float_series(ladder[d_col]).to_numpy() if d_col in ladder.columns else np.full(len(v), np.nan)
+        pct = key.lower().endswith("r2")
+        dec = _auto_decimals(float(np.nanmax(np.abs(v))) if np.isfinite(v).any() else 1.0)
+
+        def fmt(x: float, sign: bool = False, pct: bool = pct, dec: int = dec) -> str:
+            return _fmt(x, 1, scale=100.0, suffix="%", sign=sign) if pct else _fmt(x, dec, sign=sign)
+
+        hover = []
+        for nm, x, dx in zip(names, v, d):
+            text = f"{_esc(nm)}<br>{_esc(name)}: {fmt(x) or 'not available'}"
+            if np.isfinite(dx):
+                text += f"<br>Change from the row above: {fmt(dx, sign=True)}"
+            hover.append(text)
+        fig.add_trace(
+            go.Bar(
+                x=v,
+                y=pos,
+                orientation="h",
+                width=0.62,
+                marker={"color": colors, "line": {"width": 0}},
+                text=[fmt(x) for x in v],
+                textposition="outside",
+                textfont={"family": FONT_FAMILY, "size": 11, "color": INK_SECONDARY},
+                cliponaxis=False,
+                constraintext="none",
+                name=_esc(name),
+                showlegend=False,
+                hovertext=hover,
+                hovertemplate="%{hovertext}<extra></extra>",
+            ),
+            row=1,
+            col=j,
+        )
+        lo, hi = _bar_range(v, pad_share=0.28)
+        fig.update_xaxes(range=[lo, hi], tickformat=".0%" if pct else None, **_ZERO_LINE, row=1, col=j)
+
+    height = _header_px(title, subtitle) + _SUBPLOT_TITLE_PX + 30 * len(keys) + 56
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle, extra_top=_SUBPLOT_TITLE_PX))
+    _style_axes(fig)
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=pos.tolist(),
+        ticktext=[f"<b>{_esc(_truncate(nm, LADDER_LABEL_CHARS))}</b>" if str(k) == high
+                  else _esc(_truncate(nm, LADDER_LABEL_CHARS)) for k, nm in zip(keys, names)],
+        range=[len(keys) - 0.4, -0.6],
+        showgrid=False,
+        tickfont={"size": 11, "color": INK},
+        row=1,
+        col=1,
+    )
+    return fig
+
+
+def identity_scatter(
+    x: pd.Series,
+    y: pd.Series,
+    *,
+    labels: Mapping[Any, Any] | pd.Series | None = None,
+    highlight: Any = None,
+    x_title: str,
+    y_title: str,
+    title: str | None = None,
+    subtitle: str | None = None,
+    fit_line: bool = True,
+    identity_line: bool = True,
+    highlight_label: str = "Highlighted",
+    point_label: str = "Points",
+    max_points: int | None = MAX_SCATTER_POINTS,
+) -> go.Figure:
+    """``y`` against ``x`` with the 45-degree line and the least-squares line; slope and correlation noted (G.16).
+
+    The trace page's "is it what it should be" view: instruments against
+    their population reference, realised against fitted returns of one
+    week, estimated against true sensitivities. Points on the 45-degree line
+    agree; the least-squares slope says by how much ``y`` is scaled
+    relative to ``x`` and the correlation how well they line up.
+
+    Parameters
+    ----------
+    x, y:
+        Series aligned by index (``y`` is reindexed to ``x`` when the indexes
+        differ); pairs with a missing value are dropped. A MultiIndex (for
+        example topic-asset pairs) is fine.
+    labels:
+        Display names by index key for the hover; a tuple key without its
+        own name joins the names of its parts (so one mapping of asset and
+        topic names serves topic-asset pairs).
+    highlight:
+        Index key or keys (list or tuple of keys) drawn in orange on top, the
+        others muted. With a MultiIndex, a value highlights every point that
+        has it on any level (for example one asset among topic-asset pairs);
+        a full key is a tuple inside a list, ``[("T1", "A2")]``.
+    x_title, y_title:
+        Axis titles (also the hover names of the values).
+    title, subtitle:
+        Figure title (default none) and a second line; the count, the
+        least-squares slope of ``y`` on ``x`` and the Pearson correlation
+        are appended to it.
+    fit_line, identity_line:
+        Draw the least-squares line (a dashed trace) and the 45-degree line
+        (a shape). With the 45-degree line both axes share one range and
+        scale, so a slope below one is visible as points below the line.
+    highlight_label, point_label:
+        Legend names of the highlighted and the other points.
+    max_points:
+        Most points drawn (default :data:`MAX_SCATTER_POINTS`; ``None``
+        draws all): the highlighted points and an evenly spaced sample of
+        the rest, noted in the subtitle. The statistics use every pair.
+
+    Returns
+    -------
+    go.Figure
+        Marker traces (``Scattergl`` above 3,000 points) with the point
+        names in ``customdata``, and the least-squares line.
+
+    Validity boundaries
+    -------------------
+    The slope and correlation are descriptive over the given pairs (no
+    standard errors); with fewer than three pairs or no spread in ``x``
+    they are left out.
+    """
+    xs = _float_series(x)
+    ys = _float_series(y)
+    if xs.empty or ys.empty:
+        return _empty_figure("No pairs to compare", title=title)
+    if not xs.index.equals(ys.index):
+        try:
+            ys = ys.reindex(xs.index)
+        except ValueError:
+            if len(ys) != len(xs):
+                logger.warning("identity_scatter: x and y cannot be aligned (duplicate labels, different lengths)")
+                return _empty_figure("No pairs to compare", title=title)
+            ys = pd.Series(ys.to_numpy(), index=xs.index)
+    xv, yv = xs.to_numpy(), ys.to_numpy()
+    ok = np.isfinite(xv) & np.isfinite(yv)
+    if not ok.any():
+        return _empty_figure("No pairs to compare", title=title)
+    keys = np.asarray(xs.index, dtype=object)[ok]
+    xv, yv = xv[ok], yv[ok]
+    n_pts = int(xv.size)
+
+    slope = intercept = corr = float("nan")
+    if n_pts >= 3:
+        dx, dy = xv - xv.mean(), yv - yv.mean()
+        sxx, syy = float(dx @ dx), float(dy @ dy)
+        if sxx > 0:
+            slope = float(dx @ dy) / sxx
+            intercept = float(yv.mean() - slope * xv.mean())
+            if syy > 0:
+                corr = float(dx @ dy) / math.sqrt(sxx * syy)
+
+    high_keys = _key_set(highlight)
+    is_high = np.array([_in_keys(k, high_keys) for k in keys], dtype=bool) if high_keys else np.zeros(n_pts, bool)
+    drawn = np.ones(n_pts, dtype=bool)
+    sample_note = None
+    if max_points is not None and int(max_points) > 0 and n_pts > int(max_points):
+        others = np.flatnonzero(~is_high)
+        room = min(max(int(max_points) - int(is_high.sum()), 0), others.size)
+        take = others[np.unique(np.linspace(0, others.size - 1, room).round().astype(int))] if room else others[:0]
+        drawn[:] = is_high
+        drawn[take] = True
+        sample_note = (f"showing {int(drawn.sum()):,} of {n_pts:,} points (evenly spaced sample); "
+                       "the slope and correlation use all")
+        logger.info("identity_scatter: drawing %d of %d points", int(drawn.sum()), n_pts)
+    stats = f"{n_pts:,} points"
+    if np.isfinite(slope):
+        stats += f"; least-squares slope {slope:.2f}"
+    if np.isfinite(corr):
+        stats += f", correlation {corr:.2f}"
+    subtitle_text = _with_note(_with_note(subtitle, stats), sample_note)
+
+    names = np.array([_esc(_point_name(labels, k)) for k in keys], dtype=object)
+    n_drawn = int(drawn.sum())
+    trace_cls = go.Scattergl if n_drawn > 3000 else go.Scatter
+    size = 8 if n_drawn <= 2000 else 5
+    hover = (f"%{{customdata}}<br>{_esc(x_title)}: %{{x:.4g}}<br>{_esc(y_title)}: %{{y:.4g}}"
+             "<extra></extra>")
+    has_high = bool(is_high.any())
+    groups = [(drawn & ~is_high, point_label, INK_MUTED if has_high else BLUE, 0.55 if has_high else 0.75, size),
+              (drawn & is_high, highlight_label, ORANGE, 1.0, size + 2)]
+    fig = go.Figure()
+    for m, name, color, alpha, sz in groups:
+        if not m.any():
+            continue
+        marker: dict[str, Any] = {"size": sz, "color": color, "opacity": alpha}
+        if trace_cls is go.Scatter:
+            marker["line"] = {"width": 1, "color": SURFACE}
+        fig.add_trace(trace_cls(x=xv[m], y=yv[m], mode="markers", marker=marker, name=_esc(name),
+                                customdata=names[m], hovertemplate=hover))
+
+    shown_vals = np.concatenate([xv, yv])
+    lo, hi = _numeric_range(shown_vals, pad_share=0.05, include_zero=False)
+    x_lo, x_hi = (lo, hi) if identity_line else _numeric_range(xv, pad_share=0.05, include_zero=False)
+    if fit_line and np.isfinite(slope):
+        fig.add_trace(
+            go.Scatter(
+                x=[x_lo, x_hi],
+                y=[intercept + slope * x_lo, intercept + slope * x_hi],
+                mode="lines",
+                line={"color": INK_SECONDARY, "width": 1.5, "dash": "dash"},
+                name="Least-squares line",
+                hovertemplate=(f"Least-squares line<br>slope {slope:.3f}, intercept {intercept:.3g}"
+                               "<extra></extra>"),
+            )
+        )
+    if identity_line:
+        fig.add_shape(type="line", xref="x", yref="y", x0=lo, y0=lo, x1=hi, y1=hi,
+                      line={"color": INK_MUTED, "width": 1}, layer="below")
+        fig.add_annotation(x=hi, y=hi, text="y = x", showarrow=False, xanchor="right", yanchor="bottom",
+                           font=_NOTE_FONT)
+    legend = len(fig.data) >= 2
+    extra_top = _legend_extra_px(fig) if legend else 0
+    fig.update_layout(**_base_layout(title, 480 + extra_top, subtitle=subtitle_text, legend=legend,
+                                     extra_top=extra_top))
+    _style_axes(fig)
+    fig.update_xaxes(title={"text": _esc(x_title)}, **_ZERO_LINE)
+    fig.update_yaxes(title={"text": _esc(y_title)}, **_ZERO_LINE)
+    if identity_line:
+        fig.update_xaxes(range=[lo, hi])
+        fig.update_yaxes(range=[lo, hi], scaleanchor="x", scaleratio=1)
+    return fig
+
+
+def grouped_bars(
+    frame: pd.DataFrame | pd.Series | None,
+    *,
+    labels: Mapping[Any, Any] | pd.Series | None = None,
+    series_labels: Mapping[Any, Any] | None = None,
+    colors: Mapping[Any, str] | Sequence[str] | None = None,
+    axis_title: str | None = None,
+    reference: tuple[float, str] | None = None,
+    orientation: str = "h",
+    top_n: int | None = None,
+    sort_by: Any = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+    percent: bool = False,
+    separate: bool = False,
+) -> go.Figure:
+    """Bars per category, one bar per series side by side (grouped), or one panel per series (G.16).
+
+    Rows of ``frame`` are the categories (topics, forecast weeks,
+    instruments, directions), columns the series (for example the true and
+    the estimated sensitivity of one asset per topic).
+
+    Parameters
+    ----------
+    frame:
+        Categories x series (a Series is one series). Series without a
+        finite value are dropped; at most eight series are drawn (one
+        categorical slot each, never cycled).
+    labels:
+        Display names by category (dates read as ``YYYY-MM-DD``).
+    series_labels:
+        Display names by column (legend, hover, panel titles).
+    colors:
+        Colour by column (mapping) or in column order (sequence); default
+        :data:`CATEGORICAL` in column order.
+    axis_title:
+        Title of the value axis.
+    reference:
+        ``(value, label)`` (or a bare value): a dashed line at ``value`` on
+        the value axis of every panel (for example 1.0 for the KKT ratio),
+        labelled at the top.
+    orientation:
+        ``"h"`` (categories as rows, first on top) or ``"v"`` (categories
+        along x, first on the left).
+    top_n:
+        Keep the ``top_n`` categories with the largest ``max |value|`` over
+        the series, in their original order (or ``sort_by``); the subtitle
+        notes the rest. ``None`` keeps every category up to
+        :data:`MAX_BAR_ROWS`.
+    sort_by:
+        Column whose values order the categories, largest first; default
+        the order of ``frame``.
+    title, subtitle:
+        Figure title (default none) and a second line.
+    percent:
+        Values are shares: axis ticks, bar text and hover in percent.
+    separate:
+        One panel per series with its own value axis (for series on
+        different scales): side by side for ``"h"``, stacked for ``"v"``;
+        the panel titles name the series and there is no legend.
+
+    Returns
+    -------
+    go.Figure
+        One bar trace per series (value text on the bars when at most 30
+        bars are drawn); a legend with two or more grouped series.
+    """
+    if orientation not in ("h", "v"):
+        raise ValueError("orientation must be 'h' or 'v'")
+    if isinstance(frame, pd.Series):
+        frame = frame.to_frame(name=frame.name if frame.name is not None else "value")
+    data = _float_frame(frame)
+    if data.size == 0 or _no_data(data):
+        return _empty_figure("No values to show", title=title)
+    data = data.iloc[:, [j for j in range(data.shape[1]) if not _no_data(data.iloc[:, j])]]
+    if data.shape[1] > len(CATEGORICAL):
+        logger.warning("grouped_bars: %d series given; showing the first %d", data.shape[1], len(CATEGORICAL))
+        data = data.iloc[:, : len(CATEGORICAL)]
+    cols = list(data.columns)
+
+    n_total = len(data)
+    limit = int(top_n) if top_n is not None and int(top_n) > 0 else MAX_BAR_ROWS
+    note = None
+    if n_total > limit:
+        arr = data.to_numpy()
+        size = np.where(np.isfinite(arr), np.abs(arr), -1.0).max(axis=1)
+        keep = np.sort(np.argsort(-size, kind="stable")[:limit])
+        data = data.iloc[keep]
+        note = f"showing {limit} of {n_total} rows (largest absolute values)"
+        logger.info("grouped_bars: showing %d of %d rows", limit, n_total)
+    if sort_by is not None and sort_by in data.columns:
+        key = data[sort_by].to_numpy()
+        data = data.iloc[np.lexsort((np.arange(len(key)), np.where(np.isfinite(key), -key, np.inf)))]
+    subtitle_text = _with_note(subtitle, note)
+
+    cats = list(data.index)
+    names = [_category_name(labels, c) for c in cats]
+    pos = np.arange(len(cats), dtype=float)
+    if isinstance(colors, Mapping):
+        palette = [str(colors.get(c) or CATEGORICAL[i]) for i, c in enumerate(cols)]
+    elif colors is not None:
+        seq = [str(c) for c in colors]
+        palette = [seq[i] if i < len(seq) else CATEGORICAL[i] for i in range(len(cols))]
+    else:
+        palette = list(CATEGORICAL[: len(cols)])
+    snames = [_label(series_labels, c) for c in cols]
+    n_bars = int(np.isfinite(data.to_numpy()).sum())
+    show_text = n_bars <= 30
+
+    def fmt(v: float) -> str:
+        if not np.isfinite(v):
+            return ""
+        return _fmt(v, 1, scale=100.0, suffix="%") if percent else _fmt_sig(v, 3)
+
+    horizontal = orientation == "h"
+    n_series = len(cols)
+    if separate and n_series >= 2:
+        if horizontal:
+            fig = make_subplots(rows=1, cols=n_series, shared_yaxes=True, horizontal_spacing=0.06,
+                                subplot_titles=[_esc(s) for s in snames])
+        else:
+            fig = make_subplots(rows=n_series, cols=1, shared_xaxes=True, vertical_spacing=0.3 / n_series,
+                                subplot_titles=[_esc(s) for s in snames])
+        _align_subplot_titles(fig)
+        n_panels = n_series
+    else:
+        separate = False
+        fig = go.Figure()
+        n_panels = 1
+    legend = n_series >= 2 and not separate
+
+    for j, (sname, color) in enumerate(zip(snames, palette), start=1):
+        v = data.iloc[:, j - 1].to_numpy()
+        hover = [f"{_esc(nm)}<br>{_esc(sname)}: {_fmt(x, 2, scale=100.0, suffix='%') if percent else _fmt_sig(x, 4)}"
+                 if np.isfinite(x) else f"{_esc(nm)}<br>{_esc(sname)}: not available" for nm, x in zip(names, v)]
+        bar = go.Bar(
+            x=v if horizontal else pos,
+            y=pos if horizontal else v,
+            orientation=orientation,
+            marker={"color": color, "line": {"width": 0}},
+            name=_esc(_truncate(sname, 40)),
+            showlegend=legend,
+            text=[fmt(x) for x in v] if show_text else None,
+            textposition="outside" if show_text else None,
+            textfont={"family": FONT_FAMILY, "size": 10, "color": INK_SECONDARY},
+            cliponaxis=False,
+            constraintext="none",
+            hovertext=hover,
+            hovertemplate="%{hovertext}<extra></extra>",
+        )
+        if separate:
+            fig.add_trace(bar, row=1 if horizontal else j, col=j if horizontal else 1)
+        else:
+            fig.add_trace(bar)
+
+    if reference is not None and not isinstance(reference, (tuple, list)):
+        reference = (reference, "")
+    ref_value = _to_float(reference[0]) if reference else float("nan")
+    top = (_SUBPLOT_TITLE_PX if separate else 0) + (_legend_extra_px(fig) if legend else 0)
+    tick_names = [_esc(_truncate(nm, 34 if horizontal else 24)) for nm in names]
+    if horizontal:
+        row_px = 22 if (n_series == 1 or separate) else 8 + 10 * n_series
+        height = _header_px(title, subtitle_text, legend) + top + row_px * len(cats) + 56
+    else:
+        height = _header_px(title, subtitle_text, legend) + top + (380 if n_panels == 1 else 220 * n_panels)
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle_text, legend=legend, extra_top=top),
+                      barmode="group", bargap=0.25)
+    _style_axes(fig)
+    # the value axis of each panel: its own range (every series together when grouped)
+    for j in range(1, n_panels + 1):
+        vals = data.iloc[:, j - 1].to_numpy() if separate else data.to_numpy().ravel()
+        lo, hi = _bar_range(np.append(vals, ref_value), pad_share=0.18 if show_text else 0.05)
+        value_axis: dict[str, Any] = {"range": [lo, hi], **_ZERO_LINE}
+        if percent:
+            value_axis["tickformat"] = ".0%"
+        if axis_title:
+            value_axis["title"] = {"text": _esc(axis_title)}
+        where = ({"row": 1, "col": j} if horizontal else {"row": j, "col": 1}) if separate else {}
+        (fig.update_xaxes if horizontal else fig.update_yaxes)(**value_axis, **where)
+    if horizontal:
+        fig.update_yaxes(tickmode="array", tickvals=pos.tolist(), ticktext=tick_names,
+                         range=[len(cats) - 0.4, -0.6], showgrid=False, tickfont={"size": 11, "color": INK})
+    else:
+        fig.update_xaxes(tickmode="array", tickvals=pos.tolist(), ticktext=tick_names,
+                         range=[-0.6, len(cats) - 0.4], showgrid=False, tickfont={"size": 11, "color": INK})
+
+    if np.isfinite(ref_value):
+        label = str(reference[1]) if len(reference) > 1 and reference[1] else ""
+        for i in range(1, n_panels + 1):
+            xref, yref = _panel_refs(i)
+            if horizontal:
+                fig.add_shape(type="line", xref=xref, yref=f"{yref} domain", x0=ref_value, x1=ref_value, y0=0, y1=1,
+                              line={"color": INK_SECONDARY, "width": 1, "dash": "dash"})
+            else:
+                fig.add_shape(type="line", xref=f"{xref} domain", yref=yref, x0=0, x1=1, y0=ref_value, y1=ref_value,
+                              line={"color": INK_SECONDARY, "width": 1, "dash": "dash"})
+        if label:
+            if horizontal:
+                fig.add_annotation(x=ref_value, xref="x", y=1.0, yref="y domain", text=_esc(label), showarrow=False,
+                                   xanchor="left", yanchor="bottom", xshift=4, font=_NOTE_FONT)
+            else:
+                fig.add_annotation(x=1.0, xref="x domain", y=ref_value, yref="y", text=_esc(label), showarrow=False,
+                                   xanchor="right", yanchor="bottom", font=_NOTE_FONT, bgcolor=_NOTE_BG)
+    return fig
+
+
+def lambda_trace_chart(
+    path: pd.DataFrame | None,
+    *,
+    lam_star: float | None = None,
+    lam_best: float | None = None,
+    band_floor: float | None = None,
+    criterion_label: str = "In-sample Sharpe ratio (annualised)",
+    extra: pd.DataFrame | None = None,
+    extra_labels: Mapping[Any, Any] | None = None,
+    extra_title: str | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> go.Figure:
+    """The lambda path with its noise band: criterion, topics selected and, optionally, recovery (G.16; D51, D70).
+
+    Panel 1: the tuning criterion against lambda (log axis) with a band of
+    plus or minus one standard error, the tolerance threshold as a dashed
+    horizontal line, the best point (ink ring) and the chosen point (orange
+    diamond); points inside the tolerance band are filled, the others open.
+    Panel 2: the number of selected topics (steps). Panel 3 (with
+    ``extra``): recovery measures of the fit at each lambda. A dashed
+    vertical line marks the chosen lambda in every panel.
+
+    Parameters
+    ----------
+    path:
+        One row per grid point of one ``K`` with ``lam`` and any of
+        ``criterion``, ``se`` (standard error of the criterion),
+        ``n_selected``, ``in_band`` (bool), ``best`` (bool), ``chosen``
+        (bool): the trace's path table (``BKSTrace.path``). Points with a
+        non-positive lambda are dropped.
+    lam_star, lam_best:
+        Chosen and best lambda; default the rows flagged ``chosen`` and
+        ``best``.
+    band_floor:
+        Lowest criterion inside the tolerance band (dashed line); ``None``
+        for none.
+    criterion_label:
+        Name of the criterion (panel title and hover).
+    extra:
+        Recovery along the path, indexed by lambda (or with a ``lam``
+        column): the columns named in ``extra_labels`` are drawn, else every
+        numeric column except ``n_selected``, ``criterion`` and ``se``
+        (they are in the panels above). At most six columns.
+    extra_labels:
+        Display names by ``extra`` column; its keys also choose the columns.
+    extra_title:
+        Title of panel 3 (default "Recovery along the path").
+    title, subtitle:
+        Figure title (default "BKS lambda path") and a second line.
+
+    Returns
+    -------
+    go.Figure
+        Stacked subplots with log x axes; traces for the band (upper edge,
+        then the filled lower edge), the criterion, the best and the chosen
+        point, the selected topics and the ``extra`` lines.
+
+    Validity boundaries
+    -------------------
+    The band is the standard error of each point on its own, as given. It
+    is not a test of the difference between two grid points: neighbouring
+    fits share most of their topics and weeks, so their criteria move
+    together and their difference is less noisy than one band suggests.
+    """
+    title = title if title is not None else "BKS lambda path"
+    frame = _lambda_frame(path)
+    if frame.empty:
+        return _empty_figure("No lambda path to show", title=title)
+    lams = frame.index.to_numpy(dtype=float)
+    crit = frame["criterion"].to_numpy() if "criterion" in frame.columns else np.full(len(frame), np.nan)
+    n_sel = frame["n_selected"].to_numpy() if "n_selected" in frame.columns else np.full(len(frame), np.nan)
+    if _no_data(crit) and _no_data(n_sel):
+        return _empty_figure("No lambda path to show", title=title)
+    se = frame["se"].to_numpy() if "se" in frame.columns else np.full(len(frame), np.nan)
+    in_band = frame["in_band"].to_numpy() if "in_band" in frame.columns else np.full(len(frame), np.nan)
+
+    def flagged(col: str) -> float | None:
+        if col not in frame.columns:
+            return None
+        hits = np.flatnonzero(frame[col].to_numpy() == 1.0)
+        return float(lams[hits[0]]) if hits.size else None
+
+    lam_star = lam_star if lam_star is not None else flagged("chosen")
+    lam_best = lam_best if lam_best is not None else flagged("best")
+
+    ex = _lambda_frame(extra) if extra is not None else pd.DataFrame()
+    if not ex.empty:
+        wanted = [c for c in extra_labels if c in ex.columns] if extra_labels else [
+            c for c in ex.columns if c not in ("n_selected", "criterion", "se")]
+        wanted = [c for c in wanted if not _no_data(ex[c])]
+        if len(wanted) > len(CATEGORICAL) - 2:
+            logger.warning("lambda_trace_chart: %d extra columns; showing the first %d", len(wanted),
+                           len(CATEGORICAL) - 2)
+            wanted = wanted[: len(CATEGORICAL) - 2]
+        ex = ex[wanted]
+    n_panels = 3 if not ex.empty and ex.shape[1] else 2
+    panel_titles = [criterion_label, "Topics selected"] + ([extra_title or "Recovery along the path"]
+                                                           if n_panels == 3 else [])
+    fig = make_subplots(rows=n_panels, cols=1, shared_xaxes=True, vertical_spacing=0.36 / n_panels,
+                        subplot_titles=[_esc(t) for t in panel_titles])
+    _align_subplot_titles(fig)
+    crit_name = _esc(criterion_label)
+    status = np.where(in_band == 1.0, "inside the tolerance band",
+                      np.where(in_band == 0.0, "outside the tolerance band", ""))
+
+    if np.isfinite(se).any() and np.isfinite(crit).any():
+        upper, lower = crit + se, crit - se
+        fig.add_trace(
+            go.Scatter(x=lams, y=upper, mode="lines", line={"width": 0, "color": BLUE}, showlegend=False,
+                       name="Criterion + 1 standard error", legendgroup="se",
+                       hovertemplate="λ = %{x:.3g}<br>Criterion + 1 standard error: %{y:.3f}<extra></extra>"),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=lams, y=lower, mode="lines", line={"width": 0, "color": BLUE}, fill="tonexty",
+                       fillcolor=_rgba(BLUE, 0.14), name="± 1 standard error", legendgroup="se",
+                       hovertemplate="λ = %{x:.3g}<br>Criterion - 1 standard error: %{y:.3f}<extra></extra>"),
+            row=1, col=1,
+        )
+    if np.isfinite(crit).any():
+        fill = [SURFACE if b == 0.0 else BLUE for b in in_band]
+        notes = [
+            "<br>".join(p for p in (f"Standard error: {_fmt(s, 2)}" if np.isfinite(s) else "", st) if p)
+            for s, st in zip(se, status)
+        ]
+        fig.add_trace(
+            go.Scatter(
+                x=lams, y=crit, mode="lines+markers", line={"color": BLUE, "width": 2},
+                marker={"size": 8, "color": fill, "line": {"width": 1.5, "color": BLUE}},
+                name=crit_name, customdata=notes,
+                hovertemplate=f"λ = %{{x:.3g}}<br>{crit_name}: %{{y:.3f}}<br>%{{customdata}}<extra></extra>",
+            ),
+            row=1, col=1,
+        )
+        for lam, name, marker in (
+            (lam_best, "Best criterion", {"symbol": "circle-open", "size": 16, "color": INK, "line": {"width": 2}}),
+            (lam_star, "Chosen λ", {"symbol": "diamond", "size": 12, "color": ORANGE,
+                                     "line": {"width": 1.5, "color": SURFACE}}),
+        ):
+            i = _nearest_lambda(lams, lam)
+            if i is None or not np.isfinite(crit[i]):
+                continue
+            fig.add_trace(
+                go.Scatter(x=[lams[i]], y=[crit[i]], mode="markers", marker=marker, name=name,
+                           hovertemplate=f"{name}<br>λ = %{{x:.3g}}<br>{crit_name}: %{{y:.3f}}<extra></extra>"),
+                row=1, col=1,
+            )
+    if np.isfinite(n_sel).any():
+        fig.add_trace(
+            go.Scatter(x=lams, y=n_sel, mode="lines+markers",
+                       line={"color": INK_SECONDARY, "width": 1.5, "shape": "hvh"},
+                       marker={"size": 6, "color": INK_SECONDARY}, name="Topics selected", showlegend=False,
+                       hovertemplate="λ = %{x:.3g}<br>Topics selected: %{y:.0f}<extra></extra>"),
+            row=2, col=1,
+        )
+    if n_panels == 3:
+        for j, col in enumerate(ex.columns):
+            color = CATEGORICAL[2 + j]
+            name = _esc(_label(extra_labels, col))
+            fig.add_trace(
+                go.Scatter(x=ex.index.to_numpy(dtype=float), y=ex[col].to_numpy(), mode="lines+markers",
+                           line={"color": color, "width": 2}, marker={"size": 6, "color": color,
+                                                                      "line": {"width": 1, "color": SURFACE}},
+                           name=name, hovertemplate=f"{name}<br>λ = %{{x:.3g}}<br>%{{y:.3f}}<extra></extra>"),
+                row=3, col=1,
+            )
+
+    legend = sum(1 for t in fig.data if t.showlegend is not False) >= 2
+    extra_top = _SUBPLOT_TITLE_PX + (_legend_extra_px(fig) if legend else 0)
+    height = _header_px(title, subtitle, legend) + extra_top + (430 if n_panels == 2 else 590)
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle, legend=legend, extra_top=extra_top))
+    _style_axes(fig)
+    fig.update_xaxes(type="log", showspikes=True, spikecolor=BASELINE, spikethickness=1, spikedash="solid",
+                     spikemode="across")
+    fig.update_xaxes(title={"text": "λ (log scale)"}, row=n_panels, col=1)
+    fig.update_yaxes(title={"text": "Criterion"}, row=1, col=1)
+    fig.update_yaxes(title={"text": "Topics"}, rangemode="tozero", row=2, col=1)
+    if n_panels == 3:
+        fig.update_yaxes(title={"text": "Value"}, **_ZERO_LINE, row=3, col=1)
+
+    if band_floor is not None and np.isfinite(_to_float(band_floor)):
+        bf = _to_float(band_floor)
+        fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=bf, y1=bf,
+                      line={"color": INK_SECONDARY, "width": 1, "dash": "dash"})
+        fig.add_annotation(x=1.0, xref="x domain", y=bf, yref="y", text=f"Tolerance band floor {bf:.3g}",
+                           showarrow=False, xanchor="right", yanchor="bottom", xshift=-4, font=_NOTE_FONT,
+                           bgcolor=_NOTE_BG)
+    if lam_star is not None and np.isfinite(_to_float(lam_star)) and _to_float(lam_star) > 0:
+        _vertical_lines(fig, _to_float(lam_star), n_panels)
+        _top_note(fig, _to_float(lam_star), f"λ* = {_to_float(lam_star):.3g}", log_axis=True)
+    return fig
+
+
+def coefficient_path_chart(
+    norms: pd.DataFrame | None,
+    *,
+    selected: Iterable[Any] = (),
+    labels: Mapping[Any, Any] | pd.Series | None = None,
+    lam_star: float | None = None,
+    max_colored: int = 8,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> go.Figure:
+    """Standardised ``Gamma`` row norms per instrument along the lambda path (log x) (G.16; G.7.2).
+
+    The ``max_colored`` instruments with the largest norm at the chosen
+    lambda (else the largest anywhere on the path) are drawn in
+    :data:`CATEGORICAL` colours with legend entries; the others are thin
+    lines without legend entries: secondary ink when selected at the chosen
+    lambda, muted otherwise. A dashed vertical line marks ``lam_star``.
+
+    Parameters
+    ----------
+    norms:
+        Lambda x instruments (index lambda, or a ``lam`` column): the row
+        norm of ``Gamma`` times the training standard deviation of the
+        instrument, for the fit at each lambda.
+    selected:
+        Instruments with a nonzero ``Gamma`` row at the chosen lambda.
+    labels:
+        Display names by instrument.
+    lam_star:
+        Chosen lambda.
+    max_colored:
+        Instruments drawn in colour (at most eight; never cycled).
+    title, subtitle:
+        Figure title (default "Gamma row norms along the lambda path") and a
+        second line; a note on the colours is appended to it.
+
+    Returns
+    -------
+    go.Figure
+        One trace per coloured instrument and at most two traces for the
+        others (their lines joined with gaps; the hover names each line).
+    """
+    title = title if title is not None else "Gamma row norms along the lambda path"
+    frame = _lambda_frame(norms)
+    if frame.empty or _no_data(frame):
+        return _empty_figure("No Gamma row norms along the path to show", title=title)
+    frame = frame.iloc[:, [j for j in range(frame.shape[1]) if not _no_data(frame.iloc[:, j])]]
+    lams = frame.index.to_numpy(dtype=float)
+    arr = frame.to_numpy()
+    i_star = _nearest_lambda(lams, lam_star)
+    rank_by = arr[i_star] if i_star is not None else np.nanmax(arr, axis=0)
+    rank_by = np.nan_to_num(rank_by, nan=0.0)
+    k = int(np.clip(int(max_colored), 0, len(CATEGORICAL)))
+    order = [c for c in np.argsort(-rank_by, kind="stable") if rank_by[c] > 0][:k]
+    sel = _key_set(selected)
+    cols = list(frame.columns)
+    names = [_category_name(labels, c) for c in cols]
+    mode = "lines+markers" if len(lams) <= 40 else "lines"
+
+    fig = go.Figure()
+    grey = [c for c in range(len(cols)) if c not in set(order)]
+    for group, name, color, width, opacity in (
+        ([c for c in grey if str(cols[c]) in sel], "Selected at λ*", INK_SECONDARY, 1.2, 0.9),
+        ([c for c in grey if str(cols[c]) not in sel], "Other instruments", INK_MUTED, 1.0, 0.6),
+    ):
+        if not group:
+            continue
+        xs: list[float] = []
+        ys: list[float] = []
+        cd: list[str] = []
+        for c in group:
+            xs += lams.tolist() + [float("nan")]
+            ys += arr[:, c].tolist() + [float("nan")]
+            cd += [_esc(names[c])] * len(lams) + [""]
+        fig.add_trace(
+            go.Scatter(x=xs, y=ys, mode="lines", line={"color": color, "width": width}, opacity=opacity, name=name,
+                       showlegend=False, customdata=cd,
+                       hovertemplate="%{customdata}<br>λ = %{x:.3g}<br>Row norm: %{y:.4g}<extra></extra>")
+        )
+    for slot, c in enumerate(order):
+        color = CATEGORICAL[slot]
+        name = names[c]
+        suffix = " (not selected)" if sel and str(cols[c]) not in sel else ""
+        fig.add_trace(
+            go.Scatter(
+                x=lams, y=arr[:, c], mode=mode, line={"color": color, "width": 2},
+                marker={"size": 6, "color": color, "line": {"width": 1, "color": SURFACE}},
+                name=_esc(_truncate(name, 34)) + suffix,
+                hovertemplate=f"{_esc(name)}{suffix}<br>λ = %{{x:.3g}}<br>Row norm: %{{y:.4g}}<extra></extra>",
+            )
+        )
+    where = "at the chosen λ" if i_star is not None else "on the path"
+    note = f"{len(order)} of {len(cols)} instruments in colour (largest {where})"
+    if sel:
+        note += f"; {sum(1 for c in cols if str(c) in sel)} selected at the chosen λ"
+    subtitle_text = _with_note(subtitle, note)
+    legend = sum(1 for t in fig.data if t.showlegend is not False) >= 2
+    extra_top = _legend_extra_px(fig) if legend else 0
+    height = _header_px(title, subtitle_text, legend) + extra_top + 400
+    fig.update_layout(**_base_layout(title, height, subtitle=subtitle_text, legend=legend, extra_top=extra_top))
+    _style_axes(fig)
+    fig.update_xaxes(type="log", title={"text": "λ (log scale)"})
+    fig.update_yaxes(title={"text": "Standardised Gamma row norm"}, rangemode="tozero", **_ZERO_LINE)
+    if lam_star is not None and np.isfinite(_to_float(lam_star)) and _to_float(lam_star) > 0:
+        _vertical_lines(fig, _to_float(lam_star), 1)
+        _top_note(fig, _to_float(lam_star), f"λ* = {_to_float(lam_star):.3g}", log_axis=True)
     return fig

@@ -77,6 +77,56 @@ def _method_sweep(methods, n_windows: int = 6, offset: int = 11) -> pd.DataFrame
     )
 
 
+def _trace_path(n: int = 8) -> pd.DataFrame:
+    """A lambda path in the layout of the BKS trace's path table (DESIGN G.16)."""
+    lam = np.logspace(-2, 0.5, n)
+    crit = 2.9 - 0.15 * (np.arange(n) - 3) ** 2 / 4
+    best = crit.max()
+    floor = best - 0.02 * max(1.0, abs(best))
+    chosen = int(np.flatnonzero(crit >= floor).max())  # largest lambda in the band
+    return pd.DataFrame({
+        "lam": lam,
+        "criterion": crit,
+        "se": np.full(n, 1.4),
+        "in_band": crit >= floor,
+        "best": crit == best,
+        "chosen": np.arange(n) == chosen,
+        "n_selected": np.linspace(16, 1, n).round(),
+    })
+
+
+def _gamma_path(n_lam: int = 8, n_inst: int = 14, offset: int = 20) -> pd.DataFrame:
+    """Lambda x instruments standardised Gamma row norms, shrinking with lambda (DESIGN G.16)."""
+    rng = _rng(offset)
+    lam = np.logspace(-2, 0.5, n_lam)
+    start = rng.uniform(0.05, 1.0, n_inst)
+    decay = rng.uniform(0.5, 3.0, n_inst)
+    vals = np.maximum(start[None, :] - decay[None, :] * lam[:, None] * 0.3, 0.0)
+    return pd.DataFrame(vals, index=pd.Index(lam, name="lam"), columns=[f"T{j:02d}" for j in range(n_inst)])
+
+
+def _ladder() -> pd.DataFrame:
+    """The reference ladder in its chain order, plus the page's direct benchmark row (DESIGN G.16)."""
+    keys = ["oracle", "window_truth", "instruments_kernel", "instruments_train", "best_rank", "bks_no_const",
+            "bks_implied", "direct"]
+    frame = pd.DataFrame(
+        {"label": [k.replace("_", " ").capitalize() for k in keys],
+         "spearman": [1.0, 0.95, 0.91, 0.55, 0.5, 0.21, 0.19, 0.62],
+         "median_r2": [0.081, 0.07, 0.05, 0.03, 0.028, 0.004, 0.003, 0.04]},
+        index=keys,
+    )
+    frame["d_spearman"] = frame["spearman"].diff()
+    frame["d_median_r2"] = frame["median_r2"].diff()
+    return frame
+
+
+def _subtitle(fig: go.Figure) -> str:
+    """The subtitle line (or the only title line when there is no title)."""
+    if charts._HAS_SUBTITLE and fig.layout.title.subtitle.text:
+        return fig.layout.title.subtitle.text
+    return fig.layout.title.text or ""
+
+
 def _normal_figures() -> dict[str, go.Figure]:
     rng = _rng(1)
     values = _exposure_frame()
@@ -96,7 +146,30 @@ def _normal_figures() -> dict[str, go.Figure]:
     )
     B = pd.DataFrame(rng.normal(0.0, 0.2, (8, 6)), index=topics[:8], columns=values.index)
     r2_methods = _method_r2()
+    level = pd.Series(0.2 + rng.normal(0.0, 0.01, len(long_days)), index=long_days)
+    ret = pd.Series(rng.normal(0.0, 0.01, len(long_days)), index=long_days)
+    train = (pd.Timestamp("2022-07-01"), pd.Timestamp("2022-12-30"))
+    fcast = (pd.Timestamp("2023-01-02"), pd.Timestamp("2023-01-27"))
+    pairs = B.stack()
     return {
+        "line_panels": charts.line_panels(
+            [{"series": {"Attention": level}, "y_title": "Attention level"},
+             {"series": {"Raw return": ret}, "y_title": "Return", "zero_line": True, "tickformat": ".1%"}],
+            shade=[(train[0], train[1], "Training window"), (fcast[0], fcast[1], "Forecast window")],
+            markers=[(pd.Timestamp("2022-12-23"), "Instrument week")],
+            title="Inputs",
+        ),
+        "matrix_heatmap": charts.matrix_heatmap(values, value_label="Design value", highlight_rows=["A2"]),
+        "ladder_chart": charts.ladder_chart(_ladder(), highlight="bks_implied", reference="oracle"),
+        "identity_scatter": charts.identity_scatter(pairs, pairs * 0.8 + 0.01, highlight="A1",
+                                                    x_title="True", y_title="Estimated"),
+        "grouped_bars": charts.grouped_bars(B[["A0", "A1"]], reference=(0.1, "Reference")),
+        "lambda_trace_chart": charts.lambda_trace_chart(
+            _trace_path(), band_floor=2.84,
+            extra=pd.DataFrame({"spearman": np.linspace(0.3, 0.1, 8)}, index=_trace_path()["lam"])),
+        "coefficient_path_chart": charts.coefficient_path_chart(_gamma_path(), selected=["T01", "T02"],
+                                                                lam_star=float(_trace_path()["lam"].iloc[3])),
+
         "method_r2_dots": charts.method_r2_dots(r2_methods),
         "method_sweep_lines": charts.method_sweep_lines(_method_sweep(r2_methods.columns)),
         "exposure_heatmap": charts.exposure_heatmap(values, blank=values.abs() < 0.2),
@@ -135,7 +208,18 @@ def _empty_figures(kind: str) -> dict[str, go.Figure]:
     sweep = frame if kind != "nan" else pd.DataFrame({"start": pd.date_range("2023-01-02", periods=2), "median_r2": np.nan})
     path = frame if kind != "nan" else pd.DataFrame({"K": [3], "lam": [np.nan], "n_selected": [np.nan]})
     long_sweep = frame if kind != "nan" else sweep.assign(method="ridge")
+    ladder = frame if kind != "nan" else pd.DataFrame({"label": ["a", "b"], "spearman": np.nan}, index=idx)
+    trace_path = path if kind != "nan" else pd.DataFrame({"lam": [0.1, 1.0], "criterion": np.nan,
+                                                          "n_selected": np.nan})
+    panels = None if kind == "none" else [{"series": {"x": series}, "y_title": "y"}]
     return {
+        "line_panels": charts.line_panels(panels),
+        "matrix_heatmap": charts.matrix_heatmap(frame),
+        "ladder_chart": charts.ladder_chart(ladder),
+        "identity_scatter": charts.identity_scatter(series, series, x_title="x", y_title="y"),
+        "grouped_bars": charts.grouped_bars(frame),
+        "lambda_trace_chart": charts.lambda_trace_chart(trace_path),
+        "coefficient_path_chart": charts.coefficient_path_chart(frame),
         "method_r2_dots": charts.method_r2_dots(frame),
         "method_sweep_lines": charts.method_sweep_lines(long_sweep),
         "exposure_heatmap": charts.exposure_heatmap(frame),
@@ -159,7 +243,7 @@ def figures() -> dict[str, go.Figure]:
 # All builders
 # ---------------------------------------------------------------------------
 def test_builders_return_figures_on_normal_input(figures: dict[str, go.Figure]) -> None:
-    assert len(figures) == 11
+    assert len(figures) == 18
     for name, fig in figures.items():
         assert isinstance(fig, go.Figure), name
         assert len(fig.data) > 0, name
@@ -653,3 +737,311 @@ def test_method_sweep_lines_clip_a_failing_method() -> None:
     plain = charts.method_sweep_lines(_method_sweep(["ridge", "oracle"]))
     text = plain.layout.title.subtitle.text if charts._HAS_SUBTITLE else plain.layout.title.text
     assert "below" not in text and plain.layout.yaxis.range[0] > -1.05
+
+
+# ---------------------------------------------------------------------------
+# BKS trace page builders (G.16; D90)
+# ---------------------------------------------------------------------------
+def test_registries_cover_every_builder() -> None:
+    builders = {name for name in charts.__all__
+                if callable(getattr(charts, name)) and name[0].islower() and name != "method_styles"}
+    assert set(_normal_figures()) == builders
+    assert set(_empty_figures("none")) == builders
+
+
+def _shapes(fig: go.Figure, kind: str) -> list:
+    return [s for s in fig.layout.shapes if s.type == kind]
+
+
+def test_line_panels_shared_colours_legend_shading_and_markers() -> None:
+    days = pd.bdate_range("2024-01-01", "2024-12-31")
+    rng = _rng(21)
+    a = pd.Series(rng.normal(0, 1, len(days)), index=days)
+    b = a.shift(1)  # first value missing: a gap, not a zero
+    c = pd.Series(rng.normal(0, 1, len(days)), index=days)
+    fig = charts.line_panels(
+        [{"series": {"BKS shock": a, "Direct shock": b}, "y_title": "Shock", "zero_line": True,
+          "title": "Shocks", "styles": {"Direct shock": {"dash": "dot"}}},
+         {"series": {"Signal part": c, "BKS shock": a}, "y_title": "Parts", "tickformat": ".0%",
+          "title": "Parts"}],
+        shade=[(days[100], days[200], "Training window"), (days[240], days[-1], "Forecast window")],
+        markers=[(days[150], "Instrument week"), (days[180], "Window end")],
+        x_title="Day",
+    )
+    assert len(fig.data) == 4
+    colours = {t.name: t.line.color for t in fig.data}
+    assert colours == {"BKS shock": charts.CATEGORICAL[0], "Direct shock": charts.CATEGORICAL[1],
+                       "Signal part": charts.CATEGORICAL[2]}
+    bks = [t for t in fig.data if t.name == "BKS shock"]
+    assert [t.showlegend for t in bks] == [True, False] and bks[0].line.color == bks[1].line.color
+    assert _trace(fig, "Direct shock").line.dash == "dot"
+    assert np.isnan(np.asarray(_trace(fig, "Direct shock").y, dtype=float)[0])  # NaN kept as a gap
+    assert fig.layout.showlegend and fig.layout.hovermode == "x unified"
+    # two windows x two panels, two markers x two panels, dashed
+    rects, lines = _shapes(fig, "rect"), _shapes(fig, "line")
+    assert len(rects) == 4 and len(lines) == 4
+    assert {s.yref for s in rects} == {"y domain", "y2 domain"}
+    assert rects[0].opacity != rects[2].opacity  # adjacent windows differ in tone
+    assert all(s.line.dash == "dash" for s in lines)
+    notes = [a.text for a in fig.layout.annotations]
+    assert {"Shocks", "Parts", "Training window", "Forecast window", "Instrument week", "Window end"} <= set(notes)
+    # subplot titles left-aligned; stacked panels with their own y axes, shared x
+    titles = [a for a in fig.layout.annotations if a.text in ("Shocks", "Parts")]
+    assert all(a.x == 0.0 and a.xanchor == "left" for a in titles)
+    assert fig.layout.yaxis2.tickformat == ".0%" and fig.layout.yaxis.zeroline
+    assert fig.layout.xaxis2.title.text == "Day"
+    assert fig.layout.xaxis.matches == "x2" and fig.layout.xaxis.showticklabels is False  # shared x, labels below
+    # a note near the right edge ends at its x; notes that would overlap go to separate rows, others share one
+    by_text = {a.text: a for a in fig.layout.annotations}
+    assert by_text["Forecast window"].xanchor == "right" and by_text["Training window"].xanchor == "left"
+    assert by_text["Forecast window"].x == "2024-12-31"  # the window's end
+    assert by_text["Training window"].yshift == by_text["Forecast window"].yshift == -2
+    assert by_text["Instrument week"].yshift != by_text["Window end"].yshift
+
+
+def test_line_panels_log_axis_webgl_and_limits() -> None:
+    x = np.logspace(-3, 1, 50)
+    s = pd.Series(np.sqrt(x), index=x)
+    s.loc[0.0] = 1.0  # not drawable on a log axis: dropped
+    fig = charts.line_panels([{"series": {"Norm": s}, "y_title": "Norm", "styles": {"Norm": {"fill": "tozeroy"}}}],
+                             markers=[(0.1, "λ*")], x_log=True)
+    assert fig.layout.xaxis.type == "log"
+    assert len(fig.data[0].x) == 50 and np.all(np.asarray(fig.data[0].x) > 0)
+    assert fig.data[0].fill == "tozeroy" and fig.data[0].fillcolor.startswith("rgba(")
+    assert not fig.layout.showlegend
+    # on a log axis the shape sits at x, the annotation at log10(x)
+    assert _shapes(fig, "line")[0].x0 == pytest.approx(0.1)
+    assert fig.layout.annotations[0].x == pytest.approx(-1.0)
+
+    days = pd.date_range("2010-01-01", periods=4000, freq="D")
+    long = pd.Series(np.arange(4000.0), index=days)
+    many = charts.line_panels([{"series": {f"s{i}": long for i in range(10)}, "y_title": "y"}] * 4)
+    assert all(t.type == "scattergl" for t in many.data)
+    assert len({t.yaxis for t in many.data}) == charts.MAX_LINE_PANELS  # panels past three are dropped
+    colours = [t.line.color for t in many.data[:10]]
+    assert colours[:8] == list(charts.CATEGORICAL) and colours[8:] == [charts.INK_MUTED] * 2  # never cycled
+    # a panel without data is dropped; the others stay
+    one = charts.line_panels([{"series": {"a": pd.Series([np.nan, np.nan])}, "y_title": "a"},
+                              {"series": {"b": pd.Series([1.0, 2.0])}, "y_title": "b"}])
+    assert len(one.data) == 1 and one.layout.yaxis.title.text == "b"
+
+
+def test_matrix_heatmap_truncation_highlight_and_text() -> None:
+    rng = _rng(22)
+    big = pd.DataFrame(rng.normal(0, 1, (500, 120)), index=[f"A{i:03d}" for i in range(500)],
+                       columns=[f"T{j:03d}" for j in range(120)])
+    fig = charts.matrix_heatmap(big, value_label="Standardised instrument", highlight_rows=["A300"])
+    heat = _trace(fig, "Standardised instrument")
+    z = np.array(heat.z, dtype=float)
+    assert z.shape == (80, 45)
+    ticks = list(fig.layout.yaxis.ticktext)
+    assert ticks[-1] == "<b>A300</b>" and ticks[0] == "A000" and "A079" not in ticks  # the highlight kept
+    np.testing.assert_allclose(z[-1], big.loc["A300"].iloc[:45].to_numpy())
+    assert "showing 80 of 500 rows" in _subtitle(fig) and "45 of 120 columns" in _subtitle(fig)
+    assert fig.layout.title.text is not None  # the note shows without a figure title
+    outline = _shapes(fig, "rect")
+    assert len(outline) == 1 and outline[0].y0 == pytest.approx(78.5)
+    assert fig.layout.coloraxis.cmin == pytest.approx(-fig.layout.coloraxis.cmax)
+    assert all(t.type == "heatmap" for t in fig.data)  # no cell text above 400 cells
+
+    small = pd.DataFrame([[0.12, -0.034], [np.nan, 0.2]], index=["S1", "S2"], columns=["f1", "f2"])
+    fig_small = charts.matrix_heatmap(small, value_label="Gamma", title="Gamma", subtitle="standardised")
+    text = _trace(fig_small, "Gamma values")
+    assert list(text.text) == ["0.12", "-0.03", "0.20"]  # NaN cell blank, decimals from zmax 0.2
+    assert fig_small.layout.coloraxis.cmax == pytest.approx(0.2)
+    assert _subtitle(fig_small) == "standardised"
+    assert "Gamma: 0.12" in _trace(fig_small, "Gamma").hovertext[0][0]
+
+
+def test_ladder_chart_order_colours_and_formats() -> None:
+    lad = _ladder()
+    fig = charts.ladder_chart(lad, highlight="bks_implied", reference=["oracle"])
+    assert [t.type for t in fig.data] == ["bar", "bar"]
+    spear, r2 = fig.data
+    np.testing.assert_allclose(np.asarray(spear.x, dtype=float), lad["spearman"].to_numpy())
+    assert list(spear.y) == list(range(len(lad)))  # chain order, first on top
+    assert fig.layout.yaxis.range[0] > fig.layout.yaxis.range[1]
+    colours = list(spear.marker.color)
+    assert colours[0] == charts.INK and colours[6] == charts.BLUE
+    assert set(colours[1:6] + colours[7:]) == {charts.INK_MUTED}
+    assert list(fig.layout.yaxis.ticktext)[6] == "<b>Bks implied</b>"
+    assert spear.text[1] == "0.95" and r2.text[0] == "8.1%"  # percent for R2 metrics
+    assert fig.layout.xaxis2.tickformat == ".0%" and not fig.layout.xaxis.tickformat
+    assert "Change from the row above: -0.05" in spear.hovertext[1]
+    assert "Change from the row above" not in spear.hovertext[0]
+    assert fig.layout.xaxis.range[0] == 0.0  # all values positive: bars start at the axis
+    assert not fig.layout.showlegend and all(t.showlegend is False for t in fig.data)
+    assert fig.layout.yaxis2.matches == "y"  # panels side by side share the rows
+    titles = [a.text for a in fig.layout.annotations]
+    assert titles == ["Spearman with true sensitivities", "Median OOS R²"]
+    assert fig.layout.annotations[1].x == pytest.approx(fig.layout.xaxis2.domain[0])
+    # a missing metric column is skipped
+    only = charts.ladder_chart(lad.drop(columns="median_r2"))
+    assert len(only.data) == 1
+
+
+def test_identity_scatter_statistics_highlight_and_sampling() -> None:
+    rng = _rng(23)
+    idx = pd.MultiIndex.from_product([[f"T{j}" for j in range(10)], [f"A{i}" for i in range(6)]],
+                                     names=["topic", "asset"])
+    x = pd.Series(rng.normal(0, 1, len(idx)), index=idx)
+    y = 0.5 * x + rng.normal(0, 0.3, len(idx))
+    y.iloc[0] = np.nan  # dropped pair
+    fig = charts.identity_scatter(x, y, highlight="A2", labels={"A2": "EM v World EQ"},
+                                  x_title="Population", y_title="Panel", subtitle="Eq. 5 week")
+    ok = y.notna()
+    slope, _ = np.polyfit(x[ok], y[ok], 1)
+    corr = np.corrcoef(x[ok], y[ok])[0, 1]
+    sub = _subtitle(fig)
+    assert sub.startswith("Eq. 5 week; 59 points")
+    assert f"least-squares slope {slope:.2f}" in sub and f"correlation {corr:.2f}" in sub
+    others, high, line = fig.data
+    assert high.name == "Highlighted" and high.marker.color == charts.ORANGE and len(high.x) == 10
+    assert others.marker.color == charts.INK_MUTED and len(others.x) == 49
+    assert "T1 · EM v World EQ" in list(high.customdata)  # tuple keys join the names of their parts
+    assert line.name == "Least-squares line" and line.line.dash == "dash"
+    np.testing.assert_allclose(np.diff(line.y) / np.diff(line.x), slope)
+    assert fig.layout.yaxis.scaleanchor == "x" and list(fig.layout.xaxis.range) == list(fig.layout.yaxis.range)
+    assert _shapes(fig, "line")[0].x0 == fig.layout.xaxis.range[0]  # 45-degree line
+    assert fig.layout.showlegend
+
+    plain = charts.identity_scatter(x, y, x_title="x", y_title="y", fit_line=False, identity_line=False)
+    assert len(plain.data) == 1 and plain.data[0].marker.color == charts.BLUE
+    assert not plain.layout.shapes and plain.layout.yaxis.scaleanchor is None
+
+    n = 30_000
+    big_x = pd.Series(rng.normal(0, 1, n))
+    big = charts.identity_scatter(big_x, big_x * 2.0, highlight=[0, 1, 2], x_title="x", y_title="y",
+                                  max_points=5_000)
+    assert all(t.type == "scattergl" for t in big.data if t.mode == "markers")
+    assert sum(len(t.x) for t in big.data if t.mode == "markers") == 5_000
+    assert len(_trace(big, "Highlighted").x) == 3
+    assert "showing 5,000 of 30,000 points" in _subtitle(big) and "slope 2.00" in _subtitle(big)
+
+
+def test_grouped_bars_reference_top_n_sort_and_orientation() -> None:
+    rng = _rng(24)
+    frame = pd.DataFrame({"B_true": rng.normal(0, 0.2, 40), "B_hat": rng.normal(0, 0.1, 40)},
+                         index=[f"T{j:02d}" for j in range(40)])
+    fig = charts.grouped_bars(frame, series_labels={"B_true": "True", "B_hat": "BKS-implied"},
+                              colors={"B_true": charts.INK}, top_n=10, reference=(0.1, "Threshold"),
+                              axis_title="Sensitivity")
+    true, est = fig.data
+    assert (true.name, est.name) == ("True", "BKS-implied")
+    assert true.marker.color == charts.INK and est.marker.color == charts.CATEGORICAL[1]
+    kept = frame.abs().max(axis=1).nlargest(10).index
+    expected = [t for t in frame.index if t in kept]  # original order
+    assert list(fig.layout.yaxis.ticktext) == expected
+    assert "showing 10 of 40 rows" in _subtitle(fig)
+    assert fig.layout.showlegend and fig.layout.barmode == "group"
+    ref = _shapes(fig, "line")
+    assert len(ref) == 1 and ref[0].x0 == 0.1 and ref[0].line.dash == "dash"
+    assert "Threshold" in [a.text for a in fig.layout.annotations]
+    assert fig.layout.xaxis.title.text == "Sensitivity"
+    assert true.text is not None and len(true.text) == 10  # 20 bars: values printed
+
+    single = charts.grouped_bars(frame["B_true"], sort_by="B_true")
+    assert not single.layout.showlegend
+    xs = np.asarray(single.data[0].x, dtype=float)
+    assert list(xs) == sorted(xs, reverse=True) and single.data[0].text is None  # 40 bars: no text
+
+    many = charts.grouped_bars(pd.Series(np.arange(500.0)))
+    assert len(many.data[0].x) == charts.MAX_BAR_ROWS
+    assert f"showing {charts.MAX_BAR_ROWS} of 500 rows" in _subtitle(many)
+
+    weeks = pd.DataFrame({"r2": [0.25, 0.31], "r2_shuffled": [0.24, 0.22]},
+                         index=pd.to_datetime(["2025-07-04", "2025-07-11"]))
+    v = charts.grouped_bars(weeks, orientation="v", percent=True)
+    assert v.data[0].orientation == "v" and list(v.layout.xaxis.ticktext) == ["2025-07-04", "2025-07-11"]
+    assert v.layout.yaxis.tickformat == ".0%" and v.data[0].text[0] == "25.0%"
+    assert v.layout.yaxis.range[0] == 0.0
+
+    sep = charts.grouped_bars(frame.iloc[:5].assign(B_hat=frame["B_hat"].iloc[:5] * 100), separate=True)
+    assert not sep.layout.showlegend and [a.text for a in sep.layout.annotations] == ["B_true", "B_hat"]
+    assert sep.data[1].xaxis == "x2" and sep.layout.xaxis2.range[1] > 5 * sep.layout.xaxis.range[1]
+    with pytest.raises(ValueError):
+        charts.grouped_bars(frame, orientation="x")
+
+
+def test_lambda_trace_chart_band_markers_and_panels() -> None:
+    path = _trace_path()
+    fig = charts.lambda_trace_chart(path, band_floor=2.84)
+    upper = _trace(fig, "Criterion + 1 standard error")
+    lower = _trace(fig, "± 1 standard error")
+    np.testing.assert_allclose(np.asarray(upper.y, dtype=float), path["criterion"] + 1.4)
+    np.testing.assert_allclose(np.asarray(lower.y, dtype=float), path["criterion"] - 1.4)
+    assert lower.fill == "tonexty" and upper.showlegend is False
+    assert list(fig.data).index(upper) + 1 == list(fig.data).index(lower)  # the band fills to the upper edge
+    crit = _trace(fig, "In-sample Sharpe ratio (annualised)")
+    np.testing.assert_allclose(np.asarray(crit.x, dtype=float), path["lam"])
+    fills = list(crit.marker.color)
+    assert [c == charts.BLUE for c in fills] == path["in_band"].tolist()  # open markers outside the band
+    best, chosen = _trace(fig, "Best criterion"), _trace(fig, "Chosen λ")
+    assert best.x[0] == pytest.approx(path.loc[path["best"], "lam"].iloc[0])
+    assert chosen.x[0] == pytest.approx(path.loc[path["chosen"], "lam"].iloc[0])
+    assert chosen.marker.color == charts.ORANGE
+    assert fig.layout.xaxis.type == "log" and fig.layout.xaxis2.type == "log"
+    assert _trace(fig, "Topics selected").line.shape == "hvh"
+    lines = _shapes(fig, "line")
+    floor = [s for s in lines if s.xref == "x domain"]
+    assert len(floor) == 1 and floor[0].y0 == 2.84 and floor[0].line.dash == "dash"
+    vertical = [s for s in lines if s.xref in ("x", "x2")]
+    assert len(vertical) == 2 and vertical[0].x0 == pytest.approx(chosen.x[0])  # λ* in both panels
+    assert "yaxis3" not in fig.layout.to_plotly_json()  # two panels without extra
+
+    extra = pd.DataFrame({"lam": path["lam"], "spearman": np.linspace(0.3, 0.1, 8),
+                          "kept_share": np.linspace(0.6, 0.2, 8), "gamma_rank": 3.0})
+    fig3 = charts.lambda_trace_chart(path, lam_star=float(path["lam"].iloc[2]), extra=extra,
+                                     extra_labels={"spearman": "Spearman", "kept_share": "Kept share"})
+    names = [t.name for t in fig3.data if t.yaxis == "y3"]
+    assert names == ["Spearman", "Kept share"]  # the labels choose the columns
+    assert [t.line.color for t in fig3.data if t.yaxis == "y3"] == list(charts.CATEGORICAL[2:4])
+    assert _trace(fig3, "Chosen λ").x[0] == pytest.approx(path["lam"].iloc[2])
+    assert fig3.layout.xaxis3.title.text == "λ (log scale)" and fig3.layout.height > fig.layout.height
+    # without se, flags or a floor: the criterion and the selected topics only
+    bare = charts.lambda_trace_chart(path[["lam", "criterion", "n_selected"]])
+    assert [t.name for t in bare.data] == ["In-sample Sharpe ratio (annualised)", "Topics selected"]
+    assert not bare.layout.shapes
+
+
+def test_coefficient_path_chart_colours_by_norm_at_the_chosen_lambda() -> None:
+    norms = _gamma_path()
+    lam_star = float(norms.index[3])
+    fig = charts.coefficient_path_chart(norms, selected=["T01", "T02"], lam_star=lam_star, max_colored=4,
+                                        labels={"T00": "Energy"})
+    coloured = [t for t in fig.data if t.showlegend is not False]
+    order = norms.iloc[3].sort_values(ascending=False, kind="stable")
+    expected = [n for n in order.index if order[n] > 0][:4]
+    assert [t.name.removesuffix(" (not selected)") for t in coloured] == [
+        "Energy" if n == "T00" else n for n in expected]
+    assert [t.line.color for t in coloured] == list(charts.CATEGORICAL[:4])
+    grey = [t for t in fig.data if t.showlegend is False]
+    assert grey and all(t.line.color in (charts.INK_MUTED, charts.INK_SECONDARY) for t in grey)
+    n_grey_lines = sum(int(np.isnan(np.asarray(t.y, dtype=float)).sum()) for t in grey)
+    assert n_grey_lines == norms.shape[1] - 4  # every other instrument is one gap-separated line
+    assert fig.layout.xaxis.type == "log"
+    vline = _shapes(fig, "line")
+    assert len(vline) == 1 and vline[0].x0 == pytest.approx(lam_star) and vline[0].line.dash == "dash"
+    assert "4 of 14 instruments in colour (largest at the chosen λ)" in _subtitle(fig)
+    # without λ*: ranked by the largest norm anywhere on the path; unselected coloured lines are named so
+    overall = charts.coefficient_path_chart(norms, selected=["T01"], max_colored=20)
+    assert len([t for t in overall.data if t.showlegend is not False]) == len(charts.CATEGORICAL)
+    assert "largest on the path" in _subtitle(overall)
+    assert any(t.name.endswith("(not selected)") for t in overall.data)
+    # no selection given: no selection note, no "(not selected)" names
+    plain = charts.coefficient_path_chart(norms)
+    assert "selected" not in _subtitle(plain) and not any("selected" in (t.name or "") for t in plain.data)
+
+
+def test_highlight_keys_accept_lists_tuples_and_multiindex_keys() -> None:
+    values = _exposure_frame(4, 3)
+    for rows in (("A1", "A3"), ["A1", "A3"], pd.Index(["A1", "A3"])):
+        fig = charts.matrix_heatmap(values, highlight_rows=rows)
+        assert [t.startswith("<b>") for t in fig.layout.yaxis.ticktext] == [False, True, False, True]
+    assert not _shapes(charts.matrix_heatmap(values), "rect")  # the default () highlights nothing
+    idx = pd.MultiIndex.from_product([["T1", "T2"], ["A1", "A2"]])
+    s = pd.Series([0.1, 0.2, 0.3, 0.4], index=idx)
+    full = charts.identity_scatter(s, s, highlight=[("T1", "A2")], x_title="x", y_title="y")
+    assert len(_trace(full, "Highlighted").x) == 1
+    level = charts.identity_scatter(s, s, highlight="A2", x_title="x", y_title="y")
+    assert len(_trace(level, "Highlighted").x) == 2
