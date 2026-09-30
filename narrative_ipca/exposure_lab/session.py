@@ -1,4 +1,4 @@
-"""Cached orchestration of the topic-exposure lab stages (DESIGN.md G.10, G.13; D71).
+"""Cached orchestration of the topic-exposure lab stages (DESIGN.md G.10, G.13; D71, D88).
 
 :class:`LabSession` runs the lab stages in order and memoises each result
 under the cache key of the sub-configuration the stage depends on
@@ -26,19 +26,26 @@ stage                 key                                          computed by
 ``bks``               ``k("bks_evaluation")``                      :func:`.bks.evaluate_bks`
 ``bks_implied``       ``k("bks_fit")`` + ``k("shocks")`` +         :func:`.bks.implied_exposures`
                       ``select_tau``
-``comparison``        ``k("evaluation")`` + methods + BKS token    :func:`.compare.compare_methods`
+``comparison``        ``k("evaluation")`` + methods + BKS tokens   :func:`.compare.compare_methods`
 ====================  ===========================================  =================================
+
+The BKS stages follow ``cfg.bks.history`` (D88): ``"full"`` and
+``"training"`` have different panel and fit keys, and the training-history
+panel key also holds the training window.
 
 Method comparison (G.7, G.8). :meth:`LabSession.method_fit` returns one
 method's :class:`DirectFit`: the direct methods and the oracle come from the
 ``direct`` stage with :func:`.compare.method_config` (so the fit selected in
 the sidebar is shared, and every fit is reused when only the forecast window
-changes); ``bks_implied`` comes from the ``bks_implied`` stage, which uses the
-cached BKS panel and fit of the same configuration and never starts a BKS fit
+changes); ``bks_implied`` and ``bks_implied_train`` come from the
+``bks_implied`` stage of :func:`.compare.method_config` (the configuration
+with the full or the training-window history), which uses the cached BKS
+panel and fit of that configuration and never starts a BKS fit
 (``LookupError`` when they are not cached). :meth:`LabSession.comparison`
-scores the methods; its key holds the evaluation key, the methods and a BKS
-token: the ``bks_implied`` key when the BKS-implied fit was used, ``nobks``
-or ``off`` otherwise, so running BKS later gives a new key.
+scores the methods; its key holds the evaluation key, the methods and one
+BKS token per BKS-implied method: that method's ``bks_implied`` key when its
+fit was used, ``nobks`` or ``off`` otherwise, so running BKS later gives a
+new key.
 
 Validity boundaries
 -------------------
@@ -65,7 +72,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from narrative_ipca.config import config_hash
@@ -82,6 +89,7 @@ __all__ = [
     "RUN_LAB_KEYS",
     "BKS_NOT_RUN",
     "BKS_OFF",
+    "BKS_REFUSED",
     "LabSession",
     "run_lab",
 ]
@@ -92,11 +100,14 @@ SESSION_STAGES: tuple[str, ...] = (
     "bks_implied", "comparison",
 )
 
-#: Reason shown for ``bks_implied`` when no BKS fit of the configuration is cached.
+#: Reason shown for a BKS-implied method when no BKS fit of its configuration is cached.
 BKS_NOT_RUN = "BKS has not been run for these settings. Run BKS first; the comparison does not start a BKS fit."
 
-#: Reason shown for ``bks_implied`` when the caller leaves it out (``use_bks=False``).
+#: Reason shown for a BKS-implied method when the caller leaves it out (``use_bks``).
 BKS_OFF = "BKS has not been run in this browser session. Run BKS first."
+
+#: Prefix of the reason shown for a BKS-implied method whose BKS fit refused (``comparison(bks_errors=...)``).
+BKS_REFUSED = "BKS could not run with these settings: "
 
 #: Stages whose results can be large (the weekly BKS panel and fit); they get a smaller cache.
 BKS_STAGES: frozenset[str] = frozenset({"bks_panel", "bks_fit", "bks"})
@@ -111,6 +122,13 @@ RUN_LAB_KEYS: tuple[str, ...] = (
 )
 
 ProgressFn = Callable[[int, int, str], None]
+
+
+def _allows(use_bks: bool | Iterable[str], method: str) -> bool:
+    """Whether ``use_bks`` (a flag, or the BKS-implied methods allowed) lets ``method`` use a cached fit."""
+    if isinstance(use_bks, bool):
+        return use_bks
+    return method in {str(m) for m in use_bks}
 
 
 class LabSession:
@@ -163,13 +181,18 @@ class LabSession:
     # ------------------------------------------------------------------
     @staticmethod
     def stage_key(
-        stage: str, cfg: LabConfig, *, methods: tuple[str, ...] | None = None, bks_token: str = "nobks"
+        stage: str,
+        cfg: LabConfig,
+        *,
+        methods: tuple[str, ...] | None = None,
+        bks_token: str | dict[str, str] = "nobks",
     ) -> str:
         """Cache key of ``stage`` for ``cfg`` (see the module table).
 
         ``methods`` and ``bks_token`` apply to the ``comparison`` stage only
-        (defaults: :data:`.compare.METHODS` and ``"nobks"``); use
-        :meth:`comparison_key` for the key the session would use now.
+        (defaults: :data:`.compare.METHODS` and ``"nobks"``; ``bks_token`` may
+        be one token per BKS-implied method); use :meth:`comparison_key` for
+        the key the session would use now.
         """
         if stage == "truth":
             return f"truth-{cfg.key('simulation')}-w{int(cfg.window.shock_window)}"
@@ -184,35 +207,50 @@ class LabSession:
         if stage == "comparison":
             from .compare import METHODS
 
+            token: Any = str(bks_token) if isinstance(bks_token, str) else {
+                str(k): str(v) for k, v in sorted(dict(bks_token).items())}
             parts = {"evaluation": cfg.key("evaluation"), "methods": list(METHODS if methods is None else methods),
-                     "bks": str(bks_token)}
+                     "bks": token}
             return f"comparison-{config_hash(parts)}"
         if stage not in SESSION_STAGES:
             raise KeyError(f"unknown stage {stage!r}; known: {list(SESSION_STAGES)}")
         return cfg.key(stage)
 
-    def comparison_key(self, cfg: LabConfig, methods: tuple[str, ...] | None = None, use_bks: bool = True) -> str:
+    def comparison_key(self, cfg: LabConfig, methods: tuple[str, ...] | None = None,
+                       use_bks: bool | Iterable[str] = True) -> str:
         """Key of the ``comparison`` stage as :meth:`comparison` would compute it now (nothing is computed).
 
-        The BKS token is the ``bks_implied`` key when ``bks_implied`` is among
-        ``methods``, ``use_bks`` is set and the BKS-implied fit is cached or
-        can be built from the cached BKS panel and fit (:meth:`bks_ready`);
-        ``"off"`` when ``use_bks`` is ``False``; ``"nobks"`` otherwise.
+        One BKS token per BKS-implied method among ``methods``: its
+        ``bks_implied`` key (for :func:`.compare.method_config` of the method)
+        when ``use_bks`` allows it and the BKS-implied fit is cached or can be
+        built from the cached BKS panel and fit (:meth:`bks_ready`); ``"off"``
+        when ``use_bks`` leaves it out; ``"nobks"`` otherwise. Without a
+        BKS-implied method the token is ``"nobks"``.
         """
-        from .bks import IMPLIED_METHOD
-        from .compare import METHODS
+        from .compare import BKS_METHODS, METHODS, method_config
 
         methods = tuple(METHODS if methods is None else methods)
-        token = "nobks"
-        if IMPLIED_METHOD in methods:
-            if not use_bks:
-                token = "off"
-            elif self.bks_ready(cfg):
-                token = self.stage_key("bks_implied", cfg)
-        return self.stage_key("comparison", cfg, methods=methods, bks_token=token)
+        tokens: dict[str, str] = {}
+        for m in (x for x in methods if x in BKS_METHODS):
+            mcfg = method_config(cfg, m)
+            if not _allows(use_bks, m):
+                tokens[m] = "off"
+            elif self.bks_ready(mcfg):
+                tokens[m] = self.stage_key("bks_implied", mcfg)
+            else:
+                tokens[m] = "nobks"
+        return self.stage_key("comparison", cfg, methods=methods, bks_token=tokens or "nobks")
 
-    def bks_ready(self, cfg: LabConfig) -> bool:
-        """``True`` when the BKS-implied exposures of ``cfg`` are cached or the BKS panel and fit are."""
+    def bks_ready(self, cfg: LabConfig, method: str | None = None) -> bool:
+        """``True`` when the BKS-implied exposures of ``cfg`` are cached or the BKS panel and fit are.
+
+        With ``method`` (a BKS-implied method), the configuration is
+        :func:`.compare.method_config` of that method (its covariance history).
+        """
+        if method is not None:
+            from .compare import method_config
+
+            cfg = method_config(cfg, method)
         return self.has("bks_implied", cfg) or (self.has("bks_panel", cfg) and self.has("bks_fit", cfg))
 
     def _key(self, stage: str, cfg: LabConfig) -> str:
@@ -344,12 +382,18 @@ class LabSession:
         )
 
     def bks_panel(self, cfg: LabConfig) -> Any:
-        """Weekly BKS panel (G.7.2); a :class:`~narrative_ipca.exposure_lab.bks.BKSPanel`."""
+        """Weekly BKS panel (G.7.2, D88); a :class:`~narrative_ipca.exposure_lab.bks.BKSPanel`.
+
+        The training window is passed on; only ``cfg.bks.history = "training"`` uses it.
+        """
         from .bks import build_bks_panel
 
-        return self._get(
-            "bks_panel", cfg, lambda: build_bks_panel(self.simulation(cfg), cfg.bks, int(cfg.window.shock_window))
-        )
+        def compute() -> Any:
+            w = cfg.window
+            return build_bks_panel(self.simulation(cfg), cfg.bks, int(w.shock_window), train_start=w.train_start,
+                                   train_end=w.train_end)
+
+        return self._get("bks_panel", cfg, compute)
 
     def bks_fit(self, cfg: LabConfig, progress: ProgressFn | None = None) -> Any:
         """Sparse IPCA on the training weeks (G.7.2); a :class:`~narrative_ipca.exposure_lab.bks.BKSFit`.
@@ -376,8 +420,9 @@ class LabSession:
     def bks_implied(self, cfg: LabConfig) -> DirectFit:
         """Topic exposures implied by the cached BKS training fit (:func:`.bks.implied_exposures`).
 
-        Uses the cached ``bks_panel`` and ``bks_fit`` of ``cfg`` and never
-        starts a BKS fit. The selection threshold is ``cfg.direct.select_tau``.
+        Uses the cached ``bks_panel`` and ``bks_fit`` of ``cfg`` (its
+        ``cfg.bks.history``) and never starts a BKS fit. The selection
+        threshold is ``cfg.direct.select_tau``.
 
         Raises
         ------
@@ -402,7 +447,9 @@ class LabSession:
 
         The direct methods and the oracle are the ``direct`` stage of
         :func:`.compare.method_config` (shared with the sidebar's fit when the
-        method is the selected one); ``bks_implied`` is :meth:`bks_implied`.
+        method is the selected one); ``bks_implied`` and ``bks_implied_train``
+        are :meth:`bks_implied` of :func:`.compare.method_config` (the full or
+        the training-window history).
 
         Raises
         ------
@@ -410,18 +457,22 @@ class LabSession:
             For an unknown method, or when the fit refuses (OLS with
             ``L >= n_train / 2``).
         LookupError
-            For ``bks_implied`` when BKS has not been run for ``cfg``.
+            For a BKS-implied method when BKS has not been run for its
+            configuration.
         """
-        from .bks import IMPLIED_METHOD
-        from .compare import method_config
+        from .compare import BKS_METHODS, method_config
 
         mcfg = method_config(cfg, method)
-        if method == IMPLIED_METHOD:
-            return self.bks_implied(cfg)
+        if method in BKS_METHODS:
+            return self.bks_implied(mcfg)
         return self.direct(mcfg)
 
     def comparison(
-        self, cfg: LabConfig, methods: tuple[str, ...] | None = None, use_bks: bool = True
+        self,
+        cfg: LabConfig,
+        methods: tuple[str, ...] | None = None,
+        use_bks: bool | Iterable[str] = True,
+        bks_errors: Mapping[str, str] | None = None,
     ) -> Any:
         """Methods scored on the same training and forecast windows (G.7, G.8); a :class:`.compare.ComparisonResult`.
 
@@ -432,48 +483,61 @@ class LabSession:
         methods:
             Methods to compare (default :data:`.compare.METHODS`).
         use_bks:
-            ``False`` lists ``bks_implied`` as unavailable (:data:`BKS_OFF`)
-            even when a BKS fit of ``cfg`` is cached: for callers that only
-            reuse a BKS fit their user requested (D80).
+            ``True`` scores every BKS-implied method whose BKS fit is cached;
+            ``False`` lists them as unavailable (:data:`BKS_OFF`) even then;
+            a collection of method names allows only those. For callers that
+            only reuse a BKS fit their user requested (D80); the two
+            BKS-implied methods have separate fits (D88).
+        bks_errors:
+            BKS-implied method -> the error text of its BKS fit, for fits the
+            caller tried and that refused (for example too few training
+            weeks). When that fit is not cached, the method is listed as
+            unavailable with this reason (:data:`BKS_REFUSED` prefix) instead
+            of :data:`BKS_NOT_RUN`. :meth:`run` passes it.
 
         A method whose fit refuses (``ValueError``, OLS with too many topics)
         or whose BKS fit is not cached (``LookupError``) is listed as
-        unavailable with the reason. The BKS-implied fit is resolved before
+        unavailable with the reason. The BKS-implied fits are resolved before
         the key is formed, so the key always matches what was scored.
         """
-        from .bks import IMPLIED_METHOD
-        from .compare import METHODS, compare_methods
+        from .compare import BKS_METHODS, METHODS, compare_methods, method_config
 
         methods = tuple(METHODS if methods is None else methods)
         unknown = [m for m in methods if m not in METHODS]
         if unknown:
             raise ValueError(f"unknown method(s) {unknown}; known: {list(METHODS)}")
-        bks_fit: DirectFit | None = None
-        bks_reason: str | None = None
-        token = "nobks"
-        if IMPLIED_METHOD in methods:
-            if not use_bks:
-                bks_reason, token = BKS_OFF, "off"
-            else:
-                try:
-                    bks_fit = self.bks_implied(cfg)
-                    token = self.stage_key("bks_implied", cfg)
-                except LookupError as exc:
-                    bks_reason = str(exc)
-                except ValueError as exc:  # inconsistent BKS fit (lead, shock window, training end)
-                    bks_reason, token = str(exc), f"error-{self.stage_key('bks_implied', cfg)}"
-        key = self.stage_key("comparison", cfg, methods=methods, bks_token=token)
+        errors = dict(bks_errors or {})
+        bks_fits: dict[str, DirectFit] = {}
+        bks_reasons: dict[str, str] = {}
+        tokens: dict[str, str] = {}
+        for m in (x for x in methods if x in BKS_METHODS):
+            mcfg = method_config(cfg, m)
+            if not _allows(use_bks, m):
+                bks_reasons[m], tokens[m] = BKS_OFF, "off"
+                continue
+            try:
+                bks_fits[m] = self.bks_implied(mcfg)
+                tokens[m] = self.stage_key("bks_implied", mcfg)
+            except LookupError as exc:
+                if m in errors:  # the caller's fit of this variant refused: give its reason (D88)
+                    bks_reasons[m] = f"{BKS_REFUSED}{errors[m]}"
+                    tokens[m] = f"refused-{self.stage_key('bks_fit', mcfg)}"
+                else:
+                    bks_reasons[m], tokens[m] = str(exc), "nobks"
+            except ValueError as exc:  # inconsistent BKS fit (lead, shock window, training window)
+                bks_reasons[m], tokens[m] = str(exc), f"error-{self.stage_key('bks_implied', mcfg)}"
+        key = self.stage_key("comparison", cfg, methods=methods, bks_token=tokens or "nobks")
 
         def compute() -> Any:
             fits: dict[str, DirectFit] = {}
             seconds: dict[str, float] = {}
             unavailable: dict[str, str] = {}
             for m in methods:
-                if m == IMPLIED_METHOD:
-                    if bks_fit is None:
-                        unavailable[m] = str(bks_reason)
+                if m in BKS_METHODS:
+                    if m not in bks_fits:
+                        unavailable[m] = str(bks_reasons.get(m, BKS_NOT_RUN))
                         continue
-                    fit = bks_fit
+                    fit = bks_fits[m]
                 else:
                     try:
                         fit = self.method_fit(cfg, m)
@@ -497,30 +561,58 @@ class LabSession:
         with_compare: bool = False,
     ) -> dict[str, Any]:
         """Run (or fetch) every stage for ``cfg``; see :func:`run_lab` for the returned keys."""
+        from .compare import BKS_METHODS, method_config
+
         t0 = time.perf_counter()
         out: dict[str, Any] = {"config": cfg}
         timings: dict[str, dict[str, Any]] = {}
-        stages: list[tuple[str, Callable[[], Any]]] = [
-            ("market", lambda: self.market(cfg)),
-            ("simulation", lambda: self.simulation(cfg)),
-            ("truth", lambda: self.truth(cfg)),
-            ("shocks", lambda: self.shocks(cfg)),
-            ("direct", lambda: self.direct(cfg)),
-            ("evaluation", lambda: self.evaluation(cfg)),
-            ("sweep", lambda: self.sweep(cfg)),
+        keys: dict[str, str] = {}
+        # (output name, cached stage, the stage's config, call)
+        stages: list[tuple[str, str, LabConfig, Callable[[], Any]]] = [
+            ("market", "market", cfg, lambda: self.market(cfg)),
+            ("simulation", "simulation", cfg, lambda: self.simulation(cfg)),
+            ("truth", "truth", cfg, lambda: self.truth(cfg)),
+            ("shocks", "shocks", cfg, lambda: self.shocks(cfg)),
+            ("direct", "direct", cfg, lambda: self.direct(cfg)),
+            ("evaluation", "evaluation", cfg, lambda: self.evaluation(cfg)),
+            ("sweep", "sweep", cfg, lambda: self.sweep(cfg)),
         ]
         if with_bks:
             stages += [
-                ("bks_panel", lambda: self.bks_panel(cfg)),
-                ("bks_fit", lambda: self.bks_fit(cfg, progress=progress)),
-                ("bks", lambda: self.bks(cfg)),
+                ("bks_panel", "bks_panel", cfg, lambda: self.bks_panel(cfg)),
+                ("bks_fit", "bks_fit", cfg, lambda: self.bks_fit(cfg, progress=progress)),
+                ("bks", "bks", cfg, lambda: self.bks(cfg)),
             ]
+        # The comparison scores both BKS-implied variants, so the variant cfg does not select is fitted too
+        # (D88), after cfg's own stages. It may refuse where cfg's own fit runs (a few training weeks fewer):
+        # the comparison then lists it as unavailable with the reason.
+        other: dict[str, str] = {}  # output name -> BKS-implied method
+        bks_errors: dict[str, str] = {}
+        if with_bks and with_compare:
+            for m in BKS_METHODS:
+                mcfg = method_config(cfg, m)
+                if mcfg is not cfg:
+                    name = f"bks_fit_{mcfg.bks.history}"
+                    other[name] = m
+                    stages.append((name, "bks_fit", mcfg, lambda c=mcfg: self.bks_fit(c, progress=progress)))
         if with_compare:
-            stages.append(("comparison", lambda: self.comparison(cfg)))
-        for name, call in stages:
-            out[name] = call()
-            timings[name] = dict(self.last_timings.get(name, {}))
-        out["keys"] = {name: self._key(name, cfg) for name, _ in stages}
+            stages.append(("comparison", "comparison", cfg, lambda: self.comparison(cfg, bks_errors=bks_errors)))
+        for name, stage, scfg, call in stages:
+            t_stage = time.perf_counter()
+            try:
+                out[name] = call()
+            except ValueError as exc:
+                if name not in other:
+                    raise
+                bks_errors[other[name]] = str(exc)
+                out[name] = None
+                timings[name] = {"seconds": time.perf_counter() - t_stage, "cached": False, "error": str(exc)}
+                keys[name] = self.stage_key(stage, scfg)
+                continue
+            timings[name] = dict(self.last_timings.get(stage, {}))
+            # the key the stage used (the comparison's holds the BKS tokens it scored with)
+            keys[name] = str(timings[name].get("key") or self._key(stage, scfg))
+        out["keys"] = keys
         timings["total"] = {"seconds": time.perf_counter() - t0, "cached": False}
         out["timings"] = timings
         return out
@@ -546,8 +638,12 @@ def run_lab(
         lambda path.
     with_compare:
         Also run the method comparison (:meth:`LabSession.comparison`, about
-        a second at 20 topics); ``bks_implied`` is scored only together with
-        ``with_bks``.
+        a second at 20 topics); the BKS-implied methods are scored only
+        together with ``with_bks``, which then also fits the BKS variant with
+        the other covariance history (D88), after ``cfg``'s own BKS stages.
+        When that fit refuses (for example the training-window variant with
+        23 usable weeks where the full history has 25), the comparison lists
+        the variant as unavailable with the reason.
 
     Returns
     -------
@@ -560,8 +656,11 @@ def run_lab(
         ``keys`` (stage -> cache key) and ``timings`` (stage -> ``{"seconds",
         "cached"}``, plus ``total``); with ``with_bks`` also ``bks_panel``,
         ``bks_fit`` and ``bks`` (:class:`BKSLabResult`); with ``with_compare``
-        also ``comparison`` (:class:`.compare.ComparisonResult`).
+        also ``comparison`` (:class:`.compare.ComparisonResult`); with both,
+        also ``bks_fit_training`` or ``bks_fit_full`` (the other variant's
+        fit, ``None`` when it refused; its timing then holds ``error``).
     """
-    return LabSession(max_entries=1, bks_max_entries=1).run(
+    n = 2 if with_bks and with_compare else 1  # both BKS variants stay cached for the comparison (D88)
+    return LabSession(max_entries=n, bks_max_entries=n).run(
         cfg, with_bks=with_bks, progress=progress, with_compare=with_compare
     )

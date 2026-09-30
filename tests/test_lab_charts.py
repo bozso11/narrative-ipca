@@ -543,6 +543,33 @@ def test_method_styles_slots_fix_each_method_colour_across_selections() -> None:
     assert {t.name: t.line.color for t in sweep.data}["bks_implied"] == charts.CATEGORICAL[3]
 
 
+def test_method_colours_stay_with_the_training_window_bks_method() -> None:
+    """D88: bks_implied_train is appended to compare.METHODS before the oracle, so the earlier methods keep
+    their colour slots; it takes the fifth, whatever the selection, and nothing cycles."""
+    from narrative_ipca.exposure_lab.compare import METHODS as ALL
+
+    old = ("elastic_net", "ridge", "ols", "bks_implied", "oracle")  # the slots before D88
+    assert [m for m in ALL if m != "bks_implied_train"] == list(old) and ALL[-1] == "oracle"
+    new = charts.method_styles(ALL, slots=ALL)
+    before = charts.method_styles(old, slots=old)
+    for m in old:
+        assert new[m] == before[m], m
+    assert new["bks_implied_train"]["color"] == charts.CATEGORICAL[4]
+    assert new["bks_implied_train"]["symbol"] == charts.METHOD_SYMBOLS[4]
+    assert len({new[m]["color"] for m in ALL}) == len(ALL)  # every method its own colour, the oracle in ink
+    for picked in (["bks_implied_train", "oracle"], ["elastic_net", "bks_implied", "bks_implied_train"],
+                   ["ridge", "bks_implied_train", "ols"]):
+        styles = charts.method_styles(picked, slots=ALL)
+        assert all(styles[m] == new[m] for m in picked)
+    # both charts draw the two BKS variants in their slots
+    r2 = _method_r2(methods=["bks_implied_train", "bks_implied", "oracle"])
+    dots = charts.method_r2_dots(r2, slots=ALL)
+    colours = {t.name: t.marker.color for t in dots.data}
+    assert colours["bks_implied"] == charts.CATEGORICAL[3] and colours["bks_implied_train"] == charts.CATEGORICAL[4]
+    sweep = charts.method_sweep_lines(_method_sweep(["bks_implied_train", "elastic_net"]), slots=ALL)
+    assert {t.name: t.line.color for t in sweep.data}["bks_implied_train"] == charts.CATEGORICAL[4]
+
+
 def test_method_r2_dots_sorted_by_oracle_colours_symbols_and_hover() -> None:
     r2 = _method_r2()
     labels = {"elastic_net": "Elastic net", "ridge": "Ridge (GCV)", "bks_implied": "BKS-implied",

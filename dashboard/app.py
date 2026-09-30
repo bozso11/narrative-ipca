@@ -1,4 +1,4 @@
-"""Streamlit dashboard of the topic-exposure lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85).
+"""Streamlit dashboard of the topic-exposure lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85, D88).
 
 Run from the repository root::
 
@@ -25,7 +25,10 @@ reused automatically only when this browser session requested it.
 The Compare methods tab (G.15, D83) reads the session's ``comparison``
 stage: the direct fits and the BKS-implied exposures are cached by their
 training keys, so changing only the forecast window re-scores them without
-refitting. The tab never starts a BKS fit; it offers the Run BKS button.
+refitting. The tab never starts a BKS fit; it offers a Run BKS button that
+fits every selected BKS variant (full history, training window only; D88)
+this browser session has not fitted yet. The sidebar's "Covariance history"
+radio chooses the variant of the BKS tab and the sidebar's Run BKS.
 
 Widget state: every control keeps the user's own value in
 ``st.session_state["_values"]`` (copied back by an ``on_change`` callback),
@@ -124,6 +127,30 @@ D47_NOTE = (
     "information."
 )
 
+#: Compare tab: the pointer to the reasons (DESIGN.md G.15.1).
+WHY_BKS_LOWER_CAPTION = (
+    "Why the BKS-implied rows score lower than the direct methods: see the Data and method tab (DESIGN.md G.15.1)."
+)
+
+#: Data and method tab: the reasons, measured on the dashboard defaults (DESIGN.md G.15.1; mean over noise seeds 0-2).
+WHY_BKS_LOWER = (
+    "The loss is in the step that turns the BKS fit back into topic exposures (BKS Eq. 5). Measured on the "
+    "dashboard defaults, mean over noise seeds 0-2:\n\n"
+    "1. **The directions BKS keeps.** The implied exposures keep only the part of each asset's topic covariances "
+    "that lies in the K directions BKS fitted to explain weekly returns. With K = 3 those directions hold 3% "
+    "(lambda 0) to 38% (tuned) of the instruments' variation; the best three directions would hold 92%. This "
+    "step costs about 12 points of median OOS R² and 0.6 of Spearman correlation with the true exposures.\n"
+    "2. **Not the number of factors.** The best three directions of the same covariances score 10.7%, against "
+    "11.0% with all 20.\n"
+    "3. **Not the extra history, the units or the constant.** The full-history instruments alone score 11.0%, "
+    "against -2.4% for OLS on the training window. The unit conversion gains a few points. The tuned fit's "
+    "constant is about zero; it costs about 12 points only when K equals the number of topics.\n"
+    "4. **The training-window variant** goes through the same step from weaker instruments (about as good as "
+    "OLS) and scores lower still: -36% on average.\n\n"
+    "BKS is built to find the few factors that price the assets and the topics behind them, and it recovers "
+    "the factor betas well (D52). The exposure of each asset to each topic is what the direct methods estimate."
+)
+
 
 # ---------------------------------------------------------------------------
 # State and widgets
@@ -159,6 +186,11 @@ def _reset_settings() -> None:
 
 def _request_bks() -> None:
     st.session_state["bks_requested"] = True
+
+
+def _request_compare_bks(methods: tuple[str, ...]) -> None:
+    """The Compare tab's Run BKS: fit these BKS-implied variants on the next run (D88)."""
+    st.session_state["bks_compare_requested"] = tuple(methods)
 
 
 def control(kind: str, label: str, key: str, container: Any = None, *, fallback: Any = None, **kw: Any) -> Any:
@@ -321,8 +353,11 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
         if t_end:
             train_window = _ui.training_window(t_end, months)
             st.caption(train_window["text"])
-            short_note = _ui.short_training_note(train_window["start"], train_window["end"], n_topics,
-                                                 lead_days=int(values.get("sb_lead", 0) or 0))
+            short_note = _ui.short_training_note(
+                train_window["start"], train_window["end"], n_topics,
+                bks_cfg=BKSLabConfig(history=values.get("sb_bks_history", "full")),
+                lead_days=int(values.get("sb_lead", 0) or 0), shock_window=int(values.get("sb_shock_window", 5) or 5),
+            )
             if short_note:
                 st.caption(short_note)
         control("date_input", "Forecast start", "sb_forecast_start", min_value=_D0, max_value=_D1,
@@ -359,6 +394,14 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
                 "its true exposure is at least tau in absolute value.")
 
     with sb.expander("BKS model", expanded=False):
+        history = control(
+            "radio", "Covariance history", "sb_bks_history", options=list(_ui.BKS_HISTORIES),
+            format_func=lambda h: _ui.BKS_HISTORY_LABELS[h],
+            help="Full history: the instruments are kernel covariances over every day before the cut-off, as in "
+            "BKS. Training window only: the instruments and return scales use the training window alone, so BKS "
+            "sees the data the direct methods see. Drives the BKS tab and this Run BKS button; the Compare "
+            "methods tab shows both.",
+        )
         control("slider", "Factors K", "sb_bks_K", min_value=1, max_value=6, step=1,
                 help="Must be below the number of assets.")
         hl = control("number_input", "Kernel half-life (months)", "sb_bks_half_life", min_value=3.0, max_value=240.0,
@@ -379,8 +422,15 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
         control("select_slider", "Grid ratio (smallest / largest lambda)", "sb_bks_ratio",
                 options=list(_ui.LAMBDA_RATIOS), format_func=lambda r: f"{r:g}")
         control("checkbox", "Penalise the intercept", "sb_bks_pen_int")
+        # the same check as the BKS tab's button: a window BKS cannot use disables the button (D84, D87)
+        blocked = train_window is not None and not _ui.bks_training_check(
+            train_window["start"], train_window["end"], BKSLabConfig(history=history),
+            int(values.get("sb_lead", 0) or 0), int(values.get("sb_shock_window", 5) or 5),
+        )["can_run"]
         st.button("Run BKS", key="sb_run_bks", type="primary", on_click=_request_bks, width="stretch",
-                  disabled=not on_simulation, help=None if on_simulation else "BKS runs on the Simulation lab page.")
+                  disabled=not on_simulation or blocked,
+                  help="BKS runs on the Simulation lab page." if not on_simulation
+                  else "Change the training window first." if blocked else None)
     sb.button("Reset all settings", key="sb_reset", on_click=_reset_settings)
     return {"values": {**values, **st.session_state[_EFFECTIVE]}, "train_window": train_window,
             "feas_slot": feas_slot}
@@ -683,28 +733,44 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
                        "forecast window is shaded.")
 
 
-def _bks_implied_reason(ctx: dict[str, Any], lib_reason: str) -> tuple[str, bool]:
-    """Why the BKS-implied exposures are not available, and whether a BKS run can help."""
-    cfg = ctx["cfg"]
-    check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days)
+def _bks_implied_reason(ctx: dict[str, Any], lib_reason: str, method: str = IMPLIED_METHOD) -> tuple[str, bool]:
+    """Why a BKS-implied variant is not available, and whether a BKS run can help (D88)."""
+    cfg = lab_compare.method_config(ctx["cfg"], method)
+    w = cfg.window
+    check = _ui.bks_training_check(w.train_start, w.train_end, cfg.bks, cfg.exposure.lead_days, w.shock_window)
     if not check["can_run"]:
         return check["reason"], False
+    session = ctx["session"]
+    fit_err = st.session_state.get("bks_fit_errors", {}).get(session.stage_key("bks_fit", cfg))
+    if fit_err:
+        return f"BKS could not run with these settings: {fit_err}", True
     err = st.session_state.get("bks_error")
-    if err and err[0] == ctx["bks_key"]:
+    if err and err[0] == session.stage_key("bks", cfg):
         return f"BKS could not run with these settings: {err[1]}", True
     if lib_reason and lib_reason not in (BKS_NOT_RUN, BKS_OFF):  # a BKS fit that does not match these settings
         return lib_reason, True
-    return ("BKS has not been run on the current settings (training window and BKS model). Press Run BKS; the "
-            "comparison never starts a BKS fit on its own."), True
+    return ("BKS has not been run on the current settings (training window, BKS model and covariance history). "
+            "Press Run BKS; the comparison never starts a BKS fit on its own."), True
 
 
-def _bks_unavailable_box(ctx: dict[str, Any], lib_reason: str, key: str) -> str:
-    """Info box with the reason BKS-implied is not available and a Run BKS button; returns the reason."""
-    reason, can_run = _bks_implied_reason(ctx, lib_reason)
-    st.info(f"BKS-implied is not available. {reason}")
-    st.button("Run BKS", key=key, type="primary", on_click=_request_bks, disabled=not can_run,
-              help=None if can_run else "Change the training window first.")
-    return reason
+def _bks_unavailable_box(ctx: dict[str, Any], lib_reasons: dict[str, str], key: str) -> dict[str, str]:
+    """Info box with the reasons the BKS-implied variants are not available, and one Run BKS button.
+
+    The button fits every listed variant that can run (D88). Returns method -> reason.
+    """
+    reasons: dict[str, str] = {}
+    runnable: list[str] = []
+    lines = []
+    for m, lib_reason in lib_reasons.items():
+        reason, can_run = _bks_implied_reason(ctx, lib_reason, m)
+        reasons[m] = reason
+        lines.append(f"- {lab_compare.METHOD_LABELS.get(m, m)}: {reason}")
+        if can_run:
+            runnable.append(m)
+    st.info("BKS-implied is not available.\n\n" + "\n".join(lines))
+    st.button("Run BKS", key=key, type="primary", on_click=_request_compare_bks, args=(tuple(runnable),),
+              disabled=not runnable, help=None if runnable else "Change the training window first.")
+    return reasons
 
 
 def _inspect_control(options: list[str], default: str, format_func: Any) -> str:
@@ -723,7 +789,9 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     cfg, session, truth = ctx["cfg"], ctx["session"], ctx["truth"]
     a_labels = ctx["a_labels"]
     w = cfg.window
-    share = lab_bks.kernel_history_share(w.train_start, w.train_end, cfg.bks, cfg.exposure.lead_days)
+    full_bks = lab_compare.method_config(cfg, IMPLIED_METHOD).bks
+    share = lab_bks.kernel_history_share(w.train_start, w.train_end, full_bks, cfg.exposure.lead_days,
+                                         shock_window=w.shock_window)
     history = (f" On this window about {share:.0%} of that weight lies before the training start."
                if np.isfinite(share) else "")
     store = st.session_state.get("bks_store")
@@ -734,12 +802,15 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         "Every method is scored on the same forecast days, with its exposures frozen at the training end.\n\n"
         "- The direct methods are fitted on the training window only.\n"
         "- BKS enters through its implied exposures: the topic-asset covariances that the BKS fit implies for "
-        "each asset, turned into exposures with the training covariance of the topic shocks.\n"
-        "- BKS-implied sees more past data than the direct methods. Its Gamma and scales use the training window, "
-        f"but its instruments weigh all days before the cut-off (half-life {cfg.bks.half_life_months:g} months)."
-        f"{history}\n"
+        "each asset, turned into exposures with the training covariance of the topic shocks. Both BKS variants "
+        "use the sidebar's BKS model and differ in the covariance history and the return scaling.\n"
+        "- BKS-implied (full history) sees more past data than the direct methods. Its Gamma and scales use the "
+        "training window, but its instruments weigh all days before the cut-off (half-life "
+        f"{cfg.bks.half_life_months:g} months).{history}\n"
+        "- BKS-implied (training window) sees only the training window, as the direct methods do: its instruments "
+        "and return scales start at the training start. It is the like-for-like BKS figure.\n"
         f"- The BKS tab's OOS R²{bks_r2} fits K factors to each forecast week's own returns, so it cannot be set "
-        "next to the direct methods. The BKS-implied row here is the like-for-like figure.\n"
+        "next to the direct methods. The BKS-implied rows here are the comparable figures.\n"
         "- The oracle uses the true exposures of the simulation. It is the reference, not an estimator."
     )
     options = list(lab_compare.METHODS)
@@ -757,15 +828,19 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         st.info("Choose at least one method.")
         return
     methods = tuple(m for m in options if m in chosen)
-    # D80: a BKS fit is reused only when this browser session requested it for these settings
-    use_bks = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
+    # D80: a BKS fit is reused only when this browser session requested it for these settings (per variant, D88)
+    use_bks = tuple(
+        m for m in lab_compare.BKS_METHODS
+        if session.stage_key("bks_fit", lab_compare.method_config(cfg, m)) in st.session_state["bks_fit_keys"]
+    )
     with st.spinner("Comparing methods ..."):
         res = session.comparison(cfg, methods=methods, use_bks=use_bks)
 
     notes: dict[str, str] = {}
-    if IMPLIED_METHOD in methods and IMPLIED_METHOD not in res.fits:
-        lib_reason = str(res.meta.get("unavailable", {}).get(IMPLIED_METHOD, ""))
-        notes[IMPLIED_METHOD] = _bks_unavailable_box(ctx, lib_reason, "cm_run_bks")
+    missing = {m: str(res.meta.get("unavailable", {}).get(m, "")) for m in methods
+               if m in lab_compare.BKS_METHODS and m not in res.fits}
+    if missing:
+        notes.update(_bks_unavailable_box(ctx, missing, "cm_run_bks"))
 
     table = _ui.comparison_table(res.summary, notes)
     column_config: dict[str, Any] = {
@@ -786,9 +861,11 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         "The oracle is not the best fit in every window, so a method can beat it by chance.\n"
         "- The columns from Selected pairs to RMSE compare each method's training exposures with the true "
         "exposures, over all topic-asset pairs (as on the Overview).\n"
-        "- Fit time: seconds to fit on the training window; for BKS-implied, the BKS panel and fit plus the "
-        "conversion. The oracle row is last, as the reference. A dash marks a figure that does not apply."
+        "- Fit time: seconds to fit on the training window; for the BKS-implied rows, the BKS panel and fit plus "
+        "the conversion. The oracle row is last, as the reference. A dash marks a figure that does not apply."
     )
+    if any(m in lab_compare.BKS_METHODS for m in methods):
+        st.caption(WHY_BKS_LOWER_CAPTION)
 
     labels = {str(m): str(res.summary.loc[m, "label"]) for m in res.summary.index}
     if not res.fits:
@@ -831,11 +908,11 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     name = str(one.summary.loc[inspect, "label"]) if inspect in one.summary.index else label_of(inspect)
     if inspect not in one.evals:
         reason = str(one.meta.get("unavailable", {}).get(inspect, "not fitted"))
-        if inspect == IMPLIED_METHOD:
-            if IMPLIED_METHOD in methods:
-                st.info("BKS-implied is not available; see the note above.")
+        if inspect in lab_compare.BKS_METHODS:
+            if inspect in methods:
+                st.info(f"{name} is not available; see the note above.")
             else:
-                _bks_unavailable_box(ctx, reason, "cm_run_bks_inspect")
+                _bks_unavailable_box(ctx, {inspect: reason}, "cm_run_bks_inspect")
         else:
             st.info(f"{name} is not available. {_ui.unavailable_note(reason)}")
         return
@@ -851,15 +928,20 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                 "absolute value), over all pairs.")
     m[3].metric("Spearman", _ui.fmt_num(rec.get("spearman")), border=True,
                 help="Rank correlation of estimated and true exposures, all pairs.")
-    if inspect == IMPLIED_METHOD:
+    if inspect in lab_compare.BKS_METHODS:
         meta = fit.meta
         n_topics = len(fit.B_hat.index)
         K, rank = meta.get("K"), meta.get("gamma_rank")
         used = (f" (only {rank} factor directions are used; the others are numerically zero)"
                 if rank is not None and K is not None and int(rank) < int(K) else "")
+        hist = str(meta.get("history", lab_compare.BKS_HISTORY[inspect]))
+        share = meta.get("kernel_share_before_train")
+        share_text = (f"; {float(share):.0%} of the instruments' kernel weight lies before the training start"
+                      if share is not None and np.isfinite(float(share)) and float(share) > 0 else "")
         st.caption(
             f"{IMPLIED_NOTE} This fit: K = {K} factors{used}, {meta.get('n_selected_topics')} of {n_topics} "
-            f"topics kept, lambda = {float(meta.get('lam', float('nan'))):.3g}."
+            f"topics kept, lambda = {float(meta.get('lam', float('nan'))):.3g}; covariance history: "
+            f"{_ui.BKS_HISTORY_LABELS.get(hist, hist).lower()}{share_text}."
         )
     skipped = [a_labels.get(a, a) for a in fit.meta.get("skipped_assets", [])]
     if skipped:
@@ -891,10 +973,24 @@ def bks_tab(ctx: dict[str, Any]) -> None:
     L = len(ctx["sim"].topics.table)
     rule = {"tolerance": f"the {b.tolerance:.1%} tolerance rule", "argmax": "the BKS argmax",
             "fixed": f"a fixed lambda of {b.lam}"}[b.lambda_rule]
+    if b.history == "training":
+        history = (
+            f"- Covariance history: training window only. The instruments start at {cfg.window.train_start}, and "
+            "returns are divided by their training standard deviation, so BKS sees the data the direct methods "
+            f"see. The first training weeks' instruments cover only a few days (at least {b.min_days_training}).\n"
+        )
+        weighting = "inverse-volatility asset weighting (training standard deviation)"
+    else:
+        history = (
+            "- Covariance history: full history before the cut-off. The instruments weigh every day since the start "
+            f"of the data (the first {b.burn_in_weeks} weeks are a burn-in).\n"
+        )
+        weighting = "inverse-volatility asset weighting"
     st.caption(
         "Weekly BKS fit on the training weeks, evaluated on the forecast weeks.\n\n"
         f"- Kernel half-life {b.half_life_months:g} months (xi = {b.xi_weekly:.4f}); K = {b.K}; lambda by {rule} on "
-        f"a {b.n_lambdas}-point grid; inverse-volatility asset weighting.\n"
+        f"a {b.n_lambdas}-point grid; {weighting}.\n"
+        f"{history}"
         f"- Fitted on the weeks ending on or before {cfg.window.train_end}; the training Gamma is then frozen.\n"
         "- Each forecast week's K factors are fitted to that week's own returns, so the BKS OOS R² is a "
         "contemporaneous factor fit. The direct estimator fits nothing in the window, so the two R² are not "
@@ -903,7 +999,8 @@ def bks_tab(ctx: dict[str, Any]) -> None:
         "- With no topic signal BKS still scores well above zero, because noise topics' instruments inherit the "
         "assets' betas (D47)."
     )
-    check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days)
+    check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days,
+                                   cfg.window.shock_window)
     if not check["can_run"]:
         st.warning(f"{check['reason']} The direct estimator runs on windows down to one month.")
     if L > 100:
@@ -1135,8 +1232,12 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "9. **Method comparison.** The Compare methods tab scores every method on the same forecast days, with its "
         "exposures frozen at the training end. BKS enters through its implied exposures: the topic covariances "
         "that each asset's BKS factor betas imply, turned into exposures with the training covariance of the topic "
-        "shocks (DESIGN.md G.15)."
+        "shocks (DESIGN.md G.15). It enters twice: with the full covariance history, as in BKS, and with the "
+        "training window only, which sees the data the direct methods see (D88)."
     )
+
+    st.subheader("Why BKS-implied scores lower (G.15.1)")
+    st.markdown(WHY_BKS_LOWER)
 
     st.subheader("Limitations (G.12)")
     st.markdown(
@@ -1157,10 +1258,11 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "dominated by noise. The window sweep shows the distribution across windows.\n"
         "7. **BKS identification.** D47 and D52 apply: noise topics' instruments inherit betas, and the per-topic "
         "split of BKS fitted returns is not identified.\n"
-        "8. **BKS-implied exposures.** K factors cannot represent independent exposures to every topic, so the "
-        "implied exposures measure how well BKS predicts through the topics, not which topics it identifies. Their "
-        "instruments also weigh the history before the training window, so the comparison with the direct methods "
-        "is not strictly like for like."
+        "8. **BKS-implied exposures.** They keep only the part of each asset's topic covariances in the K "
+        "directions BKS fitted to explain weekly returns, which on the lab data carry little of the topic signal "
+        "(see above). With the full history their instruments also weigh the days before the training window, so "
+        "that variant is not strictly like for like; the training-window variant is, at the cost of noisy "
+        "instruments in its first training weeks."
     )
 
     st.subheader("Market data")
@@ -1217,6 +1319,35 @@ def _run_bks(session: LabSession, cfg: LabConfig, ctx: dict[str, Any]) -> None:
         return
     _store_bks(res, ctx, time.perf_counter() - t0, session.peek("bks_fit", cfg))
     st.session_state.pop("bks_requested", None)
+
+
+def _run_bks_variants(session: LabSession, cfg: LabConfig, methods: tuple[str, ...]) -> None:
+    """The Compare tab's Run BKS: panel and fit of each requested BKS-implied variant (D88).
+
+    A variant whose fit is cached already (by any browser session) costs
+    nothing; each variant's fit key joins this browser session's keys, so the
+    comparison reuses it (D80). As in :func:`_run_bks`, only the spinner is
+    drawn while the fits compute; errors are stored per fit key.
+    """
+    keys = {m: session.stage_key("bks_fit", lab_compare.method_config(cfg, m)) for m in methods}
+    st.session_state["bks_fit_keys"].update(keys.values())
+    errors: dict[str, str] = {}
+    with st.spinner("Running BKS Sparse IPCA ...", show_time=True):
+        for m in methods:
+            mcfg = lab_compare.method_config(cfg, m)
+            try:
+                session.bks_panel(mcfg)
+                session.bks_fit(mcfg)
+            except ValueError as exc:
+                errors[keys[m]] = str(exc)
+            except Exception as exc:  # numerical failures: show the reason, keep the page
+                logger.exception("BKS run failed (%s)", m)
+                errors[keys[m]] = f"{type(exc).__name__}: {exc}"
+    stored = st.session_state.setdefault("bks_fit_errors", {})
+    for k in keys.values():
+        stored.pop(k, None)
+    stored.update(errors)
+    st.session_state.pop("bks_compare_requested", None)
 
 
 def _store_bks(res: Any, ctx: dict[str, Any], seconds: float, fit: Any = None) -> None:
@@ -1336,6 +1467,8 @@ def main() -> None:
         )
 
     # BKS: run on request; re-evaluate cheaply when a fit this browser session requested is cached
+    if st.session_state.get("bks_compare_requested"):
+        _run_bks_variants(session, cfg, tuple(st.session_state["bks_compare_requested"]))
     if st.session_state.get("bks_requested", False):
         _run_bks(session, cfg, ctx)
     else:

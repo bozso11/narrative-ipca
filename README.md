@@ -150,8 +150,11 @@ topics explain out of sample. The spec and decisions are in `DESIGN.md` Part G.
 - **Compare methods**: elastic net, ridge, OLS, BKS (through its implied
   topic exposures) and the oracle scored on the same forecast days with
   exposures frozen at the training end, with one method at a time against
-  the oracle. BKS's instruments also weigh the history before the training
-  window; the tab states how much (DESIGN.md G.15).
+  the oracle. BKS enters twice: with the full history before the cut-off (its
+  instruments also weigh the days before the training window; the tab states
+  how much) and with the training window only, which sees the data the direct
+  methods see (DESIGN.md G.15, D88). BKS-implied scores below the direct
+  methods; the reasons are in DESIGN.md G.15.1 and the Data and method tab.
 - **Real data page**: a placeholder for estimates on real news; it shares the
   sidebar and lists the settings that will apply to real data.
 

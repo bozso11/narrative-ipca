@@ -1,4 +1,4 @@
-"""Pure helpers of the topic-exposure lab dashboard (DESIGN.md G.9, G.15; D66-D70, D83-D85).
+"""Pure helpers of the topic-exposure lab dashboard (DESIGN.md G.9, G.15; D66-D70, D83-D85, D88).
 
 No Streamlit imports: everything here maps widget values and lab results to
 configurations, tables and figures, so it can be tested without a running
@@ -73,6 +73,9 @@ LAMBDA_RULE_LABELS: dict[str, str] = {
     "fixed": "Fixed lambda",
 }
 LAMBDA_RATIOS: tuple[float, ...] = (1e-1, 3e-2, 1e-2, 3e-3, 1e-3)
+#: Options of the BKS model's "Covariance history" radio (D88), in display order.
+BKS_HISTORIES: tuple[str, ...] = ("full", "training")
+BKS_HISTORY_LABELS: dict[str, str] = dict(lab_bks.HISTORY_LABELS)
 HEATMAP_COLORS: dict[str, str] = {
     "Red and blue": "diverging",
     "Red and black (as the desk example)": "example",
@@ -203,15 +206,21 @@ def training_window(train_end: Any, months: int, min_days: int | None = None) ->
 
 
 def bks_training_check(
-    train_start: Any, train_end: Any, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0
+    train_start: Any, train_end: Any, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0,
+    shock_window: int = 5,
 ) -> dict[str, Any]:
-    """Whether BKS can run on this training window, and why not in plain words (G.7.2; D17).
+    """Whether BKS can run on this training window, and why not in plain words (G.7.2; D17, D88).
 
     BKS needs :data:`narrative_ipca.exposure_lab.bks.MIN_TRAIN_PERIODS`
-    training weeks that it can use: weeks that end inside the window and
-    after its burn-in at the start of the data
-    (:func:`narrative_ipca.exposure_lab.bks.training_weeks`; on the lab's
-    data the first usable week ends on 2016-04-08).
+    training weeks that it can use
+    (:func:`narrative_ipca.exposure_lab.bks.training_weeks`). With the full
+    history these are the weeks that end inside the window and after the
+    burn-in at the start of the data (on the lab's data the first usable week
+    ends on 2016-04-08). With the training window only, the first one or two
+    weeks of the window are lost while the instruments collect their first
+    days; the reason advises a longer window, or a later cut-off when the
+    first usable week is already the earliest the data allow (a window that
+    starts near 2015-01-02, where the first shocks need ``w`` earlier days).
 
     Returns
     -------
@@ -223,11 +232,26 @@ def bks_training_check(
     b = BKSLabConfig() if bks_cfg is None else bks_cfg
     ts, te = pd.Timestamp(train_start), pd.Timestamp(train_end)
     weeks = len(pd.date_range(ts, te, freq="W-FRI")) if ts <= te else 0
-    n, first = lab_bks.training_weeks(ts, te, b, lead_days)
+    n, first = lab_bks.training_weeks(ts, te, b, lead_days, shock_window=int(shock_window))
     min_weeks = int(lab_bks.MIN_TRAIN_PERIODS)
     reason = ""
     if n < min_weeks and weeks < min_weeks:
         reason = f"BKS needs at least {min_weeks} training weeks; the training window has {weeks}."
+    elif n < min_weeks and b.history == "training":
+        # a longer window helps only when its start can move the first usable week earlier; near the data
+        # start the first week is already the earliest the data allow
+        earliest = lab_bks.training_weeks(DATA_START, te, b, lead_days, shock_window=int(shock_window))[1]
+        at_data_start = pd.isna(first) or (not pd.isna(earliest) and pd.Timestamp(first) <= pd.Timestamp(earliest))
+        advice = (
+            f"Near the start of the data a longer window does not help (the first usable week ends on "
+            f"{pd.Timestamp(first).date()}). Move the cut-off later." if at_data_start and not pd.isna(first)
+            else "Move the cut-off later." if at_data_start else "Lengthen the training window."
+        )
+        reason = (
+            f"BKS needs at least {min_weeks} training weeks and can use {n} of this window's {weeks}. With the "
+            f"training window only, its instruments start at the training start and need {b.min_days_training} "
+            f"days of data, so the first weeks of the window are lost. {advice}"
+        )
     elif n < min_weeks:
         start = "" if pd.isna(first) else f", so its first usable week ends on {pd.Timestamp(first).date()}"
         reason = (
@@ -239,7 +263,8 @@ def bks_training_check(
 
 
 def short_training_note(
-    train_start: Any, train_end: Any, n_topics: int, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0
+    train_start: Any, train_end: Any, n_topics: int, bks_cfg: BKSLabConfig | None = None, lead_days: int = 0,
+    shock_window: int = 5,
 ) -> str | None:
     """Plain-words note on a training window shorter than about a year (D81), or ``None``.
 
@@ -253,7 +278,7 @@ def short_training_note(
     n = len(pd.bdate_range(ts, te))
     if n <= 0 or n >= SHORT_TRAINING_DAYS:
         return None
-    check = bks_training_check(ts, te, bks_cfg, lead_days)
+    check = bks_training_check(ts, te, bks_cfg, lead_days, shock_window)
     penalty = math.sqrt(2.0 * math.log(max(int(n_topics), 2)) / n)
     bks = "BKS can run." if check["can_run"] else check["reason"]
     return (
@@ -327,6 +352,7 @@ def default_values() -> dict[str, Any]:
         "sb_bks_n_lambdas": int(b.n_lambdas),
         "sb_bks_ratio": float(b.lambda_ratio),
         "sb_bks_pen_int": bool(b.penalize_intercept),
+        "sb_bks_history": b.history,
     }
 
 
@@ -484,6 +510,7 @@ def config_from_values(
             n_lambdas=int(v["sb_bks_n_lambdas"]),
             lambda_ratio=float(v["sb_bks_ratio"]),
             penalize_intercept=bool(v["sb_bks_pen_int"]),
+            history=v.get("sb_bks_history", "full"),
         ),
     }
     for group, build in builders.items():
@@ -524,7 +551,7 @@ def settings_in_use(
     Groups, in order: time windows (cut-off, length, the resulting training
     window, forecast start and length, shock window), direct estimator
     (method and its penalty settings), BKS model (``K``, half-life and weekly
-    ``xi``, lambda rule, grid) and asset selection (listed assets, classes,
+    ``xi``, lambda rule, grid, covariance history) and asset selection (listed assets, classes,
     left-out assets). Simulation-only settings are left out
     (:data:`SIMULATION_ONLY_NOTE`).
 
@@ -592,6 +619,8 @@ def settings_in_use(
     rows.append((g, "Lambda grid", f"{int(v['sb_bks_n_lambdas'])} points, smallest / largest "
                  f"{float(v['sb_bks_ratio']):g}"))
     rows.append((g, "Penalise the intercept", "yes" if bool(v["sb_bks_pen_int"]) else "no"))
+    history = str(v.get("sb_bks_history", "full"))
+    rows.append((g, "Covariance history", BKS_HISTORY_LABELS.get(history, history)))
 
     g = "Asset selection"
     classes = list(v.get("sb_asset_classes") or [])
@@ -614,8 +643,10 @@ def settings_in_use(
 # ---------------------------------------------------------------------------
 # Compare methods tab (G.9 tab 4, G.15)
 # ---------------------------------------------------------------------------
-#: Methods the Compare methods tab shows by default (OLS is offered too).
-COMPARE_DEFAULT_METHODS: tuple[str, ...] = ("elastic_net", "ridge", lab_bks.IMPLIED_METHOD, "oracle")
+#: Methods the Compare methods tab shows by default (OLS is offered too): both BKS variants (D88).
+COMPARE_DEFAULT_METHODS: tuple[str, ...] = (
+    "elastic_net", "ridge", lab_bks.IMPLIED_METHOD, lab_bks.IMPLIED_TRAIN_METHOD, "oracle",
+)
 
 #: Columns of the comparison table: (summary column, heading, kind). Kinds: ``pct`` (share shown in
 #: percent), ``num2`` and ``num3`` (decimals), ``int``, ``sec`` (seconds) and ``text``.

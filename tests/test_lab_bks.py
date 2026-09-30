@@ -96,6 +96,22 @@ def test_pipeline_config_fields():
     assert pc.run_wrapup is False
 
 
+def test_training_history_config():
+    """D88: the training-window variant uses its own burn-in and day minimum; the default is the full history."""
+    assert BKSLabConfig().history == "full"
+    b = BKSLabConfig(history="training")
+    assert (b.burn_in_weeks_training, b.min_days_training) == (0, 3)
+    assert (b.panel_burn_in_weeks, b.panel_min_days) == (0, 3)
+    assert (BKSLabConfig().panel_burn_in_weeks, BKSLabConfig().panel_min_days) == (52, 60)
+    pc = bks.bks_pipeline_config(b, 5, 0, n_assets=55)
+    assert pc.covariance.burn_in_periods == 0 and pc.covariance.min_days == 3
+    assert pc.data.asset_weighting == "inverse_vol"  # the divisor changes, not the weighting (D88)
+    for bad in ({"history": "recent"}, {"min_days_training": 1}, {"burn_in_weeks_training": -1}):
+        with pytest.raises(ValueError):
+            BKSLabConfig(**bad)
+    assert bks.IMPLIED_METHODS == {"full": "bks_implied", "training": "bks_implied_train"}
+
+
 @pytest.mark.parametrize("n_assets, expected", [(None, 20), (2, 2), (3, 2), (30, 15), (55, 20), (500, 20)])
 def test_pipeline_config_min_assets(n_assets, expected):
     pc = bks.bks_pipeline_config(BKSLabConfig(), 5, 0, n_assets=n_assets)
@@ -408,6 +424,80 @@ def test_k_not_below_the_number_of_assets_raises():
 def test_panel_does_not_keep_the_covariance_array(panel):
     assert not hasattr(panel, "cov") and not hasattr(panel, "shock_panel")
     assert panel.meta["shapes"]["covariance_array"][1:] == (30, 12)
+
+
+# ---------------------------------------------------------------------------
+# Training-window covariance history (D88)
+# ---------------------------------------------------------------------------
+_SIX_MONTHS = WindowConfig(train_start="2025-01-01", train_end="2025-06-30", forecast_start="2025-07-01",
+                           forecast_weeks=4)
+
+
+def test_training_history_panel_starts_at_the_training_start(sim, cfg):
+    """The panel reads returns from train_start and attention from w weekdays before it; the divisor is the
+    training standard deviation (constant), so the BKS tab's units are exact; 24 training weeks on the
+    dashboard's six-month default window."""
+    b = BKSLabConfig(history="training")
+    w = _SIX_MONTHS
+    pan = bks.build_bks_panel(sim, b, w.shock_window, train_start=w.train_start, train_end=w.train_end)
+    assert pan.meta["history"] == "training"
+    assert pan.meta["train_start"] == pd.Timestamp("2025-01-01") and pan.meta["train_end"] == pd.Timestamp("2025-06-30")
+    assert pan.aligned.calendar[0] == pd.Timestamp("2025-01-01")
+    assert pan.meta["first_input_day"] == pd.Timestamp("2024-12-25")  # 5 weekdays before the training start
+    assert pan.meta["panel_params"]["train_start"] == "2025-01-01"
+    # the divisor: one value per asset, the population std of the training returns
+    scale = pan.aligned.scale
+    assert scale is not None and (scale.nunique() == 1).all()
+    raw = sim.market.returns.loc["2025-01-01":"2025-06-30"]
+    np.testing.assert_allclose(scale.iloc[0].to_numpy(), raw.std(ddof=0).to_numpy(), rtol=1e-12)
+    fit = bks.fit_bks(pan, b, w.train_end, train_start=w.train_start)
+    assert fit.meta["n_train_periods"] == 24 and fit.train_periods[0] == pd.Timestamp("2025-01-17")
+    assert fit.meta["history"] == "training"
+    res = bks.evaluate_bks(pan, fit, w)
+    assert res.meta["units"].startswith("return units (exact") and res.meta["history"] == "training"
+    np.testing.assert_allclose(res.realized.to_numpy(), res.meta["realized_exact"].to_numpy(), rtol=1e-12)
+    # the full history of the same simulation holds the whole data (burn-in from 2015)
+    full = bks.build_bks_panel(sim, BKSLabConfig(), w.shock_window, train_start=w.train_start, train_end=w.train_end)
+    assert full.meta["history"] == "full" and full.meta["train_start"] is None
+    assert full.panel.periods[0] < pd.Timestamp("2017-01-01")
+
+
+def test_training_history_refuses_a_panel_of_another_window(sim):
+    b = BKSLabConfig(history="training")
+    w = _SIX_MONTHS
+    with pytest.raises(ValueError, match="needs train_start and train_end"):
+        bks.build_bks_panel(sim, b, w.shock_window)
+    pan = bks.build_bks_panel(sim, b, w.shock_window, train_start=w.train_start, train_end=w.train_end)
+    with pytest.raises(ValueError, match="D88"):
+        bks.fit_bks(pan, b, "2025-06-27", train_start=w.train_start)  # another training end
+    with pytest.raises(ValueError, match="D88"):
+        bks.fit_bks(pan, BKSLabConfig(), w.train_end, train_start=w.train_start)  # the full history on this panel
+    full = bks.build_bks_panel(sim, BKSLabConfig(), w.shock_window)
+    with pytest.raises(ValueError, match="D88"):
+        bks.fit_bks(full, b, w.train_end, train_start=w.train_start)  # the training history on a full panel
+    # train_start defaults to the panel's own start
+    assert bks.fit_bks(pan, b, w.train_end).meta["n_train_periods"] == 24
+
+
+@pytest.mark.parametrize("lead", [0, 1])
+def test_training_weeks_and_history_share_match_the_training_panel(sim, lead):
+    """training_weeks and kernel_history_share are exact for the training history: windows starting on each
+    weekday, near the data start (w = 20 reaches before it) and the six-month default."""
+    b = BKSLabConfig(history="training")
+    s = sim if lead == 0 else simulate_lab(_generic_cfg(lead=1))
+    cases = [("2025-01-01", "2025-06-30", 5), ("2024-11-01", "2025-04-30", 5), ("2024-12-02", "2025-05-31", 5),
+             ("2015-01-02", "2015-07-31", 20), ("2015-01-06", "2015-07-31", 5), ("2020-03-05", "2020-09-30", 1)]
+    for ts, te, w in cases:
+        pan = bks.build_bks_panel(s, b, w, train_start=ts, train_end=te)
+        periods = pd.DatetimeIndex(pan.panel.periods)
+        in_window = int(np.sum(np.asarray((periods >= pd.Timestamp(ts)) & (periods <= pd.Timestamp(te)))))
+        assert bks.training_weeks(ts, te, b, lead, shock_window=w) == (in_window, periods[0]), (ts, te, w)
+        assert bks.kernel_history_share(ts, te, b, lead, shock_window=w) == 0.0
+    # the dashboard default: 24 of the 26 week ends (the first week's instrument has 2 days, fewer than 3)
+    assert bks.training_weeks("2025-01-01", "2025-06-30", b, lead) == (24, pd.Timestamp("2025-01-17"))
+    # the full history keeps its burn-in and its share before the training start
+    assert bks.training_weeks("2025-01-01", "2025-06-30", BKSLabConfig(), lead)[0] == 26
+    assert bks.kernel_history_share("2025-01-01", "2025-06-30", BKSLabConfig(), lead) > 0.9
 
 
 @pytest.mark.slow

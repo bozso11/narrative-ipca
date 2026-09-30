@@ -15,11 +15,17 @@ numerical checks of the BKS-implied exposures are:
 3. signal: positive rank correlation with ``B_true`` and sign agreement above
    one half on the strongly linked pairs (measured 2026-09-29: Spearman 0.49,
    sign agreement 0.60 on the 48 linked pairs and 0.88 on the 8 strong-tier
-   pairs; weak, because ``K = 3`` factors cannot represent 8 topics);
+   pairs; weak, because the ``K = 3`` directions the fit keeps hold little of the topic signal,
+   DESIGN.md G.15.1);
 4. lead 1;
 5. units conversion: without the constant instrument's term, the implied
    exposures of the ``"none"`` and ``"inverse_vol"`` panels agree and match
    OLS (measured max differences 0.026 and 0.029).
+
+The training-window covariance history (D88) has its own checks: nothing
+before ``train_start - w`` weekdays reaches it (perturbation), its
+instruments are kernel covariances of the training window (by hand), plain
+IPCA on it is close to OLS, and its cache keys hold the training window.
 """
 
 from __future__ import annotations
@@ -54,7 +60,7 @@ from narrative_ipca.exposure_lab.config import (
 from narrative_ipca.exposure_lab.dgp import observed_shocks, simulate_lab, truth_for_window
 from narrative_ipca.exposure_lab.direct import fit_direct
 from narrative_ipca.exposure_lab.evaluate import evaluate_window, median_finite, recovery_metrics, window_sweep
-from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, LabSession, run_lab
+from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, BKS_REFUSED, LabSession, run_lab
 from narrative_ipca.exposure_lab.types import DirectFit
 from narrative_ipca.sparse_ipca import betas as ipca_betas
 from narrative_ipca.sparse_ipca import fitted_values
@@ -96,7 +102,7 @@ def _route(cfg: LabConfig) -> Route:
     w = cfg.window
     shocks = observed_shocks(sim.attention, w.shock_window, w.train_start, w.train_end)
     truth = truth_for_window(sim, w.shock_window)
-    panel = bks.build_bks_panel(sim, cfg.bks, w.shock_window)
+    panel = bks.build_bks_panel(sim, cfg.bks, w.shock_window, train_start=w.train_start, train_end=w.train_end)
     fit = bks.fit_bks(panel, cfg.bks, w.train_end, train_start=w.train_start)
     imp = bks.implied_exposures(panel, fit, sim, shocks, select_tau=cfg.direct.select_tau)
     return Route(cfg, sim, shocks, truth, panel, fit, imp)
@@ -267,19 +273,20 @@ def _perturb_after(sim, train_end: str):
 def _bks_route(cfg: LabConfig, sim) -> tuple[bks.BKSPanel, bks.BKSFit, DirectFit]:
     w = cfg.window
     shocks = observed_shocks(sim.attention, w.shock_window, w.train_start, w.train_end)
-    panel = bks.build_bks_panel(sim, cfg.bks, w.shock_window)
+    panel = bks.build_bks_panel(sim, cfg.bks, w.shock_window, train_start=w.train_start, train_end=w.train_end)
     fit = bks.fit_bks(panel, cfg.bks, w.train_end, train_start=w.train_start)
     return panel, fit, bks.implied_exposures(panel, fit, sim, shocks, select_tau=cfg.direct.select_tau)
 
 
+@pytest.mark.parametrize("history", ["full", "training"])
 @pytest.mark.parametrize(("lead", "train_end", "forecast_start"), [(0, "2022-12-30", "2023-01-02"),
                                                                    (1, "2022-12-28", "2022-12-29")])
-def test_bks_route_ignores_data_after_the_training_end(lead, train_end, forecast_start):
+def test_bks_route_ignores_data_after_the_training_end(lead, train_end, forecast_start, history):
     """Perturbing returns and attention after the cut-off leaves Gamma, the implied exposures and the
     training scales unchanged (lead 1 with a Wednesday cut-off: the boundary week), mirroring the direct
-    estimator's test in test_lab_direct.py."""
+    estimator's test in test_lab_direct.py; for both covariance histories (D88)."""
     win = WindowConfig(train_start="2021-01-01", train_end=train_end, forecast_start=forecast_start)
-    cfg = _cfg(n_topics=8, lead=lead, window=win)  # the lab default inverse_vol weighting
+    cfg = _cfg(n_topics=8, lead=lead, window=win, bks_cfg=BKSLabConfig(history=history))  # inverse_vol weighting
     sim = simulate_lab(cfg)
     panel, fit, imp = _bks_route(cfg, sim)
     sim2 = _perturb_after(sim, train_end)
@@ -293,6 +300,7 @@ def test_bks_route_ignores_data_after_the_training_end(lead, train_end, forecast
     np.testing.assert_array_equal(imp.ret_scale.to_numpy(), imp2.ret_scale.to_numpy())
     np.testing.assert_array_equal(imp.ret_mean.to_numpy(), imp2.ret_mean.to_numpy())
     assert imp.meta["last_return_day"] <= pd.Timestamp(train_end)
+    assert imp.method == bks.IMPLIED_METHODS[history]
     # lead 1: the burn-in check and the kernel-history share use the same calendar as the panel
     n, first = bks.training_weeks(win.train_start, win.train_end, cfg.bks, lead)
     assert first == panel.panel.periods[0] and n == int(fit.meta["n_train_periods"])
@@ -338,6 +346,200 @@ def test_kernel_history_share():
 
 
 # ---------------------------------------------------------------------------
+# Training-window covariance history (D88): BKS sees the data the direct methods see
+# ---------------------------------------------------------------------------
+def _perturb_before(sim, first_day: str, attention_only_on: str | None = None):
+    """Returns and attention before ``first_day`` replaced by other values (or, with ``attention_only_on``,
+    only the attention of that one day)."""
+    rng = np.random.default_rng([7, 3])
+    ret = sim.market.returns.copy()
+    att = sim.attention.copy()
+    if attention_only_on is not None:
+        day = att.index == pd.Timestamp(attention_only_on)
+        att.loc[day] = att.loc[day] * 2.0 + 0.05
+    else:
+        before_r = ret.index < pd.Timestamp(first_day)
+        ret.loc[before_r] = ret.loc[before_r] * 3.0 + rng.normal(0.0, 0.01, size=(int(before_r.sum()), ret.shape[1]))
+        before_a = att.index < pd.Timestamp(first_day)
+        att.loc[before_a] = att.loc[before_a] * 2.0 + np.abs(
+            rng.normal(0.0, 1.0, size=(int(before_a.sum()), att.shape[1])))
+    return dataclasses.replace(sim, market=dataclasses.replace(sim.market, returns=ret), attention=att)
+
+
+@pytest.mark.parametrize("lead", [0, 1])
+def test_training_history_ignores_data_before_the_training_window(lead):
+    """D88: returns and attention before train_start - w weekdays never reach the training-history BKS route:
+    the panel instruments and returns, Gamma, the implied exposures and the training scales are bit-identical.
+    The full history does use them; and the attention of the w-th weekday before train_start is used."""
+    win = WindowConfig(train_start="2021-01-01", train_end="2021-12-31", forecast_start="2022-01-03")
+    cfg = _cfg(n_topics=8, lead=lead, window=win, bks_cfg=BKSLabConfig(history="training"))
+    sim = simulate_lab(cfg)
+    first = "2020-12-25"  # 5 weekdays before 2021-01-01 (Friday) on the weekday calendar
+    assert len(pd.bdate_range(first, "2020-12-31")) == cfg.window.shock_window
+    w = cfg.window
+
+    def route(s):
+        # the direct estimator's shocks on the training days need no attention before `first` either; computed
+        # from it, they are bit-identical under the perturbation (from the whole series, pandas' rolling mean
+        # carries rounding of about 1e-16 from earlier days into later ones)
+        shocks = observed_shocks(s.attention.loc[first:], w.shock_window, w.train_start, w.train_end)
+        panel = bks.build_bks_panel(s, cfg.bks, w.shock_window, train_start=w.train_start, train_end=w.train_end)
+        fit = bks.fit_bks(panel, cfg.bks, w.train_end, train_start=w.train_start)
+        return panel, fit, bks.implied_exposures(panel, fit, s, shocks)
+
+    panel, fit, imp = route(sim)
+    sim2 = _perturb_before(sim, first)
+    panel2, fit2, imp2 = route(sim2)
+    p, p2 = panel.panel, panel2.panel
+    assert p.periods.equals(p2.periods)
+    for name in ("X", "y", "t_idx", "asset_idx"):
+        np.testing.assert_array_equal(getattr(p, name), getattr(p2, name))
+    np.testing.assert_array_equal(fit.fit.Gamma, fit2.fit.Gamma)
+    np.testing.assert_array_equal(imp.B_hat.to_numpy(), imp2.B_hat.to_numpy())
+    np.testing.assert_array_equal(imp.ret_scale.to_numpy(), imp2.ret_scale.to_numpy())
+    np.testing.assert_array_equal(imp.ret_mean.to_numpy(), imp2.ret_mean.to_numpy())
+    assert panel.meta["first_input_day"] == pd.Timestamp(first)
+    # with the lab's own shocks (from the whole attention series) the exposures agree to rounding
+    imp_lab, imp_lab2 = _bks_route(cfg, sim)[2], _bks_route(cfg, sim2)[2]
+    np.testing.assert_allclose(imp_lab2.B_hat.to_numpy(), imp_lab.B_hat.to_numpy(), rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(imp_lab.B_hat.to_numpy(), imp.B_hat.to_numpy(), rtol=1e-12, atol=1e-14)
+    # the full history reads those days
+    full = dataclasses.replace(cfg, bks=BKSLabConfig())
+    fp, fp2 = _bks_route(full, sim)[0].panel, _bks_route(full, sim2)[0].panel
+    assert not np.array_equal(fp.X, fp2.X)
+    # the boundary is tight: the attention of 2020-12-25 enters the first shock (2021-01-01)
+    p3 = _bks_route(cfg, _perturb_before(sim, first, attention_only_on=first))[0].panel
+    assert not np.array_equal(p.X, p3.X)
+
+
+def test_training_history_instruments_are_kernel_covariances_of_the_training_window():
+    """The last training week's instrument row is the kernel covariance (BKS App. B.1) of the scaled returns
+    and the direct estimator's shocks z, over the days from train_start to the window end of the week before."""
+    from narrative_ipca.covariances import brute_force_covariance, kernel_weights, window_bounds
+    from narrative_ipca.data import period_end_index
+
+    win = WindowConfig(train_start="2022-07-01", train_end="2022-12-30", forecast_start="2023-01-02")
+    r = _route(_cfg(n_topics=5, window=win, bks_cfg=BKSLabConfig(history="training")))
+    pan, fit = r.panel, r.fit
+    days = pd.DatetimeIndex(pan.aligned.calendar)
+    assert days[0] == pd.Timestamp("2022-07-01")
+    pid, ends = period_end_index(days, "W")
+    last = pd.Timestamp(fit.train_periods.max())
+    j = int(ends.get_loc(last)) - 1  # the return week pairs with the instruments of the week before
+    wts = kernel_weights(pid, j, float(pan.pipeline_cfg.covariance.xi))
+    _, stop, cut = window_bounds(pid, int(pan.pipeline_cfg.covariance.skip_days))
+    wts[cut[j]:stop[j]] = 0.0
+    topics = [str(t) for t in pan.panel.topics]
+    z = r.shocks.z.reindex(index=days, columns=topics)  # lead 0: the panel's shocks are the direct estimator's z
+    rows = np.flatnonzero(pan.panel.t_idx == int(pan.panel.periods.get_loc(last)))
+    assert len(rows) == 30
+    for row in rows:
+        a = str(pan.panel.assets[pan.panel.asset_idx[row]])
+        expected = brute_force_covariance(pan.aligned.returns[a], z, wts)
+        np.testing.assert_allclose(pan.panel.X[row, 1:], expected, rtol=1e-9, atol=1e-15)
+
+
+@pytest.mark.parametrize("lead", [0, 1])
+def test_training_history_plain_ipca_is_close_to_ols(lead):
+    """K = L = 8 and lambda = 0 (plain IPCA) on the training window only: without the constant's term the
+    implied exposures are close to OLS on the same window, because the kernel is nearly flat over it
+    (xi^26 = 0.94). They differ because the last instrument ends a week and a day before the cut-off and
+    because of the kernel weights. Measured 2026-09-30, max |difference| over the 8 x 30 exposures:
+    six months 0.074 (lead 0) and 0.104 (lead 1), against exposures up to 0.59; eight years 0.029 and 0.031."""
+    b = BKSLabConfig(K=8, lambda_rule="fixed", lam=0.0, history="training")
+    for win, tol in ((WindowConfig(train_start="2022-07-01", train_end="2022-12-30", forecast_start="2023-01-02"), 0.15),
+                     (WindowConfig(), 0.05)):
+        r = _route(_cfg(n_topics=8, lead=lead, window=win, bks_cfg=b))
+        assert r.fit.lam == 0.0 and r.implied.method == "bks_implied_train"
+        ols = fit_direct(r.sim, r.shocks, DirectConfig(method="ols"), r.truth).B_hat
+        net = r.implied.B_hat - r.implied.meta["B_const"]
+        assert float((net - ols).abs().to_numpy().max()) < tol, (win.train_start, lead)
+        # the unit conversion is exact: the divisor is the training standard deviation of fit_direct
+        np.testing.assert_allclose(r.implied.meta["divisor"].to_numpy(), r.implied.ret_scale.to_numpy(), rtol=1e-12)
+        assert r.implied.meta["kernel_share_before_train"] == 0.0
+
+
+def test_training_history_keys():
+    """D71, D88: the training-history panel key holds the history, its own settings, the training window, w and
+    the lead; the full-history panel key holds none of the window; fit, implied and comparison keys follow."""
+    k = LabSession.stage_key
+    full = _cfg(n_topics=8)
+    tr = dataclasses.replace(full, bks=dataclasses.replace(full.bks, history="training"))
+
+    def win(c, **kw):
+        return dataclasses.replace(c, window=dataclasses.replace(c.window, **kw))
+
+    def bk(c, **kw):
+        return dataclasses.replace(c, bks=dataclasses.replace(c.bks, **kw))
+
+    def lead(c):
+        return dataclasses.replace(c, exposure=dataclasses.replace(c.exposure, lead_days=1))
+
+    assert k("bks_panel", tr) != k("bks_panel", full)
+    # the training start (and end: the divisor) enter the training panel only
+    assert k("bks_panel", win(tr, train_start="2016-01-04")) != k("bks_panel", tr)
+    assert k("bks_panel", win(full, train_start="2016-01-04")) == k("bks_panel", full)
+    assert k("bks_panel", win(tr, train_end="2022-12-23")) != k("bks_panel", tr)
+    assert k("bks_panel", win(full, train_end="2022-12-23")) == k("bks_panel", full)
+    for c in (tr, full):
+        assert k("bks_panel", win(c, shock_window=3)) != k("bks_panel", c)
+        assert k("bks_panel", lead(c)) != k("bks_panel", c)
+        assert k("bks_panel", win(c, forecast_start="2023-03-06")) == k("bks_panel", c)
+        assert k("bks_fit", win(c, forecast_start="2023-03-06")) == k("bks_fit", c)
+    # each history's own settings enter its panel key only
+    assert k("bks_panel", bk(tr, min_days_training=5)) != k("bks_panel", tr)
+    assert k("bks_panel", bk(full, min_days_training=5)) == k("bks_panel", full)
+    assert k("bks_panel", bk(tr, burn_in_weeks=26)) == k("bks_panel", tr)
+    assert k("bks_panel", bk(full, burn_in_weeks=26)) != k("bks_panel", full)
+    # fit, implied and comparison keys follow
+    assert k("bks_fit", tr) != k("bks_fit", full) and k("bks_implied", tr) != k("bks_implied", full)
+    assert k("bks_fit", win(tr, train_start="2016-01-04")) != k("bks_fit", tr)
+    assert k("comparison", full, bks_token={"bks_implied": "a", "bks_implied_train": "b"}) != k(
+        "comparison", full, bks_token={"bks_implied": "a", "bks_implied_train": "c"})
+
+
+def test_both_bks_variants_in_one_comparison():
+    """D88: the full-history and the training-window BKS-implied exposures are separate methods with separate
+    fits; the comparison never starts either, and use_bks can allow one of them."""
+    cfg = _cfg(n_topics=12, share=0.5)
+    methods = ("elastic_net", "bks_implied", "bks_implied_train", "oracle")
+    mc = method_config(cfg, "bks_implied_train")
+    assert method_config(cfg, "bks_implied") is cfg and mc.bks.history == "training"
+    assert mc.bks == dataclasses.replace(cfg.bks, history="training") and mc.window == cfg.window
+    assert method_config(mc, "bks_implied").bks.history == "full"
+    assert METHOD_LABELS["bks_implied"] == "BKS-implied (full history)"
+    assert METHOD_LABELS["bks_implied_train"] == "BKS-implied (training window)"
+
+    s = LabSession()
+    res0 = s.comparison(cfg, methods=methods)
+    assert not res0.summary.loc[["bks_implied", "bks_implied_train"], "available"].any()
+    assert (res0.summary.loc[["bks_implied", "bks_implied_train"], "note"] == BKS_NOT_RUN).all()
+    assert s.stats["bks_fit"]["misses"] == 0 and s.stats["bks_panel"]["misses"] == 0
+    s.bks_fit(mc)  # the training-window variant only
+    assert s.bks_ready(cfg, "bks_implied_train") and not s.bks_ready(cfg, "bks_implied")
+    key1 = s.comparison_key(cfg, methods)
+    res1 = s.comparison(cfg, methods=methods)
+    assert res1.summary.loc["bks_implied_train", "available"] and not res1.summary.loc["bks_implied", "available"]
+    s.bks_fit(cfg)
+    assert s.comparison_key(cfg, methods) != key1
+    res2 = s.comparison(cfg, methods=methods)
+    assert res2.summary["available"].all() and list(res2.summary.index) == list(methods)
+    assert list(res2.summary["label"]) == ["Elastic net", "BKS-implied (full history)",
+                                           "BKS-implied (training window)", "Oracle (true exposures)"]
+    f_full, f_train = res2.fits["bks_implied"], res2.fits["bks_implied_train"]
+    assert (f_full.method, f_train.method) == ("bks_implied", "bks_implied_train")
+    assert f_full.meta["history"] == "full" and f_train.meta["history"] == "training"
+    assert res2.summary.loc["bks_implied_train", "note"] == bks.IMPLIED_NOTE
+    assert not np.allclose(f_full.B_hat.to_numpy(), f_train.B_hat.to_numpy())
+    assert res2.meta["same_training_scales"]  # both on fit_direct's training pairs (D74)
+    assert s.method_fit(cfg, "bks_implied_train") is f_train
+    # use_bks as a collection: only the allowed variant is scored
+    res3 = s.comparison(cfg, methods=methods, use_bks=("bks_implied_train",))
+    assert res3.summary.loc["bks_implied", "note"] == BKS_OFF and res3.summary.loc["bks_implied_train", "available"]
+    assert s.comparison_key(cfg, methods, use_bks=("bks_implied_train",)) != s.comparison_key(cfg, methods)
+
+
+# ---------------------------------------------------------------------------
 # compare_methods
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
@@ -357,6 +559,8 @@ def test_method_config_and_labels():
     assert en.direct == DirectConfig(method="elastic_net", select_tau=0.1)
     assert en.window == cfg.window and en.bks == cfg.bks
     assert method_config(cfg, "bks_implied") is cfg
+    assert method_config(cfg, "bks_implied_train").bks.history == "training"
+    assert METHODS == ("elastic_net", "ridge", "ols", "bks_implied", "bks_implied_train", "oracle")
     with pytest.raises(ValueError, match="unknown method"):
         method_config(cfg, "lasso")
     assert set(METHOD_LABELS) == set(METHODS) and METHODS[-1] == "oracle"
@@ -507,6 +711,35 @@ def test_run_lab_with_compare():
     assert res.summary["available"].all() and list(res.summary.index) == list(METHODS)
     assert out["keys"]["comparison"].startswith("comparison-")
     assert "comparison" not in run_lab(cfg)
+    # the other variant's fit is a stage of its own, after cfg's BKS stages: timed and keyed (D88)
+    other = LabSession.stage_key("bks_fit", method_config(cfg, "bks_implied_train"))
+    assert out["keys"]["bks_fit_training"] == other and out["bks_fit_training"] is not None
+    assert list(out["keys"]).index("bks_fit_training") > list(out["keys"]).index("bks")
+    assert not out["timings"]["market"]["cached"] and "error" not in out["timings"]["bks_fit_training"]
+
+
+def test_run_lab_with_compare_when_the_other_variant_refuses():
+    """A six-month window ending on a Wednesday: the full history has 25 usable weeks, the training window 23
+    (review 2026-09-30: run_lab raised instead of listing the training-window variant as unavailable)."""
+    w = WindowConfig(train_start="2025-01-01", train_end="2025-06-25", forecast_start="2025-06-26", forecast_weeks=4)
+    cfg = _cfg(n_topics=12, share=0.5, window=w)
+    assert bks.training_weeks(w.train_start, w.train_end, cfg.bks)[0] == 25
+    assert bks.training_weeks(w.train_start, w.train_end, BKSLabConfig(history="training"))[0] == 23
+    out = run_lab(cfg, with_bks=True, with_compare=True)
+    s = out["comparison"].summary
+    assert s.loc["bks_implied", "available"] and not s.loc["bks_implied_train", "available"]
+    note = s.loc["bks_implied_train", "note"]
+    assert note.startswith(BKS_REFUSED) and "only 23 weekly periods" in note and BKS_NOT_RUN not in note
+    assert out["bks_fit_training"] is None and "only 23 weekly periods" in out["timings"]["bks_fit_training"]["error"]
+    assert out["keys"]["bks_fit_training"].startswith("bks_fit-")
+    assert s.drop(index="bks_implied_train")["available"].all()
+    # without the caller's error text the same comparison says BKS was not run, under another key
+    s2 = LabSession().comparison(cfg).summary
+    assert s2.loc["bks_implied_train", "note"] == BKS_NOT_RUN
+    # the training-history choice itself still raises: the user asked for that fit
+    tcfg = method_config(cfg, "bks_implied_train")
+    with pytest.raises(ValueError, match="only 23 weekly periods"):
+        run_lab(tcfg, with_bks=True, with_compare=True)
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +756,11 @@ def _real_data_available() -> bool:
 
 @pytest.mark.skipif(not _real_data_available(), reason="data/market or data/reference missing")
 def test_real_data_six_month_training_window_runs_bks_and_the_comparison():
+    """The dashboard's default window runs both BKS variants and the comparison (D84, D88). Measured
+    2026-09-30, median OOS R2 in the forecast window, noise seed 0: full history 7.0% (26 weeks, lambda 0.277,
+    10 topics kept), training window -16.2% (24 weeks, lambda 0.017, 20 topics kept); elastic net 16.8%, oracle
+    23.2%. Seed 0 is the best of seeds 0-4 for both variants (training window -16% to -107%, full history -18%
+    to 7%; the training window lower in every seed; DESIGN.md D88, G.15.1)."""
     w = WindowConfig(train_start="2025-01-01", train_end="2025-06-30", forecast_start="2025-07-01", forecast_weeks=4)
     cfg = LabConfig(window=w)  # 55 listed assets, 20 manual topics, K = 3
     s = LabSession()
@@ -530,8 +768,16 @@ def test_real_data_six_month_training_window_runs_bks_and_the_comparison():
     assert bks.MIN_TRAIN_PERIODS <= fit.meta["n_train_periods"] <= 26
     assert fit.meta["last_train_period"] <= pd.Timestamp("2025-06-30")
     assert np.isfinite(s.bks(cfg).r2_pooled)
+    tcfg = method_config(cfg, "bks_implied_train")
+    tfit = s.bks_fit(tcfg)
+    assert tfit.meta["n_train_periods"] == 24 and tfit.train_periods[0] == pd.Timestamp("2025-01-17")
+    assert np.isfinite(s.bks(tcfg).r2_pooled)
     res = s.comparison(cfg)
     assert res.summary["available"].all()
     assert res.r2.shape == (55, len(METHODS))
-    imp = res.fits["bks_implied"]
-    assert imp.meta["skipped_assets"] == [] and np.isfinite(imp.B_hat.to_numpy()).all()
+    for m in ("bks_implied", "bks_implied_train"):
+        imp = res.fits[m]
+        assert imp.meta["skipped_assets"] == [] and np.isfinite(imp.B_hat.to_numpy()).all()
+    assert res.fits["bks_implied"].meta["kernel_share_before_train"] > 0.9
+    assert res.fits["bks_implied_train"].meta["kernel_share_before_train"] == 0.0
+    assert np.isfinite(res.summary.loc["bks_implied_train", "r2_median_window"])

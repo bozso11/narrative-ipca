@@ -422,7 +422,41 @@ class DirectConfig:
 
 @dataclass(frozen=True)
 class BKSLabConfig:
-    """BKS Sparse IPCA as run by the lab (G.7.2, D70)."""
+    """BKS Sparse IPCA as run by the lab (G.7.2, D70, D88).
+
+    Attributes (the less obvious ones)
+    ----------------------------------
+    history:
+        Which data the BKS panel is built from (D88):
+
+        * ``"full"`` (default): every day from the start of the data. The
+          instruments of a training week are kernel covariances that weigh the
+          whole history before it, and ``inverse_vol`` divides each return by
+          its trailing 252-day volatility. The first ``burn_in_weeks`` weekly
+          instrument periods are dropped (D17), and an instrument needs
+          ``min_days`` observed days.
+        * ``"training"``: only the training window. Returns from
+          ``train_start`` on and attention from ``w`` weekdays before
+          ``train_start`` on, so the first shock falls on ``train_start`` and
+          BKS sees the data the direct methods see. ``inverse_vol`` divides by
+          the asset's training standard deviation (population, over the
+          training return days; frozen for the forecast weeks), because a
+          trailing volatility would need about 63 days of warm-up inside the
+          window. The burn-in and the day minimum are
+          ``burn_in_weeks_training`` and ``min_days_training``.
+    burn_in_weeks_training, min_days_training:
+        The training variant's burn-in (weekly instrument periods dropped at
+        the start) and fewest observed days per instrument. The defaults, 0
+        and 3, keep 24 of the 26 week ends of the dashboard's default window
+        (2025-01-01 to 2025-06-30), so the fit meets
+        :data:`narrative_ipca.exposure_lab.bks.MIN_TRAIN_PERIODS`; 3 is the
+        largest minimum that keeps every six-month window with a month-end
+        cut-off from 2016 to 2025 at 24 weeks for both leads (5, one trading
+        week, would refuse 3 same-day and 12 next-day windows of the 119).
+        The trade-off: the first training weeks' instruments are covariances
+        over a few days to a few weeks of data, far noisier than the full
+        variant's (at least 52 weeks).
+    """
 
     K: int = 3
     half_life_months: float = 69.0
@@ -436,6 +470,9 @@ class BKSLabConfig:
     burn_in_weeks: int = 52
     min_days: int = 60
     max_iter: int = 300
+    history: Literal["full", "training"] = "full"
+    burn_in_weeks_training: int = 0
+    min_days_training: int = 3
 
     def __post_init__(self) -> None:
         _normalise(self)
@@ -453,11 +490,27 @@ class BKSLabConfig:
             raise ValueError("n_lambdas must be >= 2")
         if not 0.0 < self.lambda_ratio < 1.0:
             raise ValueError("lambda_ratio must be in (0, 1)")
+        if self.history not in ("full", "training"):
+            raise ValueError("history must be 'full' or 'training'")
+        if int(self.burn_in_weeks) < 0 or int(self.burn_in_weeks_training) < 0:
+            raise ValueError("burn_in_weeks and burn_in_weeks_training must be >= 0")
+        if int(self.min_days) < 2 or int(self.min_days_training) < 2:
+            raise ValueError("min_days and min_days_training must be >= 2")
 
     @property
     def xi_weekly(self) -> float:
         """Weekly kernel decay with the given half-life: ``0.5 ** (1 / weeks)``."""
         return float(0.5 ** (1.0 / (self.half_life_months * 52.0 / 12.0)))
+
+    @property
+    def panel_burn_in_weeks(self) -> int:
+        """Burn-in of the panel this config builds: ``burn_in_weeks`` or, under ``"training"``, ``burn_in_weeks_training``."""
+        return int(self.burn_in_weeks_training if self.history == "training" else self.burn_in_weeks)
+
+    @property
+    def panel_min_days(self) -> int:
+        """Fewest observed days per instrument: ``min_days`` or, under ``"training"``, ``min_days_training``."""
+        return int(self.min_days_training if self.history == "training" else self.min_days)
 
 
 # ---------------------------------------------------------------------------
@@ -503,11 +556,14 @@ class LabConfig:
         if name == "window_train":
             return {"train_start": w.train_start, "train_end": w.train_end, "shock_window": w.shock_window}
         if name == "window_shock":
+            # the training-history panel starts at train_start and scales by the training std (D88)
+            if self.bks.history == "training":
+                return {"shock_window": w.shock_window, "train_start": w.train_start, "train_end": w.train_end}
             return {"shock_window": w.shock_window}
         if name == "bks_panel":
             b = self.bks
-            return {"half_life_months": b.half_life_months, "asset_weighting": b.asset_weighting,
-                    "burn_in_weeks": b.burn_in_weeks, "min_days": b.min_days}
+            return {"history": b.history, "half_life_months": b.half_life_months, "asset_weighting": b.asset_weighting,
+                    "burn_in_weeks": b.panel_burn_in_weeks, "min_days": b.panel_min_days}
         return getattr(self, name)
 
     def key(self, stage: str) -> str:

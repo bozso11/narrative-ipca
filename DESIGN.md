@@ -10,7 +10,7 @@ The document has seven parts:
 
 - Part A — the methodology, step by step, mapped to modules and equations.
 - Part B — the decision register (D1–D52): every assumption or best guess, with
-  the reason and where to change it. The lab's decisions D53–D72 and D74–D87
+  the reason and where to change it. The lab's decisions D53–D72 and D74–D88
   are in Part G (D73 is a Part B entry).
 - Part C — module contracts (function signatures the code implements).
 - Part D — the simulation data-generating process with known ground truth.
@@ -772,8 +772,9 @@ compares two estimators on the same data: the research plan's direct
 topic-to-asset exposure regression (the "direct arm" of Comparison A,
 research plan v0.3 Section 5) and BKS Sparse IPCA from this package. G.15
 scores them, and the oracle, on the same forecast days with every method's
-exposures frozen at the training end. BKS's instruments also weigh the
-history before the training window (G.15).
+exposures frozen at the training end. BKS enters twice: with the full
+covariance history, whose instruments also weigh the days before the
+training window, and with the training window only (D88, G.15).
 
 Code: `narrative_ipca/exposure_lab/` (library, no Streamlit imports) and
 `dashboard/app.py` (the Streamlit app). Reference data: `data/reference/`.
@@ -1023,9 +1024,12 @@ design (`W`), the population truth (`B_true`) and the estimates side by side.
   topic shock, and the first `w` days of the data have none (the shock needs
   `w` earlier days), so the earliest cut-off is 2015-02-06 at `w = 5`
   (2015-02-02 at `w = 1`, 2015-02-27 at `w = 20`); the cut-off control
-  starts there. BKS also skips its first 52 weeks of data (burn-in, D17):
-  with inverse-volatility weighting its first usable week ends on
-  2016-04-08, and `bks.training_weeks` counts only the weeks after it.
+  starts there. BKS with the full history also skips its first 52 weeks of
+  data (burn-in, D17): with inverse-volatility weighting its first usable
+  week ends on 2016-04-08, and `bks.training_weeks` counts only the weeks
+  after it. The training-window variant (D88) has no burn-in; it loses the
+  first one or two weeks of the window instead (24 of the 26 week ends of the
+  dashboard default).
 - **Forecast window**: starts at `forecast_start` (library default
   2023-01-02, must be after `train_end`; a gap is allowed) and lasts
   `forecast_weeks` weeks (1 to 12), i.e. the weekdays in
@@ -1113,6 +1117,48 @@ the lambda rule (`tolerance`, default 2% as in D51; `argmax`, BKS exact;
 is cached; above 100 topics the dashboard keeps the coarse grid and warns
 about runtime (Section G.10). It needs at least 24 training weeks (D84). The
 method comparison turns the training fit into topic exposures (G.15).
+
+**Covariance history (D88).** `BKSLabConfig.history` chooses the data the
+panel is built from:
+
+1. `"full"` (default, as in BKS): every day from the start of the data. A
+   training week's instruments weigh the whole history before it; the first
+   52 weekly instrument periods are a burn-in (D17), an instrument needs 60
+   observed days, and `inverse_vol` divides each daily return by its trailing
+   252-day volatility.
+2. `"training"`: the training window only. Returns from `train_start` on and
+   attention from `w` weekdays before `train_start` on, so the first shock
+   falls on `train_start` and the shocks are the direct estimator's `z`.
+   Nothing before `train_start - w` weekdays enters any BKS quantity. Three
+   settings differ:
+   - `inverse_vol` divides by the asset's training standard deviation
+     (population, over the return days up to `train_end` that pair with a
+     shock: the direct estimator's `sd_train(r_n)`), the same divisor on
+     every day and frozen for the forecast weeks. A trailing volatility
+     would need 63 days of warm-up inside the window (a quarter of 252, the
+     package rule), which leaves about 12 of the 26 weeks of a six-month
+     window. The divisor uses training days after the week it scales; that
+     is in-sample for the training fit and uses nothing after the cut-off.
+     It also makes the unit conversion of G.15 exact.
+   - The burn-in is `burn_in_weeks_training = 0` weeks.
+   - An instrument needs `min_days_training = 3` observed days.
+3. **The trade-off:** the training variant's first instruments are
+   covariances over a few days to a few weeks of data, far noisier than the
+   full history's (at least 52 weeks). With these settings the dashboard
+   default window (2025-01-01 to 2025-06-30) keeps 24 of its 26 week ends,
+   because the first week's instrument has only 2 days. 3 days is the largest
+   minimum that keeps every six-month window with a month-end cut-off from
+   2016 to 2025 at 24 weeks or more for both leads; 5 days (one trading week)
+   would refuse 3 same-day and 12 next-day windows of the 119.
+4. Forecast weeks (the BKS tab's own OOS R2): the returns after `train_end`
+   stay in the panel, and their instruments accumulate from `train_start` up
+   to the week before (no look-ahead).
+5. The training-history panel holds one training window's data and scales:
+   its cache key holds the window (G.10), and `fit_bks` refuses another
+   window on it.
+
+`bks.training_weeks` and `bks.kernel_history_share` handle both histories
+without building a panel; under `"training"` the share is 0.
 
 **What the BKS OOS R2 measures (D79).** Each forecast week's `K` factors are
 estimated from that week's own returns (`oos_factor`), so the BKS OOS R2 is a
@@ -1217,8 +1263,11 @@ Sidebar controls, grouped:
 5. **Direct estimator**: method, penalty rule and values; a run-time warning
    when cross-validation would take more than about 5 seconds (about 25 s at
    520 topics x 55 assets).
-6. **BKS model**: `K`, kernel half-life, lambda rule, grid, intercept
-   penalty; a "Run BKS" button.
+6. **BKS model**: covariance history (a radio, "Full history before the
+   cut-off" or "Training window only", D88; it drives the BKS tab and this
+   Run BKS button), `K`, kernel half-life, lambda rule, grid, intercept
+   penalty; a "Run BKS" button, disabled when BKS cannot use the training
+   window (the BKS tab's check, `_ui.bks_training_check`, D87).
 
 Main tabs:
 
@@ -1248,16 +1297,18 @@ Main tabs:
    returns and % for shares; optional roll-up by topic group; the cumulative
    realised versus explained return through the window; a "Why this method"
    note (G.8).
-4. **Compare methods** (G.15, D83): the methods to compare (default elastic
-   net, ridge with GCV, BKS-implied and the oracle; OLS on request) and a
+4. **Compare methods** (G.15, D83, D88): the methods to compare (default
+   elastic net, ridge with GCV, BKS-implied (full history), BKS-implied
+   (training window) and the oracle; OLS on request) and a
    summary table with one row per method, the oracle last as the reference;
    an unavailable method stays in the table with its reason. The table puts
    the three out-of-sample columns next to the method name and the recovery
    columns after them, and shows a dash where a figure does not apply. The
-   lead caption says that BKS-implied sees more history than the direct
-   methods (with the kernel-weight share before the training start) and that
-   the BKS tab's own OOS R2, named with its value after a run, is not the
-   comparable figure. Two charts: the OOS R2 per asset in this window for
+   lead caption says that BKS-implied (full history) sees more history than
+   the direct methods (with the kernel-weight share before the training
+   start), that BKS-implied (training window) is the like-for-like variant,
+   and that the BKS tab's own OOS R2, named with its value after a run, is
+   not the comparable figure. Two charts: the OOS R2 per asset in this window for
    every method (a dot plot, assets sorted by the oracle's R2, one colour and
    marker symbol per method, the oracle as an ink tick, values below -50%
    drawn at -50%), and the median OOS R2 across consecutive forecast windows
@@ -1267,12 +1318,16 @@ Main tabs:
    sidebar's direct method, followed until the user picks another; the
    oracle is the reference and not an option): recovery tiles, estimated
    against true exposures, and OOS R2 per asset against the oracle, with the
-   D52 caveat for BKS-implied and the number of factor directions used when
-   `Gamma_tilde` has rank below `K`.
-   BKS-implied needs a BKS run of this browser session on the current
-   settings (D80); without one the tab says why and offers a Run BKS button.
-   It never starts a BKS fit itself.
-5. **BKS**: selected topics and their `Gamma` row norms, the lambda path, the
+   D52 caveat for BKS-implied, its covariance history and the number of
+   factor directions used when `Gamma_tilde` has rank below `K`.
+   Each BKS-implied variant needs a BKS run of this browser session on the
+   current settings and its history (D80); without one the tab says why, per
+   variant, and offers one Run BKS button that fits every selected variant
+   not fitted yet. It never starts a BKS fit on its own. When a BKS-implied
+   method is selected, a caption under the table points to the reasons it
+   scores lower (Data and method tab, G.15).
+5. **BKS** (the sidebar's covariance history, named in the caption):
+   selected topics and their `Gamma` row norms, the lambda path, the
    pooled OOS R2 next to the shuffled-instrument reference (D79), OOS R2 per
    asset against the current direct fit (labelled as not the same measure,
    with the days each one scores), and the per-topic split for the chosen
@@ -1280,8 +1335,9 @@ Main tabs:
 6. **Lists**: the 55 assets (with legs, index, proxy, data source), the 20
    manual topics (ID, group, name, scope), and the link map (editable for the
    session, with a reset).
-7. **Data and method**: sources, assumptions (TBC items), limitations
-   (Section G.12).
+7. **Data and method**: sources, assumptions (TBC items), why BKS-implied
+   scores lower than the direct methods (a short version of G.15.1; the
+   Compare methods tab points to it), limitations (Section G.12).
 
 ### G.10 Performance and caching
 
@@ -1291,8 +1347,10 @@ topics, exposures, attention), observed shocks (plus `w` and the training
 window), direct fit (plus the estimator), window evaluation (plus the forecast
 window), BKS panel and BKS fit. Two stages serve the method comparison
 (G.15): `bks_implied` (keyed by the BKS fit, the observed shocks and `tau`)
-and `comparison` (keyed by the evaluation, the methods and a BKS token that
-records whether and which BKS-implied fit was scored). Changing only the
+and `comparison` (keyed by the evaluation, the methods and one BKS token per
+BKS-implied method that records whether and which fit was scored). The BKS
+panel key holds the covariance history and its settings, and under the
+training history also the training window (D88). Changing only the
 forecast window re-runs only the evaluation, and the comparison re-scores
 the cached fits without refitting: about 0.05 s at 20 topics and 0.5 s at
 520 topics including the ridge and OLS fits. Measured on 2026-09-29 (55
@@ -1309,7 +1367,7 @@ lock), stage timings are kept per thread, the BKS stages keep at most two
 results each, and the cached BKS panel drops the daily shocks and the 3-D
 covariance array (about 1.1 GB at 500 assets x 500 topics).
 
-### G.11 Decisions (D53–D87)
+### G.11 Decisions (D53–D88)
 
 D73 is the Part B decision on `.npz` timestamps of the same day; the lab's
 decisions continue at D74.
@@ -1450,7 +1508,8 @@ decisions continue at D74.
   `tau`. A comparison never starts a BKS fit, and the dashboard reuses only
   a BKS fit its browser session requested (D80). On the dashboard defaults
   the median OOS R2 in the forecast window was 16.8% (elastic net), 26.5%
-  (ridge), 8.2% (OLS), 7.0% (BKS-implied) and 23.2% (oracle).
+  (ridge), 8.2% (OLS), 7.0% (BKS-implied) and 23.2% (oracle). D88 adds the
+  training-window variant.
 - **D84 Time windows panel and dashboard defaults.** Owner request
   2026-09-29: the dashboard sets the training window by its end (cut-off)
   and a length of one month to 10 years counted back, with the start
@@ -1492,6 +1551,38 @@ decisions continue at D74.
   burn-in (`bks.training_weeks`, exact against the built panel), so a
   window such as 2015-07-01 to 2015-12-31 is refused before a run with the
   reason, and the Run BKS buttons are disabled.
+- **D88 Training-window BKS variant.** Owner request 2026-09-30: a BKS
+  variant whose covariance instruments use the training window only, so that
+  BKS sees exactly the data the direct methods see. `BKSLabConfig.history` is
+  `"full"` (default, unchanged) or `"training"` (G.7.2): returns from
+  `train_start`, attention from `w` weekdays before it, the training standard
+  deviation as the inverse-volatility divisor, a burn-in of 0 weeks and 3
+  days per instrument (`burn_in_weeks_training`, `min_days_training`). The
+  comparison has both as separate methods, `bks_implied` ("BKS-implied (full
+  history)") and `bks_implied_train` ("BKS-implied (training window)"), each
+  with its own BKS fit of the sidebar's BKS model (`compare.method_config`);
+  the new method is appended before the oracle, so the colour slots of the
+  other methods stay. The sidebar's "Covariance history" radio drives the BKS
+  tab and the sidebar's Run BKS; the Compare tab's Run BKS fits every
+  selected variant not fitted yet. Not chosen: a trailing volatility inside
+  the window (63 days of warm-up, about half of a six-month window), and the
+  kernel truncation `CovarianceConfig.lookback_periods` (the earlier training
+  weeks and the divisor would still read days before the window). Measured
+  2026-09-30, median OOS R2 in the forecast window, noise seed 0 (the
+  dashboard's): on the dashboard defaults -16.2% for the training variant
+  against 7.0% for the full history (24 against 26 training weeks; lambda
+  0.017 with all 20 topics kept against 0.277 with 10; Spearman with `B_true`
+  0.11 against 0.19); on the library window (2015–2022) -0.1% against -2.1%
+  (415 against 352 training weeks, as the training variant has no burn-in;
+  Spearman 0.32 against 0.16). Seed 0 is one draw and the best of five for
+  both variants on the defaults: over noise seeds 0–4 the training variant
+  gives -16% to -107% and the full history -18% to 7%, the training variant
+  lower in every seed. On the library window neither is ahead in every seed
+  (means over seeds 0–4: -1.4% and -0.1%). The variants also differ in the
+  return divisor, the burn-in, the day minimum and the number of training
+  weeks, so the gap is not all history (G.15). Plain
+  IPCA (`K = L`, `lambda = 0`) on the training window matches OLS to 0.07
+  (lead 0) and 0.10 (lead 1) on a six-month window and 0.03 on eight years.
 
 ### G.12 Limitations of the lab
 
@@ -1523,12 +1614,15 @@ decisions continue at D74.
    returns and is not comparable to the direct R2 (D79).
 8. **BKS-implied exposures.** The method comparison scores BKS through the
    exposures its factor betas imply (G.15). They depend on which topics the
-   sparse fit kept (D52), and with `K` below the number of linked topics they
-   cannot represent independent exposures to every topic, so they measure
-   how well BKS predicts through the topics, not which topics it identifies.
-   Their instruments also weigh the history before the training window
-   (about 92% of the kernel weight on the dashboard defaults), so the
-   comparison with the direct methods is not strictly like for like.
+   sparse fit kept (D52), and they keep only the part of each asset's topic
+   covariances that lies in the `K` directions BKS fitted to price weekly
+   returns. On the lab data those directions carry little of the topic
+   signal, so BKS-implied scores below the direct methods (G.15.1).
+   With the full history their instruments also weigh the days before the
+   training window (about 92% of the kernel weight on the dashboard
+   defaults), so that variant is not strictly like for like. The
+   training-window variant (D88) is, at the cost of noisy instruments in its
+   first training weeks.
 
 ### G.13 Module contracts
 
@@ -1581,25 +1675,29 @@ def median_finite(values) -> float
 # bks.py — G.7.2, G.15
 MIN_TRAIN_PERIODS = 24                     # fewest training weeks fit_bks accepts (D84)
 IMPLIED_METHOD = "bks_implied"             # IMPLIED_NOTE: the D52 caveat of the implied exposures
+IMPLIED_TRAIN_METHOD = "bks_implied_train" # the training-window variant (D88)
+IMPLIED_METHODS = {"full": IMPLIED_METHOD, "training": IMPLIED_TRAIN_METHOD}; HISTORY_LABELS
 def bks_pipeline_config(cfg: BKSLabConfig, shock_window: int, lead_days: int,
-                        n_assets: int | None = None) -> PipelineConfig
-def training_weeks(train_start, train_end, cfg: BKSLabConfig, lead_days: int = 0,
-                   calendar=None) -> tuple[int, pd.Timestamp]     # usable weeks after the burn-in, first usable week (D87)
-def kernel_history_share(train_start, train_end, cfg: BKSLabConfig, lead_days: int = 0,
-                         calendar=None) -> float                  # kernel weight before train_start (G.15)
-def build_bks_panel(sim: SimData, cfg: BKSLabConfig, shock_window: int) -> BKSPanel
+                        n_assets: int | None = None) -> PipelineConfig   # burn-in and min_days of cfg.history
+def training_weeks(train_start, train_end, cfg: BKSLabConfig, lead_days: int = 0, calendar=None,
+                   shock_window: int = 5) -> tuple[int, pd.Timestamp]   # usable weeks, first usable week (D87, D88)
+def kernel_history_share(train_start, train_end, cfg: BKSLabConfig, lead_days: int = 0, calendar=None,
+                         shock_window: int = 5) -> float  # kernel weight before train_start (G.15); 0 for "training"
+def build_bks_panel(sim: SimData, cfg: BKSLabConfig, shock_window: int, *, train_start=None,
+                    train_end=None) -> BKSPanel             # the window is needed for cfg.history = "training" (D88)
 def fit_bks(panel: BKSPanel, cfg: BKSLabConfig, train_end: str, progress=None, *,
             train_start: str | None = None) -> BKSFit
 def evaluate_bks(panel: BKSPanel, fit: BKSFit, window: WindowConfig) -> BKSLabResult
 def implied_topic_covariance(C: np.ndarray, Gamma: np.ndarray, rcond: float
                              ) -> tuple[np.ndarray, np.ndarray, int]           # (m, beta, rank of Gamma_tilde)
 def implied_exposures(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: ObservedShocks,
-                      select_tau: float = 0.05) -> DirectFit                   # method "bks_implied"
+                      select_tau: float = 0.05) -> DirectFit   # method "bks_implied" or "bks_implied_train" by history
 
 # compare.py — G.15
-METHODS = ("elastic_net", "ridge", "ols", "bks_implied", "oracle")          # display order; oracle last
-DIRECT_METHODS, METHOD_LABELS, SUMMARY_COLUMNS, ORACLE_NOTE
-def method_config(cfg: LabConfig, method: str) -> LabConfig   # the sidebar's method as is, others DirectConfig defaults
+METHODS = ("elastic_net", "ridge", "ols", "bks_implied", "bks_implied_train", "oracle")  # display and colour order
+DIRECT_METHODS, BKS_METHODS, BKS_HISTORY, METHOD_LABELS, SUMMARY_COLUMNS, ORACLE_NOTE
+def method_config(cfg: LabConfig, method: str) -> LabConfig   # the sidebar's method as is, others DirectConfig
+                                                              # defaults; BKS-implied: cfg.bks with its history
 def method_label(method: str, fit: DirectFit | None = None) -> str
 @dataclass
 class ComparisonResult:      # summary (method x SUMMARY_COLUMNS), r2 (assets x available methods),
@@ -1613,12 +1711,18 @@ class LabSession:            # stage results memoised by LabConfig.key(stage); L
     def market(cfg) / simulation(cfg) / truth(cfg) / shocks(cfg) / direct(cfg) / evaluation(cfg) / sweep(cfg) / bks(cfg)
     def bks_implied(cfg) -> DirectFit                   # from the cached BKS panel and fit; LookupError if not cached
     def method_fit(cfg, method: str) -> DirectFit
-    def comparison(cfg, methods=None, use_bks=True) -> ComparisonResult   # never starts a BKS fit
-    def stage_key(stage, cfg, *, methods=None, bks_token="nobks") -> str
+    def comparison(cfg, methods=None, use_bks: bool | Iterable[str] = True,
+                   bks_errors: Mapping[str, str] | None = None) -> ComparisonResult
+                                                        # never starts a BKS fit; use_bks may name the variants allowed;
+                                                        # bks_errors: a refused fit's reason (BKS_REFUSED prefix)
+    def stage_key(stage, cfg, *, methods=None, bks_token: str | dict = "nobks") -> str
     def comparison_key(cfg, methods=None, use_bks=True) -> str
-    def bks_ready(cfg) -> bool
-BKS_NOT_RUN, BKS_OFF                                    # reasons shown for an unavailable BKS-implied fit
+    def bks_ready(cfg, method=None) -> bool
+BKS_NOT_RUN, BKS_OFF, BKS_REFUSED                       # reasons shown for an unavailable BKS-implied fit
 def run_lab(cfg: LabConfig, with_bks: bool = False, progress=None, with_compare: bool = False) -> dict[str, Any]
+                             # with both flags also fits the other BKS variant as stage bks_fit_training
+                             # (or bks_fit_full), timed and keyed; when it refuses, the comparison lists it
+                             # as unavailable with the reason (review 2026-09-30)
 
 # charts.py — Plotly figure builders, pure, no Streamlit
 def exposure_heatmap(values, *, blank, value_label, row_prefix=None, average_row=True, max_cols=40,
@@ -1649,7 +1753,8 @@ Dashboard helpers (`dashboard/_ui.py`, pure, no Streamlit) added on
 def training_window(train_end, months, min_days=None) -> dict   # start, end, n_days, corrections, caption (G.6)
 def first_shock_day(shock_window) -> date / shock_days(train_start, train_end, shock_window) -> int
 def earliest_train_end(shock_window, min_days=None) -> date        # the cut-off control's minimum (D87)
-def bks_training_check(train_start, train_end, bks_cfg=None, lead_days=0) -> dict   # weeks, n_weeks, can_run, reason
+def bks_training_check(train_start, train_end, bks_cfg=None, lead_days=0,
+                       shock_window=5) -> dict                  # weeks, n_weeks, can_run, reason (both histories)
 def plural(n, word, words=None) -> str
 def settings_in_use(values, asset_classes=None, asset_names=None) -> pd.DataFrame   # Group, Setting, Value (G.14)
 def comparison_table(summary, notes=None) -> pd.DataFrame        # the Compare methods table, shares in percent
@@ -1673,7 +1778,7 @@ to real data:
 2. **Direct estimator**: method and its penalty settings, selection
    threshold `tau`; the oracle is marked as not available on real data.
 3. **BKS model**: `K`, kernel half-life with the weekly `xi`, lambda rule,
-   grid, intercept penalty.
+   grid, intercept penalty, covariance history (D88).
 4. **Asset selection**: listed assets kept, asset classes, left-out assets.
 
 A line under the table names the simulation-only settings that do not apply
@@ -1743,18 +1848,32 @@ unchanged:
    oracle line: the oracle uses each fit's training scales (D74), and every
    method computes them on the same training pairs.
 3. The methods are `elastic_net`, `ridge`, `ols` (G.7.1), `bks_implied`
-   (below) and `oracle` (`b = B_true`, the reference, not an estimator). The
-   sidebar's direct method keeps its settings; the other direct methods use
-   the `DirectConfig` defaults (universal penalty, ridge lambda by GCV) with
-   the same selection threshold `tau`.
+   and `bks_implied_train` (below) and `oracle` (`b = B_true`, the
+   reference, not an estimator). The sidebar's direct method keeps its
+   settings; the other direct methods use the `DirectConfig` defaults
+   (universal penalty, ridge lambda by GCV) with the same selection threshold
+   `tau`.
 4. No return or attention after the cut-off changes any fit: tested by
    perturbation for the direct methods (`tests/test_lab_direct.py`) and for
-   the BKS fit and its implied exposures at lead 0 and lead 1 with a
-   Wednesday cut-off (`tests/test_lab_compare.py`).
+   both BKS variants and their implied exposures at lead 0 and lead 1 with a
+   Wednesday cut-off (`tests/test_lab_compare.py`). For the training-window
+   variant, no return or attention before `train_start - w` weekdays changes
+   its panel, `Gamma`, implied exposures or scales either (tested the same
+   way).
 
-**A key limitation: BKS-implied sees more history than the direct
-methods.** Its `Gamma`, `Sigma_z` and the scales use the training window,
-but:
+**Two BKS variants (D88).** BKS enters the comparison twice, with the
+sidebar's BKS model and two covariance histories (`BKSLabConfig.history`,
+G.7.2):
+
+1. `bks_implied`, "BKS-implied (full history)": the panel starts at the
+   start of the data, as in BKS.
+2. `bks_implied_train`, "BKS-implied (training window)": the panel starts at
+   the training start, so BKS sees the data the direct methods see. It is
+   the like-for-like BKS figure.
+
+**A key limitation of the full-history variant: it sees more history than
+the direct methods.** Its `Gamma`, `Sigma_z` and the scales use the training
+window, but:
 
 1. Its instruments are kernel covariances that weigh the whole history
    before the cut-off (half-life 69 months). On the dashboard defaults about
@@ -1769,9 +1888,15 @@ but:
    OOS R2 of 11.2% on the six-month window, against 0.55 and 16.8% for the
    elastic net (review measurement). The bias favours BKS; in the windows
    tested (6 and 24 months) it did not change the ranking.
-4. The Compare tab states the share for the current window. A strict
-   variant that limits the kernel to the training window
-   (`CovarianceConfig.lookback_periods`) is not built (TBD).
+4. The Compare tab states the share for the current window. The
+   training-window variant has none of this history (share 0). On the
+   dashboard defaults it scores below the full-history variant in each of
+   the noise seeds 0–4 (-16.2% against 7.0% on seed 0, figures below). The
+   variants also differ in the return divisor, the burn-in, the day minimum
+   and the number of training weeks (G.7.2), so not all of the gap is the
+   extra history: on a 10-year window to 2025-06-30, where only 1% of the
+   kernel weight lies before the training start, the full history scored
+   0.5% against 10.6% for the training window (seed 0, one forecast window).
 
 **BKS-implied exposures.** The BKS OOS R2 fits `K` factors to each forecast
 week's own returns (D79), so it cannot be set next to the direct R2. The lab
@@ -1798,10 +1923,12 @@ Steps:
    that its factor betas imply, a rank-`K` reconstruction that is zero for
    dropped topics.
 2. **Units.** Under `asset_weighting = "inverse_vol"` (the lab default) the
-   panel's daily returns were divided by a trailing volatility, so `m_i` is
-   multiplied by the asset's mean divisor over its training return days. The
-   conversion is approximate because the divisor varies over time. There is
-   no conversion under `"none"`.
+   panel's daily returns were divided by a divisor, so `m_i` is multiplied by
+   the asset's mean divisor over its training return days. Full history: the
+   divisor is a trailing volatility, and the conversion is approximate
+   because it varies over time. Training window only: the divisor is the
+   asset's training standard deviation on every day, and the conversion is
+   exact. There is no conversion under `"none"`.
 3. **Raw exposures.** `b_i = Sigma_z^+ m_i`, with `Sigma_z` the covariance of
    the raw observed shocks `z` over the direct estimator's training shock
    days. In words: the regression coefficients that the implied covariances
@@ -1827,6 +1954,14 @@ betas. Checks in `tests/test_lab_compare.py`:
    to about 1e-14 relative.
 3. Without the constant's term, the `"none"` and `"inverse_vol"` panels agree
    (maximum difference 0.026) and each matches OLS within 0.03.
+4. Training-window variant with `K = L = 8` and `lambda = 0`: without the
+   constant's term the implied exposures match OLS on the same window to
+   0.074 (lead 0) and 0.104 (lead 1) on six months (exposures up to 0.59) and
+   to 0.03 on eight years. They differ because the last instrument ends a
+   week and a day before the cut-off and because of the kernel weights
+   (`xi^26 = 0.94` over six months). Its last training instrument equals the
+   kernel covariance of the training window's scaled returns and `z`,
+   computed by hand.
 
 **The summary table**, one row per method, the oracle last:
 
@@ -1851,7 +1986,7 @@ betas. Checks in `tests/test_lab_compare.py`:
    BKS panel and fit plus the conversion.
 10. **Note**: the reason when a method is not available (BKS not run on the
     current settings, OLS refused with `L >= n_train / 2`), the D52 caveat
-    for BKS-implied, "reference" for the oracle, and for ridge the number of
+    for both BKS-implied rows, "reference" for the oracle, and for ridge the number of
     assets whose GCV lambda is at the grid's lower edge (D86).
 
 The dashboard shows points 6–8 right after the method name, then points
@@ -1860,31 +1995,168 @@ at laptop width.
 
 **Measured on the dashboard defaults** (2026-09-29; 55 listed assets with
 real prices, 20 manual topics, training 2025-01-01 to 2025-06-30, forecast
-2025-07-01 for 4 weeks, `K = 3`). BKS ran on 26 training weeks (lambda 0.277,
-10 topics kept). Median OOS R2 in the forecast window: elastic net 16.8%,
-ridge 26.5%, OLS 8.2%, BKS-implied 7.0%, oracle 23.2%. Ridge is above the
-oracle in this window but in only 2 of the 6 sweep windows (median over the
-sweep 8.3% against 10.5%); BKS-implied is below the oracle in all 6 (median
-−8.5%). On the library default window (training 2015–2022, 39 sweep
-windows), BKS-implied reached −2.1% in the first window (Spearman with
-`B_true` 0.16) against 16.8% for the elastic net and 20.3% for the oracle.
+2025-07-01 for 4 weeks, `K = 3`). BKS with the full history ran on 26
+training weeks (lambda 0.277, 10 topics kept). Median OOS R2 in the forecast
+window: elastic net 16.8%, ridge 26.5%, OLS 8.2%, BKS-implied (full history)
+7.0%, oracle 23.2%. Ridge is above the oracle in this window but in only 2 of
+the 6 sweep windows (median over the sweep 8.3% against 10.5%); BKS-implied
+(full history) is below the oracle in all 6 (median −8.5%). On the library
+default window (training 2015–2022, 39 sweep windows), BKS-implied (full
+history) reached −2.1% in the first window (Spearman with `B_true` 0.16)
+against 16.8% for the elastic net and 20.3% for the oracle.
+
+The training-window variant (2026-09-30): on the dashboard defaults it ran on
+24 training weeks (lambda 0.017, all 20 topics kept) and reached −16.2%
+(median over the 6 sweep windows −51.1%, Spearman 0.11); on the library
+window it ran on 415 weeks (lambda 0.046, 18 topics kept) and reached −0.1%
+(median over the 39 sweep windows 4.4% against −0.8% for the full history,
+Spearman 0.32). These are noise seed 0; D88 gives the range over seeds 0–4.
+Its tuned `K = 3` fit loses the signal in the same step as the full
+history's (G.15.1).
 
 **A key limitation (D52).** BKS identifies the assets' factor betas, not how
 they split across topics, so the implied exposures depend on which topics
-the sparse fit kept. With `K` below the number of linked topics they cannot
-represent independent exposures to every topic: on 30 generic assets with 8
-linked topics and `K = 3`, their Spearman correlation with `B_true` was 0.40
-to 0.49 and their sign agreement on the linked pairs 0.52 to 0.69 over three
-seeds. The loss comes from the rank-`K` projection, not from topic
-selection. On the dashboard defaults the instruments alone reach Spearman
-0.71 with `B_true` (review measurement; the reconstruction equals them only
-at `K = L`), the implied exposures 0.19 for the tuned `K = 3` fit (10
-topics kept) and 0.18 at `K = 10` with all 20 topics kept (`lambda = 0`).
-The table's note says so (`bks.IMPLIED_NOTE`). When `Gamma_tilde` has rank
+the sparse fit kept. They are a rank-`K` reconstruction: they keep only the
+part of each asset's topic covariances that lies in the `K` directions of
+`Gamma_tilde`, which the fit chooses to price weekly returns. On 30 generic
+assets with 8 linked topics and `K = 3`, their Spearman correlation with
+`B_true` was 0.40 to 0.49 and their sign agreement on the linked pairs 0.52
+to 0.69 over three seeds. On the lab data the loss comes from which `K`
+directions the fit keeps, not from having only `K` of them, and not from
+topic selection or the data BKS sees (G.15.1). The table's note says so
+(`bks.IMPLIED_NOTE`). When `Gamma_tilde` has rank
 below `K` (on 30 generic assets with `K = 3` the tuned fit's third singular
 value was 2e-6), the pseudo-inverse cut-off drops that direction and the
 inspect caption names the number of directions used. A further
 approximation: when the fit keeps the constant instrument, its implied
 covariance is added to every asset (`meta["B_const"]`). The kernel history
-before the training window is the limitation stated under the like-for-like
-design above.
+before the training window is the full-history variant's limitation stated
+under the like-for-like design above.
+
+#### G.15.1 Why BKS-implied explains less than the direct methods
+
+Owner question 2026-09-30, measured the same day. The main reason is the
+step that turns the BKS fit back into exposures (step 1 above, BKS Eq. 5).
+It keeps only the part of each asset's topic covariances that lies in the
+`K` directions of `Gamma_tilde`, and IPCA chooses those directions to price
+weekly returns, not to hold the topic signal. On the lab data they hold
+little of it. Having only `K` directions is not the problem, and neither
+are the history, the units or, at the tuned `K = 3`, the constant term.
+
+**Set-up.**
+
+- Setting A: the dashboard defaults (training 2025-01-01 to 2025-06-30, 6
+  sweep windows). Setting B: the library window (training 2015–2022, 39
+  sweep windows).
+- Every figure is the mean over noise seeds 0–2, scored with
+  `evaluate_window` and `window_sweep` as in the Compare tab; seed 0
+  reproduces the dashboard. BKS rows use the full history unless stated.
+- "Instruments only" is the implied-exposure formula with `m_i` replaced by
+  the asset's own instrument covariances `cov_i` (steps 2–4 unchanged).
+- Three identity checks hold to about 1e-15: OLS equals `Sigma_z^+` times
+  the training covariance of `z` with the returns; the diagnosis's kernel
+  code reproduces the panel's instrument rows; BKS at `K = L = 20` and
+  `lambda = 0` without the constant's term equals the instruments only.
+
+Columns: median OOS R2 in the forecast window and over the sweep windows
+(%), and the Spearman correlation with `B_true`.
+
+| Row | Variant | A window | A sweep | A Spearman | B window | B sweep | B Spearman |
+|---|---|---|---|---|---|---|---|
+| 1 | Oracle | 20.5 | 13.1 | 1.00 | 15.4 | 16.6 | 1.00 |
+| 2 | OLS | -2.4 | -14.1 | 0.57 | 14.0 | 14.7 | 0.89 |
+| 3 | Ridge (GCV) | 16.2 | 9.3 | 0.66 | 13.7 | 15.3 | 0.90 |
+| 4 | Elastic net | 14.8 | 8.6 | 0.56 | 13.8 | 14.3 | 0.85 |
+| 5 | Instruments only, training window | -2.0 | -17.1 | 0.57 | 13.9 | 14.5 | 0.89 |
+| 6 | Instruments only, full history | 11.0 | 4.9 | 0.69 | 14.7 | 14.3 | 0.89 |
+| 7 | Row 6 with `Sigma_z` over the same kernel-weighted history | 23.5 | 15.9 | 0.91 | 14.2 | 14.7 | 0.89 |
+| 8 | Best rank 3 of row 6 | 10.7 | 5.4 | 0.66 | 10.6 | 13.4 | 0.83 |
+| 9 | BKS `K = 20`, `lambda = 0` | -1.8 | -3.3 | 0.58 | 3.7 | -0.8 | 0.70 |
+| 10 | BKS `K = 3`, `lambda = 0` | -0.9 | -1.7 | 0.07 | 0.8 | -0.3 | 0.26 |
+| 11 | BKS `K = 3`, tuned (Compare row, full history) | -0.2 | -12.3 | 0.18 | 0.8 | -0.6 | 0.23 |
+| 12 | BKS `K = 3`, tuned (Compare row, training window) | -35.8 | -42.7 | 0.08 | -1.3 | 0.4 | 0.30 |
+| 13 | `B_true` through row 11's directions | -3.4 | -23.1 | 0.13 | 0.8 | 0.6 | 0.24 |
+
+**Reasons, largest first.** Each item gives the change in window R2 and
+sweep R2 (percentage points) and in Spearman, setting A then setting B.
+
+1. **Which directions BKS keeps (the Eq. 5 step).** Row 8 to row 10
+   (without the constant's term) costs -12.1 / -7.4 / -0.59 on A and
+   -10.3 / -13.6 / -0.57 on B.
+   - IPCA's three directions hold 3% (A) and 19% (B) of the instruments'
+     squared norm at `lambda = 0`, and 38% and 37% after tuning. The best
+     three hold 92% and 91%; three random directions would hold 15%.
+   - IPCA's map from instruments to factor loadings works like a
+     regression coefficient, so at `lambda = 0` it leans towards the
+     directions where the assets differ least: on A, 2.6 of its 3
+     directions lie in the instruments' 10 weakest.
+   - Even `B_true`, sent through the tuned fit's directions, scores -3.4%
+     (A) and 0.8% (B) (row 13).
+2. **The constant term, at high `K` only.** Row 6 to row 9 costs
+   -12.7 / -8.2 / -0.11 on A and -11.0 / -15.2 / -0.19 on B, up to -30
+   points in single seeds; without the constant's term row 9 equals row 6.
+   This is why `K = L` does not give back the instruments. At the tuned
+   `K = 3` the penalty sets the constant to about zero and it costs nothing.
+3. **Rank alone: small.** Row 6 to row 8 costs -0.2 / +0.5 / -0.03 on A and
+   -4.1 / -0.9 / -0.06 on B. `B_true` has effective rank 6.3, and its top
+   three directions hold 76% of it.
+4. **Penalty and tuning: mixed.** Row 10 to row 11: +0.7 / -10.6 / +0.11 on
+   A and +0.1 / -0.4 / -0.02 on B.
+   - No point on the lambda path reaches a Spearman above 0.22 (A) or 0.30
+     (B).
+   - The in-sample Sharpe criterion (D27) is flat against its noise: on A it
+     spans 2.35–2.97 against a standard error of about 1.41 over 26 weeks,
+     on B 0.32–0.87 against 0.38.
+   - The tuned fit on A drops 9–11 of the 20 topics, among them S1 Energy
+     and A4 Financial Conditions (14% of `B_true`) in every seed. Topic
+     selection is secondary: `lambda = 0` with all 20 topics is no better.
+5. **Units: no loss.** The inverse-volatility conversion gains 3.4 (A) and
+   0.8 (B) points against raw returns and leaves Spearman unchanged.
+   Dropping the asset weighting from the tuned fit costs 12.9 (A) and 6.4
+   (B) points.
+6. **History: a gain, not a loss.** Row 2 to row 6 gains +13.4 / +19.0 /
+   +0.12 on A, where 92% of the kernel weight lies before the training
+   start; row 7 gains 25.9 points. On B the kernel lies inside the training
+   window and history makes no difference.
+7. **Weekly frequency: minor.** A three-direction reduced-rank regression of
+   weekly returns on the instruments reproduces row 10. On daily returns it
+   captures more of the instruments (10% on A, 24% on B), but its OOS R2
+   stays near zero (-1.4%, 0.8%).
+
+In total, from row 6 to row 11 BKS loses -11.1 / -17.2 / -0.51 on A and
+-13.9 / -15.0 / -0.65 on B.
+
+**The training-window variant** (row 12, D88) goes through the same step,
+starting from instruments about as good as OLS (row 5). On A it scores below
+the full history in each of the noise seeds 0–4; on B the two are close.
+
+**Reading the figures.**
+
+- A four-week window R2 moves by about ±8 points between seeds (OLS on A:
+  -9.8% to 8.2%). The sweep medians are steadier.
+- Seed 0, the dashboard's, is the best of three for BKS on A (7.0%, against
+  1.2% and -8.7%).
+
+**When BKS should do better.**
+
+1. Pricing questions: which topics drive the few priced factors, the factor
+   returns, a portfolio's Sharpe ratio. BKS identifies the factor betas,
+   recovered at 0.97 in the simulation study (D52).
+2. Topics that act on prices through a few common factors, so the Eq. 5
+   step loses nothing.
+3. Large cross-sections and long samples (hundreds of assets), where
+   `Gamma` is precise and the topic selection stable; setting A has 55
+   assets and 26 weeks.
+4. Exposures that drift over time: BKS's instruments update weekly, while
+   the lab's exposures are constant by design.
+
+For asset-by-asset exposures, BKS's own ingredients do better in a
+consistent full-history regression (row 7: 23.5% on A against 16.2% for
+ridge) than through the Eq. 5 step. The lab does not offer it as a method
+(TBD).
+
+The diagnosis scripts of 2026-09-30 are outside the repository:
+`diag_bks.py` runs every variant for one setting and seed, `aggregate.py`
+builds the table, the step attribution, the `K` sweep and the lambda path,
+and `subspace_check.py` measures where the fit's directions lie. Row 12 was
+measured with `LabSession.comparison` on both BKS fits.

@@ -1,4 +1,4 @@
-"""Like-for-like comparison of exposure estimation methods (DESIGN.md G.7, G.8, G.15; D52, D65, D74).
+"""Like-for-like comparison of exposure estimation methods (DESIGN.md G.7, G.8, G.15; D52, D65, D74, D88).
 
 Every method delivers the same object, a :class:`~narrative_ipca.exposure_lab.types.DirectFit`
 with the same observed shocks and the same training scales: exposures
@@ -9,13 +9,23 @@ the window sweep (:func:`.evaluate.window_sweep`) and the recovery metrics
 (:func:`.evaluate.recovery_metrics`) therefore apply unchanged, and nothing is
 fitted inside the forecast window (D65).
 
-The direct methods are fitted on the training pairs only. BKS-implied is not
-fully like-for-like: its ``Gamma``, the shock covariance ``Sigma_z`` and the
-scales use the training window, but its instruments are kernel covariances
-that weigh the whole history before the cut-off (half-life
-``BKSLabConfig.half_life_months``). On the dashboard defaults about 92% of
-that kernel weight lies before the training start
-(:func:`.bks.kernel_history_share`, ``meta["kernel_share_before_train"]``).
+The direct methods are fitted on the training pairs only. BKS enters in two
+variants that differ only in the data its panel is built from
+(``BKSLabConfig.history``, D88):
+
+* ``bks_implied`` (full history) is not fully like-for-like: its ``Gamma``,
+  the shock covariance ``Sigma_z`` and the scales use the training window,
+  but its instruments are kernel covariances that weigh the whole history
+  before the cut-off (half-life ``BKSLabConfig.half_life_months``). On the
+  dashboard defaults about 92% of that kernel weight lies before the
+  training start (:func:`.bks.kernel_history_share`,
+  ``meta["kernel_share_before_train"]``).
+* ``bks_implied_train`` (training window only) is the like-for-like variant:
+  its panel reads returns from the training start and attention from ``w``
+  weekdays before it, so it sees the data the direct methods see.
+
+Both can be in one comparison: :func:`method_config` gives each its own BKS
+configuration (the sidebar's BKS settings with the history set).
 
 Methods (:data:`METHODS`):
 
@@ -24,11 +34,14 @@ Methods (:data:`METHODS`):
    penalty settings; the other direct methods use the
    :class:`~narrative_ipca.exposure_lab.config.DirectConfig` defaults with the
    same selection threshold (:func:`method_config`).
-2. ``bks_implied``: the topic exposures that the BKS training fit implies
-   (:func:`.bks.implied_exposures`, BKS Eq. 5). BKS identifies the assets'
-   factor betas, not their split across topics (D52): with ``K`` factors the
-   implied exposures cannot represent independent exposures to every topic,
-   and they depend on which topics the sparse fit kept.
+2. ``bks_implied`` and ``bks_implied_train``: the topic exposures that the
+   BKS training fit implies (:func:`.bks.implied_exposures`, BKS Eq. 5), with
+   the full or the training-window covariance history. BKS identifies the
+   assets' factor betas, not their split across topics (D52): the implied
+   exposures keep only the part of the assets' topic covariances in the
+   ``K`` directions BKS fitted to price weekly returns (little of the topic
+   signal on the lab data; DESIGN.md G.15.1), and they depend on which topics
+   the sparse fit kept.
 3. ``oracle``: the true exposures ``B_true`` with the same training scales
    (D74): the reference every estimator is scored against, not an estimator.
 
@@ -52,9 +65,10 @@ Validity boundaries
   (D74). All methods here compute the scale on the same training pairs, so
   the oracle line is the same for every method; ``meta["same_training_scales"]``
   records whether this held.
-* The BKS-implied exposures need a BKS fit on the same training window; the
-  comparison does not start one (:meth:`.session.LabSession.comparison`
-  lists the method as unavailable instead).
+* The BKS-implied exposures need a BKS fit on the same training window and
+  covariance history; the comparison does not start one
+  (:meth:`.session.LabSession.comparison` lists the method as unavailable
+  instead).
 * Short forecast windows (one week, five days) give noisy per-window R2; the
   sweep medians are the more stable figures.
 """
@@ -69,7 +83,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .bks import IMPLIED_METHOD, IMPLIED_NOTE
+from .bks import IMPLIED_METHOD, IMPLIED_METHODS, IMPLIED_NOTE, IMPLIED_TRAIN_METHOD
 from .config import DirectConfig, LabConfig, WindowConfig
 from .evaluate import evaluate_window, median_finite, window_sweep
 from .types import DirectFit, ObservedShocks, SimData, SimTruth, WindowEval
@@ -79,6 +93,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "METHODS",
     "DIRECT_METHODS",
+    "BKS_METHODS",
+    "BKS_HISTORY",
     "METHOD_LABELS",
     "SUMMARY_COLUMNS",
     "ORACLE_NOTE",
@@ -88,18 +104,27 @@ __all__ = [
     "compare_methods",
 ]
 
-#: Methods of the comparison, in display order.
-METHODS: tuple[str, ...] = ("elastic_net", "ridge", "ols", IMPLIED_METHOD, "oracle")
+#: Methods of the comparison, in display order, the oracle last. The chart colour slots follow this
+#: order (the oracle is drawn in ink and takes no slot), so a new method is added before the oracle
+#: and after the existing ones: ``bks_implied_train`` (D88) keeps every earlier method's colour.
+METHODS: tuple[str, ...] = ("elastic_net", "ridge", "ols", IMPLIED_METHOD, IMPLIED_TRAIN_METHOD, "oracle")
 
 #: Methods fitted by :func:`.direct.fit_direct` (the oracle included).
 DIRECT_METHODS: tuple[str, ...] = ("elastic_net", "ridge", "ols", "oracle")
+
+#: BKS-implied method -> the covariance history of its BKS fit (``BKSLabConfig.history``, D88).
+BKS_HISTORY: dict[str, str] = {m: h for h, m in IMPLIED_METHODS.items()}
+
+#: The BKS-implied methods, in display order.
+BKS_METHODS: tuple[str, ...] = tuple(m for m in METHODS if m in BKS_HISTORY)
 
 #: Display labels of :data:`METHODS` at their default settings.
 METHOD_LABELS: dict[str, str] = {
     "elastic_net": "Elastic net",
     "ridge": "Ridge (GCV)",
     "ols": "OLS",
-    IMPLIED_METHOD: "BKS-implied",
+    IMPLIED_METHOD: "BKS-implied (full history)",
+    IMPLIED_TRAIN_METHOD: "BKS-implied (training window)",
     "oracle": "Oracle (true exposures)",
 }
 
@@ -169,7 +194,9 @@ def method_config(cfg: LabConfig, method: str) -> LabConfig:
       is returned as is, so its cached direct fit is reused).
     * Another direct method (``elastic_net``, ``ridge``, ``ols``, ``oracle``)
       gets the :class:`DirectConfig` defaults with the same ``select_tau``.
-    * ``bks_implied`` uses ``cfg`` as is (its settings are ``cfg.bks``).
+    * ``bks_implied`` and ``bks_implied_train`` use ``cfg.bks`` with the
+      history set to ``"full"`` or ``"training"`` (D88); ``cfg`` is returned
+      as is when it already has that history.
 
     Raises
     ------
@@ -178,7 +205,10 @@ def method_config(cfg: LabConfig, method: str) -> LabConfig:
     """
     if method not in METHODS:
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
-    if method == IMPLIED_METHOD or cfg.direct.method == method:
+    if method in BKS_HISTORY:
+        history = BKS_HISTORY[method]
+        return cfg if cfg.bks.history == history else replace(cfg, bks=replace(cfg.bks, history=history))
+    if cfg.direct.method == method:
         return cfg
     return replace(cfg, direct=DirectConfig(method=method, select_tau=float(cfg.direct.select_tau)))
 
@@ -367,7 +397,7 @@ def _share_above(sweep: pd.DataFrame) -> float:
 def _note(method: str, fit: DirectFit) -> str:
     if method == "oracle":
         return ORACLE_NOTE
-    if method == IMPLIED_METHOD:
+    if method in BKS_HISTORY:
         return str(fit.meta.get("caveat", IMPLIED_NOTE))
     meta = fit.meta if isinstance(fit.meta, dict) else {}
     skipped = meta.get("skipped_assets", [])

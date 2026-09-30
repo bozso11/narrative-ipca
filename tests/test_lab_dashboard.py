@@ -308,6 +308,7 @@ def test_settings_in_use_table():
     assert "Penalty alpha" not in got and "L1 ratio" in got
     assert got["Factors K"] == "3" and "weekly xi = " in got["Kernel half-life"]
     assert got["Lambda rule"].startswith("Tolerance rule") and got["Lambda grid"].startswith("12 points")
+    assert got["Covariance history"] == "Full history before the cut-off"
     assert got["Listed assets"] == f"{len(ref)} of {len(ref)}"
     assert got["Asset classes"] == "all" and got["Left-out assets"] == "none"
     # simulation-only settings are not listed
@@ -326,6 +327,8 @@ def test_settings_in_use_table():
     assert "real data uses the listed assets" in got["Listed assets"]
     assert got["Asset classes"] == "Equity" and got["Left-out assets"] == names[first]
     assert got["Lambda rule"].endswith("lambda = 0")
+    v.update(sb_bks_history="training")
+    assert _settings_dict(_ui.settings_in_use(v))["Covariance history"] == "Training window only"
     # ridge and the oracle
     v.update(sb_method="ridge", sb_ridge_gcv=True)
     got = _settings_dict(_ui.settings_in_use(v))
@@ -488,16 +491,21 @@ def test_app_default_page_renders():
     assert any(len(f) == 55 and "Long proxy" in f.columns for f in frames)
     assert any(len(f) == 20 and "Scope" in f.columns for f in frames)
     assert at.tabs[4].info, "BKS tab should ask for a run"
-    # Compare methods (G.15): the default methods, oracle last; BKS-implied not available before a BKS run
+    # Compare methods (G.15): the default methods, oracle last; both BKS variants (D88), not available before a
+    # BKS run
     cm = at.tabs[3]
     table = cm.dataframe[0].value
-    assert list(table["Method"]) == ["Elastic net", "Ridge (GCV)", "BKS-implied", "Oracle (true exposures)"]
-    assert list(table.index) == ["elastic_net", "ridge", "bks_implied", "oracle"]
+    assert list(table["Method"]) == ["Elastic net", "Ridge (GCV)", "BKS-implied (full history)",
+                                     "BKS-implied (training window)", "Oracle (true exposures)"]
+    assert list(table.index) == ["elastic_net", "ridge", "bks_implied", "bks_implied_train", "oracle"]
     r2_col = "Median OOS R², this window"
     assert np.isfinite(table.loc[["elastic_net", "ridge", "oracle"], r2_col].astype(float)).all()
-    assert math.isnan(table.loc["bks_implied", r2_col]) and "Run BKS" in table.loc["bks_implied", "Note"]
-    assert any(i.value.startswith("BKS-implied is not available") for i in cm.info)
+    for m in ("bks_implied", "bks_implied_train"):
+        assert math.isnan(table.loc[m, r2_col]) and "Run BKS" in table.loc[m, "Note"]
+    info = [i.value for i in cm.info if i.value.startswith("BKS-implied is not available")]
+    assert len(info) == 1 and "BKS-implied (full history):" in info[0] and "BKS-implied (training window):" in info[0]
     assert not at.button(key="cm_run_bks").disabled
+    assert at.radio(key="sb_bks_history").value == "full"  # the sidebar's BKS variant (D88)
     assert len(cm.get("plotly_chart")) == 4  # dots, sweep, and the inspected method's scatter and R2 bars
     assert at.selectbox(key="cm_inspect").value == "elastic_net"  # the sidebar's direct method
     assert [m.label for m in cm.metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
@@ -690,32 +698,55 @@ def test_app_compare_methods_with_a_bks_run():
     _assert_clean(at)
     r2_col = "Median OOS R², this window"
     table = at.tabs[3].dataframe[0].value
-    assert math.isnan(table.loc["bks_implied", r2_col])
-    assert "BKS-implied" not in _trace_names(at.tabs[3].get("plotly_chart")[0])
+    assert math.isnan(table.loc["bks_implied", r2_col]) and math.isnan(table.loc["bks_implied_train", r2_col])
+    assert not any(n.startswith("BKS-implied") for n in _trace_names(at.tabs[3].get("plotly_chart")[0]))
     # "Method to inspect" follows the sidebar's direct method until the user picks one
     at.selectbox(key="sb_method").set_value("ridge").run()
     _assert_clean(at)
     assert at.selectbox(key="cm_inspect").value == "ridge"
 
-    at.button(key="cm_run_bks").click().run()  # the tab's own Run BKS button
+    at.button(key="cm_run_bks").click().run()  # the tab's own Run BKS button fits both variants (D88)
     _assert_clean(at)
+    assert "bks_compare_requested" not in at.session_state  # cleared once the run ended
     cm = at.tabs[3]
     assert not cm.info
     table = cm.dataframe[0].value
+    for m in ("bks_implied", "bks_implied_train"):
+        row = table.loc[m]
+        assert np.isfinite(float(row[r2_col])) and np.isfinite(float(row["Spearman vs truth"]))
+        assert row["Note"] == IMPLIED_NOTE
     implied = table.loc["bks_implied"]
-    assert np.isfinite(float(implied[r2_col])) and np.isfinite(float(implied["Spearman vs truth"]))
-    assert implied["Note"] == IMPLIED_NOTE
+    assert table.loc["bks_implied", r2_col] != table.loc["bks_implied_train", r2_col]
     assert list(table.index)[-1] == "oracle"
     dots, sweep = cm.get("plotly_chart")[:2]
-    assert "BKS-implied" in _trace_names(dots) and "BKS-implied" in _trace_names(sweep)
-    # the lead caption: BKS-implied's extra history and the BKS tab's own R2, named with its value
+    for label in ("BKS-implied (full history)", "BKS-implied (training window)"):
+        assert label in _trace_names(dots) and label in _trace_names(sweep)
+    # the lead caption: the full history's extra data, the like-for-like variant and the BKS tab's own R2
     lead = cm.caption[0].value
     assert "weigh all days before the cut-off" in lead and "lies before the training start" in lead
+    assert "BKS-implied (training window) sees only the training window" in lead
+    assert "differ in the covariance history and the return scaling" in lead
     assert "The BKS tab's OOS R² (here " in lead
+    # the pointer to the reasons BKS-implied scores lower (G.15.1), and the item it points to
+    assert any(c.value.startswith("Why the BKS-implied rows score lower") and "Data and method" in c.value
+               for c in cm.caption)
+    assert "Why BKS-implied scores lower (G.15.1)" in [h.value for h in at.tabs[6].subheader]
+    assert any("The directions BKS keeps" in m.value and "Not the number of factors" in m.value
+               for m in at.tabs[6].markdown)
     # the oracle is the reference in the inspect charts, not an option
     inspect_options = at.selectbox(key="cm_inspect").options  # display labels
-    assert "BKS-implied" in inspect_options and not any(o.startswith("Oracle") for o in inspect_options)
+    assert {"BKS-implied (full history)", "BKS-implied (training window)"} <= set(inspect_options)
+    assert not any(o.startswith("Oracle") for o in inspect_options)
     assert "Chosen lambda" in [m.label for m in at.tabs[4].metric]  # the BKS tab has the same run
+    assert any("Covariance history: full history" in c.value for c in at.tabs[4].caption)
+    # the sidebar's radio switches the BKS tab to the training-window fit the Compare run made: not stale
+    at.radio(key="sb_bks_history").set_value("training").run()
+    _assert_clean(at)
+    assert "Chosen lambda" in [m.label for m in at.tabs[4].metric]
+    assert not [w for w in at.tabs[4].warning if "Settings changed" in w.value]
+    assert any("Covariance history: training window only" in c.value for c in at.tabs[4].caption)
+    at.radio(key="sb_bks_history").set_value("full").run()
+    _assert_clean(at)
 
     # a new forecast window re-scores the cached fits: BKS-implied stays, with the same fit time
     at.slider(key="sb_forecast_weeks").set_value(8).run()
@@ -724,24 +755,63 @@ def test_app_compare_methods_with_a_bks_run():
     assert np.isfinite(float(after[r2_col])) and not at.tabs[3].info
     assert after[r2_col] != implied[r2_col] and after["Fit time (s)"] == implied["Fit time (s)"]
 
-    # inspecting BKS-implied shows the caveat with the fit's K and kept topics
+    # inspecting BKS-implied shows the caveat with the fit's K, kept topics and covariance history
     at.selectbox(key="cm_inspect").set_value("bks_implied").run()
     _assert_clean(at)
-    assert any(c.value.startswith(IMPLIED_NOTE) and "K = 3 factors" in c.value for c in at.tabs[3].caption)
+    assert any(c.value.startswith(IMPLIED_NOTE) and "K = 3 factors" in c.value and "full history" in c.value
+               for c in at.tabs[3].caption)
     assert [m.label for m in at.tabs[3].metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
+    at.selectbox(key="cm_inspect").set_value("bks_implied_train").run()
+    _assert_clean(at)
+    assert any(c.value.startswith(IMPLIED_NOTE) and "training window only" in c.value for c in at.tabs[3].caption)
+    at.selectbox(key="cm_inspect").set_value("bks_implied").run()
     at.selectbox(key="sb_method").set_value("elastic_net").run()
     assert at.selectbox(key="cm_inspect").value == "bks_implied"  # the user's own choice stays
+
+    # without a BKS-implied method the pointer caption is not shown
+    at.multiselect(key="cm_methods").unselect("bks_implied").unselect("bks_implied_train").run()
+    _assert_clean(at)
+    assert not any(c.value.startswith("Why the BKS-implied rows score lower") for c in at.tabs[3].caption)
+    at.multiselect(key="cm_methods").select("bks_implied").select("bks_implied_train").run()
+    _assert_clean(at)
 
     # OLS on request, in method order
     at.multiselect(key="cm_methods").select("ols").run()
     _assert_clean(at)
-    assert list(at.tabs[3].dataframe[0].value.index) == ["elastic_net", "ridge", "ols", "bks_implied", "oracle"]
+    assert list(at.tabs[3].dataframe[0].value.index) == ["elastic_net", "ridge", "ols", "bks_implied",
+                                                         "bks_implied_train", "oracle"]
 
-    # a new K: the BKS fit of these settings has not been run, so BKS-implied is unavailable again
+    # a new K: the BKS fits of these settings have not been run, so both variants are unavailable again
     at.slider(key="sb_bks_K").set_value(2).run()
     _assert_clean(at)
     assert any(i.value.startswith("BKS-implied is not available") for i in at.tabs[3].info)
     assert math.isnan(at.tabs[3].dataframe[0].value.loc["bks_implied", r2_col])
+    assert math.isnan(at.tabs[3].dataframe[0].value.loc["bks_implied_train", r2_col])
+    # the sidebar's Run BKS fits only the sidebar's variant (full history)
+    at.button(key="sb_run_bks").click().run()
+    _assert_clean(at)
+    table = at.tabs[3].dataframe[0].value
+    assert np.isfinite(float(table.loc["bks_implied", r2_col])) and math.isnan(table.loc["bks_implied_train", r2_col])
+    info = [i.value for i in at.tabs[3].info if i.value.startswith("BKS-implied is not available")]
+    assert len(info) == 1 and "training window" in info[0] and "full history" not in info[0]
+
+
+def test_app_sidebar_run_bks_follows_the_training_check():
+    """The sidebar's Run BKS is disabled when BKS cannot use the training window, as the BKS tab's is (review
+    2026-09-30: it stayed enabled and pressing it showed a technical error)."""
+    at = _app().run()
+    _generic_sidebar(at)
+    _assert_clean(at)
+    assert not at.button(key="sb_run_bks").disabled
+    at.select_slider(key="sb_train_months").set_value(1).run()
+    _assert_clean(at)
+    assert at.button(key="sb_run_bks").disabled and at.button(key="bks_run_tab").disabled
+    at.radio(key="sb_bks_history").set_value("training").run()
+    _assert_clean(at)
+    assert at.button(key="sb_run_bks").disabled and at.button(key="bks_run_tab").disabled
+    at.select_slider(key="sb_train_months").set_value(6).run()  # 24 usable weeks with the training window only
+    _assert_clean(at)
+    assert not at.button(key="sb_run_bks").disabled and not at.button(key="bks_run_tab").disabled
 
 
 def test_comparison_table_labels_and_notes():
@@ -749,13 +819,14 @@ def test_comparison_table_labels_and_notes():
     s = LabSession()
     # a one-month window with 12 topics: OLS is refused (L >= n_train / 2)
     cfg = _generic_cfg(train_start="2022-12-01", train_end="2022-12-30", forecast_start="2023-01-02")
-    res = s.comparison(cfg, methods=("elastic_net", "ols", "bks_implied", "oracle"), use_bks=False)
+    res = s.comparison(cfg, methods=("elastic_net", "ols", "bks_implied", "bks_implied_train", "oracle"),
+                       use_bks=False)
     t = _ui.comparison_table(res.summary, {"bks_implied": "Run BKS first."})
     assert list(t.columns) == [head for _, head, _ in _ui.COMPARISON_COLUMNS]
     assert list(t.columns[:4]) == ["Method", "Median OOS R², this window", "Median OOS R², all windows",
                                    "Windows above the oracle"]  # on screen at laptop width
     assert list(t.columns[-2:]) == ["Fit time (s)", "Note"]
-    assert list(t.index) == ["elastic_net", "ols", "bks_implied", "oracle"]
+    assert list(t.index) == ["elastic_net", "ols", "bks_implied", "bks_implied_train", "oracle"]
     assert t.loc["elastic_net", "Coverage"] == pytest.approx(100.0 * res.summary.loc["elastic_net", "coverage"])
     assert t.loc["elastic_net", "RMSE vs truth"] == pytest.approx(res.summary.loc["elastic_net", "rmse"])
     note = t.loc["ols", "Note"]
@@ -770,8 +841,10 @@ def test_comparison_table_labels_and_notes():
     assert _ui.method_option_label("elastic_net", DirectConfig(penalty="cv")) == "Elastic net (CV)"
     assert _ui.method_option_label("ridge", DirectConfig(method="ridge", ridge_lambda=0.1)) == "Ridge (fixed lambda)"
     assert _ui.method_option_label("ridge", DirectConfig(penalty="cv")) == "Ridge (GCV)"  # not the sidebar's method
-    assert _ui.method_option_label("bks_implied") == "BKS-implied"
-    assert _ui.COMPARE_DEFAULT_METHODS == ("elastic_net", "ridge", "bks_implied", "oracle")
+    assert t.loc["bks_implied_train", "Note"] == "BKS has not been run in this browser session. Run BKS first."
+    assert _ui.method_option_label("bks_implied") == "BKS-implied (full history)"
+    assert _ui.method_option_label("bks_implied_train") == "BKS-implied (training window)"
+    assert _ui.COMPARE_DEFAULT_METHODS == ("elastic_net", "ridge", "bks_implied", "bks_implied_train", "oracle")
 
 
 # ---------------------------------------------------------------------------
@@ -845,6 +918,39 @@ def test_bks_training_check_counts_the_burn_in():
     # ten years back from 2016-06-30 (clipped to the data start): 78 Fridays, 12 usable weeks
     ten = _ui.bks_training_check("2015-01-02", "2016-06-30")
     assert (ten["weeks"], ten["n_weeks"], ten["can_run"]) == (78, 12, False)
+
+
+def test_bks_training_check_with_the_training_window_only():
+    """D88: the training-window variant has no burn-in; it loses the window's first week or two instead."""
+    from narrative_ipca.exposure_lab.config import BKSLabConfig
+
+    tr = BKSLabConfig(history="training")
+    ok = _ui.bks_training_check("2025-01-01", "2025-06-30", tr)
+    assert ok["can_run"] and (ok["weeks"], ok["n_weeks"]) == (26, 24)
+    assert ok["first_week"] == pd.Timestamp("2025-01-17")
+    # near the data start it runs where the full history cannot (no 52-week burn-in)
+    assert _ui.bks_training_check("2015-07-01", "2015-12-31", tr)["can_run"]
+    # 24 Fridays: the full history uses all 24, the training window loses the first
+    assert _ui.bks_training_check("2025-01-06", "2025-06-20")["can_run"]
+    short = _ui.bks_training_check("2025-01-06", "2025-06-20", tr)
+    assert (short["weeks"], short["n_weeks"], short["can_run"]) == (24, 23, False)
+    assert "training window only" in short["reason"] and "Lengthen the training window" in short["reason"]
+    # near the data start a longer window cannot help (the start is clamped to 2015-01-02): move the cut-off
+    for months in (6, 12, 120):
+        tw = _ui.training_window("2015-06-30", months)
+        clamped = _ui.bks_training_check(tw["start"], tw["end"], tr)
+        assert (clamped["n_weeks"], clamped["can_run"]) == (23, False)
+        assert "Move the cut-off later" in clamped["reason"] and "Lengthen" not in clamped["reason"]
+        assert "2015-01-23" in clamped["reason"]
+    assert _ui.bks_training_check("2015-01-02", "2015-07-10", tr)["can_run"]  # a later cut-off runs
+    note = _ui.short_training_note("2025-01-06", "2025-06-20", 20, tr)
+    assert note is not None and "training window only" in note
+    # the sidebar value drives the config
+    v = _ui.default_values()
+    assert v["sb_bks_history"] == "full"
+    v["sb_bks_history"] = "training"
+    cfg, errors, _ = _ui.config_from_values(v)
+    assert not errors and cfg.bks.history == "training"
 
 
 def test_one_month_training_runs_direct_and_bks_refuses():
