@@ -1692,7 +1692,13 @@ def bks_trace_page() -> None:
     try:
         with st.spinner("Tracing BKS ...", show_time=True):
             trace = session.bks_trace(cfg)
-            res = session.bks(cfg)
+        # the trace evaluated the cached fit under the bks key; peek so that nothing here can start a fit
+        res = session.peek("bks", cfg)
+        store = st.session_state.get("bks_store")
+        if res is None and store is not None and store["key"] == ctx["bks_key"]:
+            res = store["result"]
+        if res is None:
+            raise LookupError("the evaluated BKS run is no longer cached")
     except LookupError:
         st.info("The BKS fit for these settings is no longer in the cache. Press Run BKS to fit it again.")
         return

@@ -26,12 +26,21 @@ stage                 key                                          computed by
 ``bks``               ``k("bks_evaluation")``                      :func:`.bks.evaluate_bks`
 ``bks_implied``       ``k("bks_fit")`` + ``k("shocks")`` +         :func:`.bks.implied_exposures`
                       ``select_tau``
+``bks_trace``         ``k("bks_evaluation")``                      :func:`.trace.build_trace`
 ``comparison``        ``k("evaluation")`` + methods + BKS tokens   :func:`.compare.compare_methods`
 ====================  ===========================================  =================================
 
 The BKS stages follow ``cfg.bks.history`` (D88): ``"full"`` and
 ``"training"`` have different panel and fit keys, and the training-history
 panel key also holds the training window.
+
+BKS trace (G.16, D90). :meth:`LabSession.bks_trace` traces the cached BKS run
+of a configuration step by step (:func:`.trace.build_trace`, under a second
+at 20 topics). Like ``bks_implied`` it never starts a BKS fit: it raises
+``LookupError`` (:data:`BKS_NOT_RUN`) when the panel or the fit is not
+cached. Its key is that of the ``bks`` stage (every setting the trace depends
+on: the simulation, the windows, the shock window and the BKS settings) and
+it keeps at most ``bks_max_entries`` results.
 
 Method comparison (G.7, G.8). :meth:`LabSession.method_fit` returns one
 method's :class:`DirectFit`: the direct methods and the oracle come from the
@@ -73,12 +82,15 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from narrative_ipca.config import config_hash
 
 from .config import LabConfig
 from .types import BKSLabResult, DirectFit, MarketData, ObservedShocks, SimData, SimTruth, WindowEval
+
+if TYPE_CHECKING:
+    from .trace import BKSTrace
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +109,7 @@ __all__ = [
 #: Stages a :class:`LabSession` memoises, in pipeline order.
 SESSION_STAGES: tuple[str, ...] = (
     "market", "simulation", "truth", "shocks", "direct", "evaluation", "sweep", "bks_panel", "bks_fit", "bks",
-    "bks_implied", "comparison",
+    "bks_implied", "bks_trace", "comparison",
 )
 
 #: Reason shown for a BKS-implied method when no BKS fit of its configuration is cached.
@@ -109,8 +121,8 @@ BKS_OFF = "BKS has not been run in this browser session. Run BKS first."
 #: Prefix of the reason shown for a BKS-implied method whose BKS fit refused (``comparison(bks_errors=...)``).
 BKS_REFUSED = "BKS could not run with these settings: "
 
-#: Stages whose results can be large (the weekly BKS panel and fit); they get a smaller cache.
-BKS_STAGES: frozenset[str] = frozenset({"bks_panel", "bks_fit", "bks"})
+#: Stages whose results can be large (the weekly BKS panel and fit, and the trace); they get a smaller cache.
+BKS_STAGES: frozenset[str] = frozenset({"bks_panel", "bks_fit", "bks", "bks_trace"})
 
 #: Default number of cached results per BKS stage.
 BKS_MAX_ENTRIES = 2
@@ -204,6 +216,8 @@ class LabSession:
             parts = {"bks_fit": cfg.key("bks_fit"), "shocks": cfg.key("shocks"),
                      "select_tau": float(cfg.direct.select_tau)}
             return f"bks_implied-{config_hash(parts)}"
+        if stage == "bks_trace":
+            return f"bks_trace-{config_hash({'bks': cfg.key('bks_evaluation')})}"
         if stage == "comparison":
             from .compare import METHODS
 
@@ -441,6 +455,35 @@ class LabSession:
             )
 
         return self._get("bks_implied", cfg, compute)
+
+    def bks_trace(self, cfg: LabConfig) -> BKSTrace:
+        """The cached BKS run of ``cfg`` traced step by step (:func:`.trace.build_trace`; G.16, D90).
+
+        Uses the cached ``bks_panel`` and ``bks_fit`` of ``cfg`` and never
+        starts a BKS fit. The forecast evaluation (``bks``) and the implied
+        sensitivities (``bks_implied``) are computed from them when missing
+        (milliseconds); the truth is :meth:`truth` of ``cfg``.
+
+        Raises
+        ------
+        LookupError
+            When the BKS panel or fit of ``cfg`` is not cached
+            (:data:`BKS_NOT_RUN`).
+        """
+        from .bks import evaluate_bks
+        from .trace import build_trace
+
+        def compute() -> BKSTrace:
+            panel, fit = self.peek("bks_panel", cfg), self.peek("bks_fit", cfg)
+            if panel is None or fit is None:
+                raise LookupError(BKS_NOT_RUN)
+            # the peeked objects, not self.bks(cfg): an eviction in between must not start a fit
+            result = self._get("bks", cfg, lambda: evaluate_bks(panel, fit, cfg.window))
+            implied = self.bks_implied(cfg)
+            return build_trace(panel, fit, result, self.simulation(cfg), self.shocks(cfg), self.truth(cfg),
+                               cfg.window, cfg.bks, implied)
+
+        return self._get("bks_trace", cfg, compute)
 
     def method_fit(self, cfg: LabConfig, method: str) -> DirectFit:
         """One method's training fit for the comparison (G.7; :data:`.compare.METHODS`).

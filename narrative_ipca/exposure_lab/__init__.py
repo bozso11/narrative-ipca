@@ -5,7 +5,8 @@ Modules: ``config`` and ``types`` (contracts), ``reference`` and ``market``
 (data, G.2), ``links`` and ``dgp`` (topics, links and simulation, G.3-G.5),
 ``direct`` and ``evaluate`` (direct sensitivity regression and out-of-sample
 evaluation, G.7.1, G.8), ``bks`` (BKS Sparse IPCA, G.7.2), ``compare``
-(method comparison, G.15), ``charts`` (Plotly figures) and ``session``
+(method comparison, G.15), ``trace`` (the BKS run traced step by step for
+the BKS trace page, G.16), ``charts`` (Plotly figures) and ``session``
 (cached orchestration).
 
 Terminology
