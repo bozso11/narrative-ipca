@@ -180,6 +180,15 @@ What the lab covers:
   how much) and with the training window only, which sees the data the direct
   methods see (DESIGN.md G.15, D88). BKS-implied scores below the direct
   methods; the reasons are in DESIGN.md G.15.1 and the Data and method tab.
+- **BKS trace page**: the BKS run of the current settings followed step by
+  step (inputs, alignment and scaling, attention shocks, kernel-covariance
+  instruments, weekly panel, Sparse IPCA fit and lambda path, forecast weeks,
+  implied sensitivities), with an independent reference next to every result
+  (a recomputation by the formula, an identity, or the simulation's true
+  value), identity and diagnostic checks, and a ladder of variants from the
+  true sensitivities down to the BKS-implied ones that shows which step loses
+  the signal (DESIGN.md G.16, D90). The BKS tab and the Compare methods tab
+  link to it; Run BKS works there too.
 - **Real data page**: a placeholder for estimates on real news; it shares the
   sidebar and lists the settings that will apply to real data.
 
@@ -208,8 +217,8 @@ python scripts/fetch_market_data.py
 
 | Path | Content |
 |---|---|
-| `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, method comparison, charts, cached session |
-| `dashboard/` | the Streamlit app (`app.py`), its pure helpers (`_ui.py`) and the Real data page (`real_exposures.py`) |
+| `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, method comparison, BKS trace (`trace.py`), charts, cached session |
+| `dashboard/` | the Streamlit app (`app.py`), its pure helpers (`_ui.py`), the BKS trace page's steps (`trace_page.py`) and the Real data page (`real_exposures.py`) |
 | `data/reference/` | assets (image order), legs with benchmark index and proxy, the 20 manual topics, the default link map |
 | `data/market/` | daily leg levels and returns, asset returns, raw downloads and `manifest.json`; `README.md` there has sources, conventions, QA and open items |
 | `tests/test_lab_*.py` | lab tests, including Monte Carlo checks of the simulation truth |
