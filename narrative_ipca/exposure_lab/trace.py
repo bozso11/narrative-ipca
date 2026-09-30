@@ -54,7 +54,26 @@ units; instruments and ``m`` are in panel units (scaled return x raw shock);
 
 The reference ladder (:data:`LADDER`, ``BKSTrace.ladder``) scores, like the
 Compare tab, a chain of sensitivity matrices from what the data allow to
-what BKS delivers, so the step that loses the signal stands out.
+what BKS delivers, so the step that loses the signal stands out. One rung
+keeps the fit's ``K`` betas ``beta_i = c_i Gamma`` but inverts them by a
+cross-sectional least-squares reconstruction,
+``m_i = Sigma_c Gamma_tilde (Gamma_tilde' Sigma_c Gamma_tilde)^+ beta_i'``
+with ``Sigma_c = C~'C~ / n`` the (uncentred) second moment of the Eq. 5
+instrument rows, instead of the Euclidean projection of Eq. 5; both agree
+when the instruments lie exactly in the ``K`` directions of
+``Gamma_tilde``. The all-zero matrix is a benchmark row (its RMSE is the
+error of saying nothing), not a step of the chain.
+
+"What it should be" beside the fit: the no-signal distribution of the
+tuning criterion (the in-sample annualised Sharpe ratio of the ``K``
+factors' best combination over ``T`` training weeks when every factor mean
+is zero: Hotelling ``T^2 = K (T - 1) / (T - K) F(K, T - K)``, Sharpe
+``sqrt(52 T^2 / T)``), both readings of the tolerance band (the tuner's
+``best - tol max(1, |best|)`` and the relative ``best - tol |best|`` the
+docs describe) and the stationarity of the group lasso. Beside the unit
+conversion: the exact return-unit kernel covariance of each asset (raw
+returns instead of scaled ones, same kernel), and the forecast R2 in exact
+return units next to the panel-unit value.
 
 Validity boundaries
 -------------------
@@ -77,6 +96,10 @@ Validity boundaries
   last training week's instruments; stale assets (an earlier row) use it too.
 * ``B_true`` is full-sample standardised while the estimators use training
   scales (D74); ``B_true_train_units`` converts it.
+* The no-signal Sharpe quantiles assume normal, independent weekly factor
+  returns with a fixed covariance and a population mean of zero; they are
+  a yardstick for the criterion's noise, not a test of one fitted path
+  (the path's points share their weeks and most of their topics).
 
 Cost: about 0.3 s on the dashboard defaults (55 assets x 20 topics), most
 of it the per-lambda refit of the path (``path_trace``), which is skipped
@@ -96,6 +119,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy.stats import f as _f_dist
 
 from .. import sparse_ipca as si
 from ..covariances import brute_force_covariance, kernel_weights, window_bounds
@@ -123,11 +147,13 @@ __all__ = [
     "DIAGNOSTIC",
     "LADDER",
     "LADDER_WHAT",
+    "LADDER_BENCHMARKS",
     "PATH_TRACE_MAX_TOPICS",
     "LAMBDA_MAX_MAX_TOPICS",
     "TraceCheck",
     "BKSTrace",
     "build_trace",
+    "null_sharpe_quantiles",
     "population_moments",
     "window_truth",
     "asset_days",
@@ -174,16 +200,22 @@ OK, OFF, INFO = "ok", "off", "info"
 #: describes the run (off = the run departs from what the method assumes, not a bug).
 IDENTITY, DIAGNOSTIC = "identity", "diagnostic"
 
-#: Ladder variants, in chain order from what the data allow to what BKS delivers (key -> page label).
+#: Ladder variants, in chain order from what the data allow to what BKS delivers, then the benchmarks
+#: (:data:`LADDER_BENCHMARKS`, not part of the chain) (key -> page label).
 LADDER: dict[str, str] = {
     "oracle": "True sensitivities",
     "window_truth": "Best a training window allows",
     "instruments_kernel": "Instruments, shocks' covariance over the same history",
     "instruments_train": "Instruments, shocks' covariance over the training days",
     "best_rank": "Best K directions of the instruments",
+    "bks_ls": "BKS betas, least-squares inversion",
     "bks_no_const": "BKS directions, no constant",
     "bks_implied": "BKS-implied (production)",
+    "zero": "All zero (benchmark)",
 }
+
+#: Ladder rows that are benchmarks, not steps of the chain: their change from the row above is ``NaN``.
+LADDER_BENCHMARKS: tuple[str, ...] = ("zero",)
 
 #: What each ladder variant is, in one plain-English sentence (the ladder table's ``what`` column).
 LADDER_WHAT: dict[str, str] = {
@@ -201,8 +233,13 @@ LADDER_WHAT: dict[str, str] = {
         "step does."
     ),
     "best_rank": "The instruments kept only in their best K directions: the most any K-direction fit can keep.",
+    "bks_ls": (
+        "The same K betas of the BKS fit, turned back into topic covariances by a cross-sectional least-squares "
+        "fit instead of the Eq. 5 projection: how much the betas still know."
+    ),
     "bks_no_const": "The instruments kept only in the K directions the BKS fit chose, without the constant's part.",
     "bks_implied": "The production BKS-implied sensitivities (BKS Eq. 5).",
+    "zero": "Every sensitivity set to zero: the error of saying nothing (benchmark, not a step of the chain).",
 }
 
 #: Above this many topics the per-lambda refit of the path (``BKSTrace.path_trace``) is skipped (cost).
@@ -229,6 +266,12 @@ _DEAD_RATIO = 1e-6
 
 #: Instruments-vs-population correlation below which the full-history instruments depart from their reference.
 _MIN_REF_CORR = 0.9
+
+#: Quantiles of the no-signal distribution of the in-sample Sharpe ratio drawn on the lambda path.
+_NULL_PROBS = (0.05, 0.5, 0.95)
+
+#: Largest ``|conversion_exact - 1|`` across assets before the unit conversion counts as approximate (a note).
+_MAX_CONVERSION_GAP = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +363,9 @@ class BKSTrace:
         for assets without a training row).
     chain:
         The Eq. 5 chain: ``beta`` (assets x f1..fK), ``m_proj``, ``m``
-        (assets x topics, panel units), ``m_const`` (Series over topics),
+        (assets x topics, panel units), ``m_ls`` (the least-squares
+        inversion of ``beta``, the ``bks_ls`` rung; assets x topics, panel
+        units), ``m_const`` (Series over topics),
         ``divisor`` and ``conversion`` (Series over assets; the conversion is
         0 for skipped assets), ``m_ret``, ``b_raw`` (assets x topics, return
         units), ``sigma_z`` (dict ``train`` / ``kernel`` / ``population`` ->
@@ -333,23 +378,41 @@ class BKSTrace:
     ladder:
         Index :data:`LADDER` keys (name ``variant``); columns ``label``,
         ``spearman``, ``rmse``, ``median_r2`` (fraction), ``d_spearman``,
-        ``d_median_r2`` (change from the row above) and ``what``.
+        ``d_median_r2`` (change from the chain row above; ``NaN`` in the
+        first row and for the :data:`LADDER_BENCHMARKS` rows, which are not
+        part of the chain) and ``what``. The ``zero`` row has ``spearman``
+        ``NaN`` (no ranking), the RMSE of predicting zero and a median OOS
+        R2 of 0.
     capture:
         ``kept_share``, ``best_share``, ``random_share`` (floats),
-        ``singular_share`` and ``captured`` (Series over directions
-        1..min(n, L)), ``principal_cosines`` (array of ``K``; zeros when
-        ``Gamma_tilde`` has fewer than ``K`` directions).
+        ``ls_share`` (share of the instruments' squared norm kept by the
+        least-squares reconstruction from the ``K`` betas, ``ladder`` row
+        ``bks_ls``), ``singular_share`` and ``captured`` (Series over
+        directions 1..min(n, L)), ``per_asset_share`` (Series over assets:
+        ``||P c~_i||^2 / ||c~_i||^2``, ``NaN`` without a row),
+        ``principal_cosines`` (array of ``K``; zeros when ``Gamma_tilde``
+        has fewer than ``K`` directions).
     path:
         Lambda path table, ``None`` for the fixed rule: columns ``lam``,
         ``criterion``, ``se``, ``in_band``, ``best``, ``chosen``,
         ``n_selected``, ``total_r2``, ``objective``, ``zero_objective``,
-        ``above_zero``, ``converged``, ``n_iter``, ``sigma_ff_truncated``.
+        ``above_zero``, ``converged``, ``n_iter``, ``sigma_ff_truncated``,
+        then constants over the rows: ``null_q05``, ``null_q50``,
+        ``null_q95`` (quantiles of the no-signal in-sample Sharpe ratio of
+        ``K`` factors over the ``T`` training weeks; ``NaN`` when
+        ``T <= K``), ``band_floor_code`` (``best - max(1e-9, tol) max(1,
+        |best|)``, the tuner's rule) and ``band_floor_relative`` (``best -
+        tol |best|``, the documented relative rule); and ``edge`` (bool:
+        this row is the chosen or the best point and the first or last grid
+        point).
     gamma_path:
         Lambda (index ``lam``) x instruments: ``sigma^c_l ||Gamma_l||`` per
         path point (``None`` for the fixed rule).
     path_trace:
-        Per-lambda refit (:func:`lambda_path_trace`) or ``None`` (fixed rule,
-        or skipped above :data:`PATH_TRACE_MAX_TOPICS` topics).
+        Per-lambda refit (:func:`lambda_path_trace`: ``lam``, ``n_selected``,
+        ``criterion``, ``kept_share``, ``spearman``, ``median_r2``,
+        ``gamma_rank``, ``gamma_sv_min``) or ``None`` (fixed rule, or skipped
+        above :data:`PATH_TRACE_MAX_TOPICS` topics).
     gamma_std:
         Instruments (``const`` + panel topics) x f1..fK: ``sigma^c_l Gamma_lk``.
     kkt:
@@ -361,7 +424,12 @@ class BKSTrace:
     units:
         Per asset: ``divisor``, ``ret_scale``, ``asset_vol``,
         ``divisor_over_ret_scale``, ``conversion`` (``u_i``, 1 is exact),
-        ``skipped``.
+        ``skipped``, ``conversion_exact`` (least-squares ratio of ``c~_i``
+        times the training divisor to the exact return-unit kernel
+        covariance of the same instrument week; 1 is exact), ``kernel_divisor``
+        (the kernel-weighted mean divisor over the instrument's days) and
+        ``conversion_kernel`` (the same ratio with the kernel divisor);
+        ``NaN`` for skipped assets.
     shock_table:
         Per topic: ``sd_train``, ``sd_population``, ``ratio``,
         ``corr_designed``, ``attenuation_true``, ``signal_share``.
@@ -370,7 +438,9 @@ class BKSTrace:
         ``mean_over_sd`` of the training instruments.
     weeks:
         Per forecast week (index ``period``): ``first_day``, ``n_assets``,
-        ``r2``, ``r2_shuffled``, ``f1..fK``.
+        ``r2``, ``r2_shuffled`` (panel units), ``f1..fK``, ``r2_exact`` (the
+        week's R2 of the fitted return units against the exact weekly
+        returns).
     checks:
         Every :class:`TraceCheck`, in step order.
     findings:
@@ -381,8 +451,22 @@ class BKSTrace:
         ``train_end``, ``forecast_start``, ``forecast_end``, ``xi``,
         ``skip_days``, ``min_days``, ``burn_in_weeks``,
         ``kernel_share_before_train``, ``effective_days``, ``n_pairs``,
-        ``instrument_ref_corr``, ``instrument_ref_slope``, ``path_trace_note``
-        and more (see :func:`build_trace`).
+        ``instrument_ref_corr``, ``instrument_ref_slope``, ``path_trace_note``,
+        ``bks_train_days`` (days of the BKS training weeks),
+        ``days_before_train_start`` (of them, before the training start),
+        ``direct_train_days`` and ``direct_days_not_in_bks`` (the direct
+        estimator's training return days, and those in no BKS training
+        week; dates in ``direct_days_not_in_bks_dates``),
+        ``null_sharpe_quantiles``, ``band_floor_code``,
+        ``band_floor_relative``, ``inner_all_converged``, ``inner_iters``,
+        ``next_to_enter``, ``next_to_enter_ratio``, ``r2_pooled_panel``,
+        ``r2_pooled_exact``, ``realized_max_rel_error`` and more (see
+        :func:`build_trace`).
+    sigma_table:
+        Per topic (simulation order): ``train_over_population``,
+        ``kernel_over_population`` and ``train_over_kernel`` (ratios of the
+        diagonals of ``chain["sigma_z"]``) and ``max_corr_diff`` (largest
+        ``|corr_train - corr_kernel|`` of the topic with another topic).
     """
 
     history: str
@@ -422,6 +506,7 @@ class BKSTrace:
     checks: list[TraceCheck]
     findings: list[dict[str, str]]
     meta: dict[str, Any] = field(default_factory=dict)
+    sigma_table: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def checks_frame(self, step: str | None = None) -> pd.DataFrame:
         """The checks (of one step, or all) as a table.
@@ -538,6 +623,33 @@ def _weighted_cov(r: np.ndarray, Z: np.ndarray, wts: np.ndarray, ok: np.ndarray)
     k = wts[ok] / wts[ok].sum()
     ro, Zo = r[ok], Z[ok]
     return ((ro - k @ ro) * k) @ (Zo - k @ Zo)
+
+
+def _kernel_moments(R: np.ndarray, okr: np.ndarray, Z: np.ndarray, wts: np.ndarray, zok: np.ndarray,
+                    aux: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per column ``i`` of ``R`` (days x n): kernel covariance with ``Z`` (``n x L``) and kernel mean of ``aux``.
+
+    Over the days with ``okr[:, i]``, every shock finite (``zok``) and a
+    positive weight, the weights normalised over those days (as the panel's
+    instruments). Columns with every such day observed share one product.
+    """
+    base = zok & (wts > 0.0)
+    n, L = R.shape[1], Z.shape[1]
+    cov, mean_aux = np.full((n, L), np.nan), np.full(n, np.nan)
+    if not base.any():
+        return cov, mean_aux
+    full = okr[base].all(axis=0)
+    if full.any():
+        k = wts[base] / wts[base].sum()
+        Zo, Ro = Z[base], R[base][:, full]
+        cov[full] = ((Ro - k @ Ro) * k[:, None]).T @ (Zo - k @ Zo)
+        mean_aux[full] = k @ aux[base][:, full]
+    for i in np.flatnonzero(~full):
+        ok = base & okr[:, i]
+        if ok.any():
+            cov[i] = _weighted_cov(R[:, i], Z, wts, ok)
+            mean_aux[i] = float((wts[ok] / wts[ok].sum()) @ aux[ok, i])
+    return cov, mean_aux
 
 
 def _week_structure(days: pd.DatetimeIndex, skip_days: int) -> tuple[np.ndarray, pd.DatetimeIndex, np.ndarray,
@@ -857,6 +969,45 @@ def _capture(cov_rows: np.ndarray, P: np.ndarray, Mmap: np.ndarray, K: int, rcon
         cos[: len(c)] = np.clip(c, 0.0, 1.0)
     out["principal_cosines"] = cos
     return out
+
+
+def _ls_map(cov_rows: np.ndarray, Gt: np.ndarray, rcond: float) -> tuple[np.ndarray, int]:
+    """``Sigma_c Gt (Gt' Sigma_c Gt)^+`` (``L x K``) with ``Sigma_c = C'C / n`` of the rows ``C`` (``n x L``).
+
+    The ``n`` cancels: the map is ``C' H (H'H)^+`` with ``H = C Gt`` the
+    rows' loadings, so ``m = map beta'`` reconstructs each topic column of
+    ``C`` by its least-squares regression on the ``K`` loading columns.
+    Components of ``H`` below the ``rcond`` cut are dropped
+    (:func:`narrative_ipca.wrapup._lsq_map`). Also returns the rank of ``H``.
+    """
+    if cov_rows.size == 0:
+        return np.zeros_like(Gt), 0
+    Q, rank = _lsq_map(cov_rows @ Gt, rcond)
+    return cov_rows.T @ Q, int(rank)
+
+
+def null_sharpe_quantiles(K: int, T: int, probs: tuple[float, ...] = _NULL_PROBS,
+                          annualization: float | None = None) -> np.ndarray:
+    """Quantiles of the in-sample annualised MVE Sharpe ratio of ``K`` factors over ``T`` weeks with no priced signal.
+
+    With normal, independent weekly factor returns of mean zero, Hotelling's
+    ``T^2 = T mu' S^-1 mu`` (``S`` the ``ddof = 1`` covariance) is
+    ``K (T - 1) / (T - K) F(K, T - K)``; the weekly Sharpe ratio squared is
+    ``T^2 / T`` and the annualised one ``sqrt(A T^2 / T)`` (``A`` =
+    :data:`.bks.ANNUALIZATION`). ``NaN`` when ``T <= K`` or ``K < 1``.
+    """
+    A = float(lab_bks.ANNUALIZATION if annualization is None else annualization)
+    K, T = int(K), int(T)
+    if K < 1 or T <= K:
+        return np.full(len(probs), np.nan)
+    t2 = K * (T - 1) / (T - K) * _f_dist.ppf(np.asarray(probs, dtype=float), K, T - K)
+    return np.sqrt(A * t2 / T)
+
+
+def _band_pick(crit: np.ndarray, lams: np.ndarray, n_sel: np.ndarray, Ks: np.ndarray, floor: float) -> int:
+    """The tuner's pick among the points at or above ``floor``: the largest lambda (then fewer topics, smaller K)."""
+    cand = np.flatnonzero(np.isfinite(crit) & (crit >= floor)) if np.isfinite(floor) else np.zeros(0, dtype=int)
+    return int(max(cand, key=lambda i: (lams[i], -n_sel[i], -Ks[i]))) if cand.size else -1
 
 
 # ---------------------------------------------------------------------------
@@ -1317,6 +1468,23 @@ def build_trace(
         note=(f"The panel keeps a week only with at least {min_assets} assets (fewest here: "
               f"{int(n_per_week.min()) if len(n_per_week) else 0}). Off means a thin week entered the fit."),
     )
+    # which return days the training weeks cover, against the direct estimator's training return days
+    bks_days = days[np.isin(pid, week_ends.get_indexer(train_periods))]
+    direct_days = pd.DatetimeIndex(sim.market.calendar[chain.q_pos])
+    n_before_ts = int(np.sum(bks_days < ts))
+    missing_days = direct_days.difference(bks_days)
+    missing_txt = ", ".join(_fmt_day(d) for d in missing_days[:6]) + (" ..." if len(missing_days) > 6 else "")
+    checks.info(
+        "panel", "Training weeks cover the training days",
+        "return days of the training weeks = the direct estimator's training return days", float(len(bks_days)),
+        reference=float(len(direct_days)),
+        note=(f"The {len(train_periods)} training weeks hold {len(bks_days)} return days, the direct estimator "
+              f"{len(direct_days)}: a week counts when its last trading day is inside the training window, so "
+              f"{n_before_ts} day(s) of the first training week fall before the training start and "
+              f"{len(missing_days)} direct training day(s) are in no training week"
+              + (f" ({missing_txt})" if len(missing_days) else "")
+              + ". Both methods then learn from slightly different days."),
+    )
     # instrument stability over the training weeks (per topic, simulation order)
     Xs = sub.X[:, 1:]
     within = np.full(len(panel_topics), np.nan)
@@ -1436,6 +1604,37 @@ def build_trace(
         checks.info("fit", "Penalty and ridge in balance", "not applicable at lambda = 0", float("nan"),
                     kind=IDENTITY,
                     note="At lambda = 0 the factor step has no ridge and Gamma'Gamma = I fixes the scale.")
+    # the dropped instrument closest to entering (its KKT ratio reaches 1 when it enters)
+    idle = ~active & np.isfinite(ratio)
+    next_name, next_ratio = "", float("nan")
+    if idle.any():
+        j_next = int(np.flatnonzero(idle)[np.argmax(ratio[idle])])
+        next_name, next_ratio = instr_names[j_next], float(ratio[j_next])
+    checks.info(
+        "fit", "Next topic to enter", "largest ||grad_l|| / penalty_l among the dropped rows (a row enters at 1)",
+        next_ratio, reference=1.0,
+        note=(f"{next_name} is the dropped instrument closest to entering the fit (ratio {next_ratio:.3f}; a smaller "
+              "lambda lets it in near 1). A ratio close to 1 means the selection would change with a slightly "
+              "smaller lambda." if next_name else
+              ("At lambda = 0 nothing is penalised, so no instrument is dropped." if lam == 0.0 else
+               "Every instrument is in the fit (or none has a penalty): no dropped row to enter.")),
+    )
+    inner_ok = res.meta.get("inner_all_converged")
+    inner_iters = res.meta.get("inner_iters")
+    if inner_ok is None:
+        checks.info("fit", "Inner group-lasso solves converged", "not applicable at lambda = 0", float("nan"),
+                    note="At lambda = 0 the fit is plain IPCA (alternating least squares) with no inner solver.")
+    else:
+        cap_inner = int(est.inner_max_iter)
+        checks.info(
+            "fit", "Inner group-lasso solves converged",
+            "every inner Gamma solve reached its tolerance before its cap (1 = yes, 0 = no)",
+            1.0 if bool(inner_ok) else 0.0, reference=1.0,
+            note=(f"{int(inner_iters or 0):,} inner sweeps over the {int(res.n_iter)} outer sweep(s) (cap {cap_inner} "
+                  "per solve). " + ("Every inner solve converged." if bool(inner_ok) else
+                                    "At least one inner solve stopped at its cap; the fit still converged on its "
+                                    "objective, and the KKT check shows how close to stationary it ended.")),
+        )
     ev_ff = np.linalg.eigvalsh(0.5 * (Sff + Sff.T))
     dead_ratio = float(ev_ff.min() / ev_ff.max()) if ev_ff.size and ev_ff.max() > 0 else 0.0
     dead = not dead_ratio > _DEAD_RATIO
@@ -1450,6 +1649,8 @@ def build_trace(
     tuning = fit.tuning
     path = gamma_path = ptrace = None
     zero_obj = 0.5 * syy
+    null_q = null_sharpe_quantiles(K, int(sub.T))  # what K factors reach in-sample with no priced signal
+    floor_code = floor_rel = float("nan")
     if tuning is not None:
         pts = tuning.path
         crit = np.array([np.nan if q.criterion is None else float(q.criterion) for q in pts], dtype=float)
@@ -1462,9 +1663,14 @@ def build_trace(
         best_v = float(crit[best_i]) if best_i >= 0 else float("nan")
         band = tol_rule * max(1.0, abs(best_v)) if best_i >= 0 else float("nan")
         in_band = fin & (crit >= best_v - band) if best_i >= 0 else np.zeros(len(pts), dtype=bool)
-        cand = np.flatnonzero(in_band)
-        pick = int(max(cand, key=lambda i: (lams[i], -n_sel[i], -Ks[i]))) if cand.size else -1
+        pick = _band_pick(crit, lams, n_sel, Ks, best_v - band)
         chosen = int(tuning.meta.get("chosen_index", -1))
+        # both readings of the tolerance band: the tuner's (absolute below |best| = 1) and the documented relative one
+        tol_user = float(fit.meta.get("tolerance", 0.0) or 0.0)
+        floor_code = best_v - band
+        floor_rel = best_v - tol_user * abs(best_v)
+        ends_pos = {int(np.argmin(lams)), int(np.argmax(lams))} if len(lams) else set()
+        flagged = np.array([(i in ends_pos) and (i == chosen or i == best_i) for i in range(len(pts))], dtype=bool)
         checks.add(
             "fit", "Chosen lambda follows the band rule",
             "the largest lambda with criterion >= best - tol x max(1, |best|)",
@@ -1486,6 +1692,8 @@ def build_trace(
             "total_r2": [float(q.total_r2) for q in pts], "objective": objs, "zero_objective": zero_obj,
             "above_zero": above, "converged": [bool(q.converged) for q in pts], "n_iter": [int(q.n_iter) for q in pts],
             "sigma_ff_truncated": [bool(x) for x in trunc],
+            "null_q05": float(null_q[0]), "null_q50": float(null_q[1]), "null_q95": float(null_q[2]),
+            "band_floor_code": floor_code, "band_floor_relative": floor_rel, "edge": flagged,
         })
         norms = np.vstack([np.asarray(q.gamma_norms, dtype=float) for q in pts]) * np.asarray(sub.sigma_c)[None, :]
         gamma_path = pd.DataFrame(norms, index=pd.Index(lams, name="lam"),
@@ -1587,6 +1795,56 @@ def build_trace(
         note=(f"Ridge {oos_ridge:g} at lambda {lam:.4g}: plain IPCA (lambda 0) has unit-norm Gamma columns and no "
               "ridge in its factor step, so a ridge of 2 there would shrink the factors to about 0."),
     )
+    # the forecast in return units: fitted (panel value x the week's mean divisor) against the exact weekly return
+    ex_df = result.meta.get("realized_exact")
+    fitted_ret = result.fitted.to_numpy(dtype=float)
+    approx_ret = result.realized.to_numpy(dtype=float)
+    exact_ret = (ex_df.reindex(index=result.fitted.index, columns=result.fitted.columns).to_numpy(dtype=float)
+                 if ex_df is not None else np.full(fitted_ret.shape, np.nan))
+    ok_ret = np.isfinite(fitted_ret) & np.isfinite(exact_ret)
+    sse_w = np.where(ok_ret, (exact_ret - fitted_ret) ** 2, 0.0).sum(axis=1)
+    syy_w = np.where(ok_ret, exact_ret**2, 0.0).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r2_w = pd.Series(np.where(syy_w > 0.0, 1.0 - sse_w / syy_w, np.nan), index=result.fitted.index)
+    weeks["r2_exact"] = r2_w.reindex(weeks.index).to_numpy(dtype=float)
+    r2_exact = float(1.0 - sse_w.sum() / syy_w.sum()) if syy_w.sum() > 0.0 else float("nan")
+    r2_panel = float(result.r2_pooled)
+    checks.info(
+        "forecast", "Pooled OOS R2 in exact return units",
+        "1 - sum (r - fitted return)^2 / sum r^2, r the exact weekly return", r2_exact, reference=r2_panel,
+        note=(f"The tiles' pooled R2 ({r2_panel:.1%}) is computed in panel units, where each return is divided by "
+              f"its volatility divisor; against the exact weekly returns the same forecasts give {r2_exact:.1%}. "
+              "Volatile assets weigh more in return units, so the two differ even when every conversion is exact."),
+    )
+    oka = ok_ret & np.isfinite(approx_ret)
+    if history == "full" and scaled:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            rel_err = np.abs(approx_ret - exact_ret)[oka] / np.abs(exact_ret)[oka]
+        rel_err = rel_err[np.isfinite(rel_err)]
+        err_max = float(rel_err.max()) if rel_err.size else float("nan")
+        abs_err = float(np.max(np.abs(approx_ret - exact_ret)[oka])) if oka.any() else float("nan")
+        checks.info(
+            "forecast", "Approximate return units",
+            "realised in return units = panel value x the week's mean divisor, against the exact weekly return",
+            err_max, reference=0.0,
+            note=(f"Each week's panel value is converted back with the mean daily divisor of the week, while the "
+                  f"return itself divides each day by its own divisor: the largest relative error per asset-week is "
+                  f"{err_max:.1%} (median {np.median(rel_err) if rel_err.size else float('nan'):.2%}, 95th "
+                  f"percentile {np.percentile(rel_err, 95) if rel_err.size else float('nan'):.1%}; largest absolute "
+                  f"error {abs_err:.2g} against a mean absolute weekly return of "
+                  f"{np.mean(np.abs(exact_ret[oka])) if oka.any() else float('nan'):.2g}). The per-topic split in "
+                  "return units carries this error."),
+        )
+    else:
+        err_max = _max_diff(approx_ret[oka], exact_ret[oka])[0] if oka.any() else 0.0  # no cell: nothing to convert
+        checks.add(
+            "forecast", "Return units are exact", "realised in return units = the exact weekly return",
+            err_max, tolerance=1e-12,
+            note=("With " + ("the training history the divisor is the same on every day" if scaled else
+                             "no asset weighting nothing is divided")
+                  + ", so converting the panel values back to returns is exact (largest difference relative to the "
+                  "largest return). Off means the conversion is wrong."),
+        )
     lap("forecast")
 
     # ---- 8 implied sensitivities -----------------------------------------------------------------------------
@@ -1618,6 +1876,17 @@ def build_trace(
     svd = _instrument_svd(cov0[has])
     cap = _capture(chain.cov[has], chain.P, chain.Mmap, K, rcond, svd)
     kept, best = cap["kept_share"], cap["best_share"]
+    # the same K betas turned back into topic covariances by cross-sectional least squares (the bks_ls rung)
+    Gt_sim = Gamma[1:][order]
+    M_ls, _ = _ls_map(chain.cov[has], Gt_sim, rcond)
+    m_ls = chain.beta @ M_ls.T  # beta includes the constant's part, as Eq. 5; NaN rows without a training row
+    tot_c = float(np.sum(chain.cov[has] ** 2)) if has.any() else 0.0
+    cap["ls_share"] = (float(np.sum((chain.cov[has] @ Gt_sim @ M_ls.T) ** 2) / tot_c) if tot_c > 0.0
+                       else float("nan"))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pa_share = np.sum(chain.m_proj**2, axis=1) / np.sum(chain.cov**2, axis=1)
+    pa_share[~has | ~np.isfinite(pa_share)] = np.nan
+    cap["per_asset_share"] = pd.Series(pa_share, index=a_index, name="per_asset_share")
     checks.add(
         "implied", "Kept share <= best K share", "||C P||^2 / ||C||^2 <= best rank-K share (the reference)",
         kept, reference=best, tolerance=1e-12,
@@ -1653,8 +1922,10 @@ def build_trace(
         "instruments_kernel": chain.to_B(chain.cov, Szk_pinv),
         "instruments_train": chain.to_B(chain.cov),
         "best_rank": chain.to_B(cov0 @ Vk @ Vk.T),
+        "bks_ls": chain.to_B(m_ls),
         "bks_no_const": chain.to_B(chain.m_proj),
         "bks_implied": B_prod,
+        "zero": np.zeros((L, N)),
     }
     variants = {k: pd.DataFrame(np.array(v, copy=True), index=t_index, columns=a_index) for k, v in variants_np.items()}
     tau = float(implied.meta.get("select_tau", 0.05))
@@ -1664,8 +1935,9 @@ def build_trace(
          "rmse": [scores[k][1] for k in LADDER], "median_r2": [scores[k][2] for k in LADDER]},
         index=pd.Index(list(LADDER), name="variant"),
     )
-    ladder["d_spearman"] = ladder["spearman"].diff()
-    ladder["d_median_r2"] = ladder["median_r2"].diff()
+    in_chain = [k for k in LADDER if k not in LADDER_BENCHMARKS]  # benchmarks are no step: no change from above
+    ladder["d_spearman"] = ladder.loc[in_chain, "spearman"].diff().reindex(ladder.index)
+    ladder["d_median_r2"] = ladder.loc[in_chain, "median_r2"].diff().reindex(ladder.index)
     ladder["what"] = [LADDER_WHAT[k] for k in LADDER]
     lap("ladder")
 
@@ -1678,12 +1950,35 @@ def build_trace(
             ok = np.isfinite(r_al[:, i]) & np.isfinite(sc_al[:, i]) & (sc_al[:, i] > 0) & ok_z
             conversion[i] = (chain.divisor[i] * float((wts_row[ok] / wts_row[ok].sum()) @ (1.0 / sc_al[ok, i]))
                              if ok.any() and np.isfinite(chain.divisor[i]) else np.nan)
+    # the exact return-unit kernel covariance of each asset's Eq. 5 instrument week (raw returns, same kernel)
+    live = ~chain.zero
+    raw_np = sim.market.returns.reindex(index=days).to_numpy(dtype=float)
+    sc_np = al.returns.reindex(columns=assets).to_numpy(dtype=float)
+    okr = np.isfinite(raw_np) & np.isfinite(sc_np)
+    aux = al.scale.reindex(columns=assets).to_numpy(dtype=float) if scaled else np.ones_like(raw_np)
+    okr &= np.isfinite(aux)
+    Zk_ok = np.isfinite(Zk).all(axis=1)
+    exact_cov, kernel_div = np.full((N, L), np.nan), np.full(N, np.nan)
+    for wk in pd.DatetimeIndex(rows_obj.week.dropna().unique()):
+        idx = np.flatnonzero(np.asarray(rows_obj.week == wk) & live)
+        j = int(week_ends.get_loc(wk)) - 1
+        if idx.size == 0 or j < 0:
+            continue
+        wts_j = wts_row if j == j_row else _instrument_weights(pid, j, xi, stop, cut)
+        exact_cov[idx], kernel_div[idx] = _kernel_moments(raw_np[:, idx], okr[:, idx], Zk, wts_j, Zk_ok, aux[:, idx])
+    conv_cov = chain.cov * chain.divisor[:, None]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        conv_exact = np.sum(conv_cov * exact_cov, axis=1) / np.sum(exact_cov**2, axis=1)
+        conv_kernel = conv_exact * kernel_div / chain.divisor
+    conv_exact[~live | ~np.isfinite(conv_exact)] = np.nan
+    conv_kernel[~live | ~np.isfinite(conv_kernel)] = np.nan
+    kernel_div[~live] = np.nan
     units = pd.DataFrame(
         {"divisor": chain.divisor, "ret_scale": chain.ret_scale, "asset_vol": asset_vol,
-         "divisor_over_ret_scale": chain.divisor / chain.ret_scale, "conversion": conversion, "skipped": chain.zero},
+         "divisor_over_ret_scale": chain.divisor / chain.ret_scale, "conversion": conversion, "skipped": chain.zero,
+         "conversion_exact": conv_exact, "kernel_divisor": kernel_div, "conversion_kernel": conv_kernel},
         index=a_index,
     )
-    live = ~chain.zero
     if scaled and history == "training":
         d_u = float(np.nanmax(np.abs(chain.divisor[live] / chain.ret_scale[live] - 1.0))) if live.any() else 0.0
         checks.add(
@@ -1708,6 +2003,32 @@ def build_trace(
         checks.add("align", "Unit conversion is exact", "divisor = 1 without asset weighting",
                    float(np.max(np.abs(chain.divisor - 1.0))), tolerance=0.0,
                    note="Without asset weighting the panel is in return units and nothing is converted.")
+    ce_fin = np.isfinite(conv_exact)
+    ce_dev = float(np.max(np.abs(conv_exact[ce_fin] - 1.0))) if ce_fin.any() else 0.0
+    if history == "full" and scaled:
+        ck = conv_kernel[np.isfinite(conv_kernel)]
+        ce_med = float(np.median(conv_exact[ce_fin])) if ce_fin.any() else float("nan")
+        checks.info(
+            "align", "Implied covariances against exact return units",
+            "least-squares ratio of instrument x training divisor to the raw-return kernel covariance, 1 = exact",
+            ce_dev, reference=0.0,
+            note=(f"Each asset's instruments times its training divisor, against the same kernel covariance computed "
+                  f"from raw returns: the ratio is {ce_med:.3f} "
+                  f"in the median and {np.nanmin(conv_exact) if ce_fin.any() else float('nan'):.2f} to "
+                  f"{np.nanmax(conv_exact) if ce_fin.any() else float('nan'):.2f} across assets (largest gap from 1 "
+                  f"shown). A kernel-weighted mean divisor would give "
+                  f"{ck.min() if ck.size else float('nan'):.2f} to {ck.max() if ck.size else float('nan'):.2f}."),
+        )
+    else:
+        checks.add(
+            "align", "Implied covariances in exact return units",
+            "instrument x divisor = the raw-return kernel covariance (least-squares ratio 1 for every asset)",
+            ce_dev, tolerance=1e-10,
+            note=("With " + ("the training history the divisor is the same on every day" if scaled else
+                             "no asset weighting nothing is divided")
+                  + ", so the instruments times the divisor are the kernel covariances of the raw returns (largest "
+                  "gap of the per-asset ratio from 1). Off means the conversion is wrong."),
+        )
     lap("tables")
 
     # ---- chain frames -------------------------------------------------------------------------------------------
@@ -1720,6 +2041,7 @@ def build_trace(
         "m_proj": at(chain.m_proj),
         "m_const": pd.Series(chain.m_const, index=t_index, name="m_const"),
         "m": at(chain.m),
+        "m_ls": at(m_ls),
         "divisor": pd.Series(chain.divisor, index=a_index, name="divisor"),
         "conversion": pd.Series(chain.conv, index=a_index, name="conversion"),
         "m_ret": at(m_ret),
@@ -1740,6 +2062,20 @@ def build_trace(
         "skipped_assets": [a for a, zr in zip(assets, chain.zero) if zr],
         "stale_assets": stale,
     }
+    # Sigma_z over the training days against the kernel-weighted days and the population, per topic
+    d_tr, d_k, d_pop = np.diag(chain.Sigma_z), np.diag(Sz_kernel), np.diag(pop["var_z"])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        c_tr = chain.Sigma_z / np.sqrt(np.outer(d_tr, d_tr))
+        c_k = Sz_kernel / np.sqrt(np.outer(d_k, d_k))
+        gap = np.abs(c_tr - c_k)
+    np.fill_diagonal(gap, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        max_gap = (np.nanmax(np.where(np.isfinite(gap), gap, -np.inf), axis=1) if L > 1 else np.full(L, np.nan))
+        sigma_table = pd.DataFrame(
+            {"train_over_population": d_tr / d_pop, "kernel_over_population": d_k / d_pop,
+             "train_over_kernel": d_tr / d_k, "max_corr_diff": np.where(np.isfinite(max_gap), max_gap, np.nan)},
+            index=t_index,
+        )
 
     # ---- key numbers, findings -----------------------------------------------------------------------------------
     sp = ladder["spearman"]
@@ -1754,15 +2090,18 @@ def build_trace(
                   f"{np.nanmedian(wo):.2f}"),
         "fit": f"lambda {lam:.4g}, {int(res.n_selected)} of {L} topics, in-sample Sharpe {sr_fit:.2f}",
         "forecast": (f"pooled OOS R2 {float(result.r2_pooled):.1%} (shuffled "
-                     f"{float(result.meta.get('shuffled_r2_pooled', np.nan)):.1%})"),
-        "implied": f"kept {kept:.0%} of the instruments (best {best:.0%}); Spearman {sp['bks_implied']:.2f}",
+                     f"{float(result.meta.get('shuffled_r2_pooled', np.nan)):.1%}; exact return units "
+                     f"{r2_exact:.1%})"),
+        "implied": (f"kept {kept:.0%} of the instruments (least squares {cap['ls_share']:.0%}, best {best:.0%}); "
+                    f"Spearman {sp['bks_implied']:.2f}"),
     }
     findings = _findings(
         checks.items, cap=cap, K=K, history=history, share=share_all, eff_days=eff_days, n_pairs=chain.n_pairs,
         ladder=ladder, path=path, rule=rule, tolerance=float(fit.meta.get("tolerance", 0.0) or 0.0), dead=dead,
         dead_ratio=dead_ratio, k_eff=k_eff, ref_corr=ref_corr, ref_slope=ref_slope, instrument_week=instrument_week,
-        window_end=window_end, train_end=te, cal=sim.market.calendar, conversion=conversion[live],
-        scaled=scaled, zero_obj=zero_obj,
+        window_end=window_end, train_end=te, cal=sim.market.calendar, conversion_exact=conv_exact[live],
+        conversion_kernel=conv_kernel[live], scaled=scaled, zero_obj=zero_obj, null_q=null_q, T_train=int(sub.T),
+        floor_code=floor_code, floor_rel=floor_rel,
     )
 
     # ---- settings and shapes tables for the page -------------------------------------------------------------------
@@ -1844,6 +2183,21 @@ def build_trace(
         "oos_ridge": ridge,
         "selected_topics": list(res.selected_topics),
         "sizes": {"L": L, "N": N, "T_train": int(sub.T), "n_obs_train": int(sub.n_obs)},
+        "bks_train_days": int(len(bks_days)),
+        "days_before_train_start": n_before_ts,
+        "direct_train_days": int(len(direct_days)),
+        "direct_days_not_in_bks": int(len(missing_days)),
+        "direct_days_not_in_bks_dates": [_fmt_day(d) for d in missing_days],
+        "null_sharpe_quantiles": tuple(float(v) for v in null_q),
+        "band_floor_code": float(floor_code),
+        "band_floor_relative": float(floor_rel),
+        "inner_all_converged": None if inner_ok is None else bool(inner_ok),
+        "inner_iters": None if inner_iters is None else int(inner_iters),
+        "next_to_enter": next_name,
+        "next_to_enter_ratio": next_ratio,
+        "r2_pooled_panel": r2_panel,
+        "r2_pooled_exact": r2_exact,
+        "realized_max_rel_error": err_max,
     }
     trace = BKSTrace(
         history=history, lead_days=lead, shock_window=w, K=K, lam=lam, lambda_rule=rule, topics=list(topics),
@@ -1854,7 +2208,7 @@ def build_trace(
         instruments=at(chain.cov), chain=chain_out, variants=variants, ladder=ladder, capture=cap, path=path,
         gamma_path=gamma_path, path_trace=ptrace, gamma_std=gamma_std, kkt=kkt, factors_in_sample=factors_in_sample,
         units=units, shock_table=shock_table, stability=stability, weeks=weeks, checks=_ordered(checks.items),
-        findings=findings, meta=meta,
+        findings=findings, meta=meta, sigma_table=sigma_table,
     )
     n_off = sum(c.status == OFF and c.kind == IDENTITY for c in trace.checks)
     logger.info(
@@ -1969,6 +2323,7 @@ def _path_refit(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: ObservedShoc
     topics = sim.topics.ids
     col = {str(t): j for j, t in enumerate(panel.panel.topics)}
     order = np.array([col[t] for t in topics], dtype=np.int64)
+    sigma_c = np.asarray(sub.sigma_c, dtype=float)
     for i, f in enumerate(fits):
         fc = si.canonicalize(f)
         if i == chosen:
@@ -1980,14 +2335,16 @@ def _path_refit(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: ObservedShoc
         P = Mm[order] @ np.asarray(fc.Gamma, dtype=float)[1:][order].T
         kept = float(np.sum((cov_rows @ P) ** 2) / total) if total > 0 else float("nan")
         crit = tuning.path[i].criterion if i < len(tuning.path) else None
+        sv = np.linalg.svd(np.asarray(fc.Gamma, dtype=float)[1:] * sigma_c[1:, None], compute_uv=False)
         out.append({
             "lam": float(fc.lam), "n_selected": int(fc.n_selected),
             "criterion": float("nan") if crit is None else float(crit), "kept_share": kept,
             "spearman": float(ev.recovery["spearman"]), "median_r2": float(median_finite(ev.r2)),
             "gamma_rank": int(imp.meta["gamma_rank"]),
+            "gamma_sv_min": float(sv[K - 1]) if len(sv) >= K else 0.0,
         })
     return pd.DataFrame(out, columns=["lam", "n_selected", "criterion", "kept_share", "spearman", "median_r2",
-                                      "gamma_rank"]), repro
+                                      "gamma_rank", "gamma_sv_min"]), repro
 
 
 def lambda_path_trace(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: ObservedShocks, truth: SimTruth,
@@ -2006,8 +2363,10 @@ def lambda_path_trace(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: Observ
         One row per grid point: ``lam``, ``n_selected``, ``criterion`` (the
         tuner's), ``kept_share`` (share of the last training week's
         instruments' squared norm in the fit's directions), ``spearman``
-        (with ``B_true``), ``median_r2`` (forecast window) and
-        ``gamma_rank``.
+        (with ``B_true``), ``median_r2`` (forecast window), ``gamma_rank``
+        (directions Eq. 5 keeps) and ``gamma_sv_min`` (the smallest singular
+        value of the standardised ``Gamma_tilde``, ``sigma^c_l Gamma_l`` over
+        the topic rows: about 0 when a direction is dead).
 
     Raises
     ------
@@ -2034,40 +2393,86 @@ def _findings(checks: list[TraceCheck], *, cap: dict[str, Any], K: int, history:
               eff_days: float, n_pairs: int, ladder: pd.DataFrame, path: pd.DataFrame | None, rule: str,
               tolerance: float, dead: bool, dead_ratio: float, k_eff: int, ref_corr: float, ref_slope: float,
               instrument_week: pd.Timestamp, window_end: pd.Timestamp, train_end: pd.Timestamp,
-              cal: pd.DatetimeIndex, conversion: np.ndarray, scaled: bool, zero_obj: float) -> list[dict[str, str]]:
+              cal: pd.DatetimeIndex, conversion_exact: np.ndarray, conversion_kernel: np.ndarray, scaled: bool,
+              zero_obj: float, null_q: np.ndarray, T_train: int, floor_code: float,
+              floor_rel: float) -> list[dict[str, str]]:
     """The "where it departs" list (DESIGN.md G.16): plain English with this run's numbers."""
     out: list[dict[str, str]] = []
 
     def add(step: str, severity: str, title: str, text: str) -> None:
         out.append({"step": step, "severity": severity, "title": title, "text": text})
 
-    kept, best, rnd = cap["kept_share"], cap["best_share"], cap["random_share"]
+    kept, best, rnd, ls = cap["kept_share"], cap["best_share"], cap["random_share"], cap.get("ls_share", np.nan)
+    sp = ladder["spearman"]
     if np.isfinite(kept) and np.isfinite(best) and kept < 0.5 * best:
         add("implied", "departure", "The fit's directions keep little of the instruments",
             f"The fit's {K} directions keep {kept:.0%} of the instruments' squared norm; the best {K} keep {best:.0%} "
-            f"(random {rnd:.0%}). The Eq. 5 step discards the rest.")
-    sp = ladder["spearman"]
+            f"(random {rnd:.0%}). The Eq. 5 step discards the rest."
+            + (f" The same {K} betas inverted by a cross-sectional least-squares fit instead keep {ls:.0%} and score "
+               f"Spearman {sp['bks_ls']:.2f} against {sp['bks_implied']:.2f}: the topic information is still in the "
+               "betas, and the Eq. 5 inversion loses it." if np.isfinite(ls) and "bks_ls" in sp.index else ""))
     if history == "full" and np.isfinite(share) and share > 0.5:
         add("implied", "departure", "Instruments and the shocks' covariance cover different days",
             f"The instruments weigh {share:.0%} of their kernel before the training start (effective {eff_days:,.0f} "
             f"days), but the shocks' covariance Sigma_z uses the {n_pairs} training days. With Sigma_z over the same "
             f"history the instruments alone score Spearman {sp['instruments_kernel']:.2f} instead of "
             f"{sp['instruments_train']:.2f}.")
+    rm = ladder["rmse"]
+    rm_imp, rm_zero = float(rm.get("bks_implied", np.nan)), float(rm.get("zero", np.nan))
+    if np.isfinite(rm_zero) and np.isfinite(rm_imp) and rm_imp > rm_zero:
+        add("implied", "departure", "The implied sensitivities are further from the truth than zero",
+            f"The BKS-implied sensitivities miss the true ones by an RMSE of {rm_imp:.4f}, more than setting every "
+            f"sensitivity to zero ({rm_zero:.4f}): their errors are larger than the sensitivities themselves.")
     if path is not None and len(path) > 1:
         crit = path["criterion"].to_numpy(dtype=float)
-        rng_c = float(np.nanmax(crit) - np.nanmin(crit)) if np.isfinite(crit).any() else float("nan")
+        fin = np.isfinite(crit)
+        rng_c = float(np.nanmax(crit) - np.nanmin(crit)) if fin.any() else float("nan")
         se_med = float(np.nanmedian(path["se"]))
-        if np.isfinite(rng_c) and np.isfinite(se_med) and rng_c < 2.0 * se_med:
+        q05, q50, q95 = (float(v) for v in null_q)
+        inside_null = bool(fin.any() and np.isfinite(q05) and np.isfinite(q95)
+                           and np.nanmin(crit) >= q05 and np.nanmax(crit) <= q95)
+        if inside_null:
+            add("fit", "departure", "The lambda choice follows noise",
+                f"The in-sample Sharpe ratio along the whole path ({np.nanmin(crit):.2f} to {np.nanmax(crit):.2f}) "
+                f"lies inside what {K} factors reach with no priced signal over {T_train} weeks (5-95%: "
+                f"{q05:.2f}-{q95:.2f}, median {q50:.2f}): lambda and the selected topics follow noise.")
+        elif np.isfinite(rng_c) and np.isfinite(se_med) and rng_c < 2.0 * se_med:
             add("fit", "departure", "The lambda choice is within noise",
                 f"The lambda criterion varies by {rng_c:.2f} over the grid against a standard error of about "
                 f"{se_med:.2f}: the lambda choice and the selected topics are within noise.")
-        best_v = float(np.nanmax(crit)) if np.isfinite(crit).any() else float("nan")
+        best_v = float(np.nanmax(crit)) if fin.any() else float("nan")
         if rule == "tolerance" and np.isfinite(best_v) and abs(best_v) < 1.0:
             band = max(1e-9, tolerance) * max(1.0, abs(best_v))
             add("fit", "note", "The tolerance band is absolute here",
                 f"The tolerance band is absolute below a Sharpe ratio of 1: the best in-sample Sharpe ratio is "
                 f"{best_v:.2f}, so every point within {band:.3g} of it counts as tied ({band / abs(best_v):.0%} of it, "
                 f"not {tolerance:.0%}), and the sparsest of them wins.")
+        lams = path["lam"].to_numpy(dtype=float)
+        n_sel = path["n_selected"].to_numpy()
+        lo_i, hi_i = int(np.argmin(lams)), int(np.argmax(lams))
+        at_edge: dict[int, list[str]] = {}
+        for col, name in (("best", "best in-sample Sharpe ratio"), ("chosen", "chosen lambda")):
+            hits = np.flatnonzero(path[col].to_numpy(dtype=bool))
+            if hits.size and int(hits[0]) in (lo_i, hi_i):
+                at_edge.setdefault(int(hits[0]), []).append(name)
+        if at_edge:
+            parts = [f"the {' and the '.join(names)} {'are' if len(names) > 1 else 'is'} at the "
+                     f"{'smallest' if i == lo_i else 'largest'} lambda of the grid ({lams[i]:.4g}, "
+                     f"{int(n_sel[i])} topics)" for i, names in at_edge.items()]
+            text = "; ".join(parts)
+            add("fit", "departure", "The choice sits at the edge of the lambda grid",
+                f"{text[0].upper()}{text[1:]}. The grid ends there, so it does not show whether the criterion keeps "
+                "rising beyond it; a wider grid could choose another lambda and other topics.")
+        if rule == "tolerance" and np.isfinite(floor_code) and np.isfinite(floor_rel):
+            Ks = np.full(len(lams), int(K))
+            i_code = _band_pick(crit, lams, n_sel, Ks, floor_code)
+            i_rel = _band_pick(crit, lams, n_sel, Ks, floor_rel)
+            if i_code >= 0 and i_rel >= 0 and i_code != i_rel:
+                add("fit", "note", "The two readings of the tolerance band choose differently",
+                    f"The tuner counts every point within {tolerance:g} x max(1, |best|) of the best as tied (floor "
+                    f"{floor_code:.3f}) while the documented rule is relative, {tolerance:g} x |best| (floor "
+                    f"{floor_rel:.3f}): they choose lambda {lams[i_code]:.4g} ({int(n_sel[i_code])} topics) and "
+                    f"{lams[i_rel]:.4g} ({int(n_sel[i_rel])} topics) respectively.")
         above = path["above_zero"].to_numpy(dtype=bool)
         if above.any():
             chosen_above = bool(np.any(above & path["chosen"].to_numpy(dtype=bool)))
@@ -2089,11 +2494,15 @@ def _findings(checks: list[TraceCheck], *, cap: dict[str, Any], K: int, history:
                "or the units differ." if history == "full" else
                "Under the training history they are covariances over a few months of days, so sampling noise "
                "is expected; compare the sensitivities with the window truth."))
-    if history == "full" and scaled and conversion.size and np.nanmax(np.abs(conversion - 1.0)) > 0.2:
+    ce = conversion_exact[np.isfinite(conversion_exact)]
+    if history == "full" and scaled and ce.size and np.max(np.abs(ce - 1.0)) > _MAX_CONVERSION_GAP:
+        ck = conversion_kernel[np.isfinite(conversion_kernel)]
         add("align", "note", "The unit conversion is approximate",
-            f"The unit conversion of the implied sensitivities is approximate: the kernel-weighted 1/volatility times "
-            f"the training divisor ranges {np.nanmin(conversion):.2f} to {np.nanmax(conversion):.2f} across assets "
-            "(1 is exact).")
+            f"The unit conversion of the implied sensitivities is approximate: the instruments times the training "
+            f"divisor are {ce.min():.2f} to {ce.max():.2f} times (median {np.median(ce):.2f}) the exact return-unit "
+            "kernel covariance across assets (1 is exact), because the instruments average returns scaled by a "
+            "trailing volatility over the whole kernel."
+            + (f" A kernel-weighted mean divisor would give {ck.min():.2f} to {ck.max():.2f}." if ck.size else ""))
     n_after = int(np.sum((cal > window_end) & (cal <= train_end))) if not pd.isna(window_end) else 0
     add("implied", "note", "Which instruments the implied sensitivities use",
         f"The implied sensitivities use the instruments of the week ending {_fmt_day(instrument_week)} (kernel window "

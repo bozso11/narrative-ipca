@@ -20,8 +20,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from narrative_ipca.covariances import brute_force_covariance, kernel_weights, window_bounds
+from narrative_ipca.data import period_end_index
 from narrative_ipca.exposure_lab import bks, reference
 from narrative_ipca.exposure_lab import trace as T
+from narrative_ipca.wrapup import _lsq_map
 from narrative_ipca.exposure_lab.config import (
     BKSLabConfig,
     ExposureConfig,
@@ -31,6 +34,7 @@ from narrative_ipca.exposure_lab.config import (
     WindowConfig,
 )
 from narrative_ipca.exposure_lab.dgp import observed_shocks, simulate_lab, truth_for_window
+from narrative_ipca.exposure_lab.direct import shock_matrix, training_pairs
 from narrative_ipca.exposure_lab.evaluate import evaluate_window, median_finite
 from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_STAGES, SESSION_STAGES, LabSession
 
@@ -138,9 +142,20 @@ def test_ladder_rows_order_and_scores(session, cfg, tr):
     ev_imp = evaluate_window(session.simulation(cfg), session.shocks(cfg), implied, cfg.window, session.truth(cfg))
     assert tr.ladder.loc["bks_implied", "spearman"] == pytest.approx(ev_imp.recovery["spearman"], abs=1e-12)
     assert tr.ladder.loc["bks_implied", "median_r2"] == pytest.approx(median_finite(ev_imp.r2), abs=1e-12)
-    diffs = tr.ladder["spearman"].diff()
-    np.testing.assert_allclose(tr.ladder["d_spearman"].to_numpy()[1:], diffs.to_numpy()[1:])
-    assert np.isnan(tr.ladder["d_spearman"].iloc[0])
+    chain_keys = [k for k in T.LADDER if k not in T.LADDER_BENCHMARKS]
+    assert T.LADDER_BENCHMARKS == ("zero",) and list(T.LADDER)[-1] == "zero"
+    assert list(T.LADDER).index("bks_ls") == list(T.LADDER).index("best_rank") + 1
+    assert list(T.LADDER).index("bks_ls") + 1 == list(T.LADDER).index("bks_no_const")
+    for col in ("spearman", "median_r2"):
+        diffs = tr.ladder.loc[chain_keys, col].diff()
+        np.testing.assert_allclose(tr.ladder.loc[chain_keys, f"d_{col}"].to_numpy()[1:], diffs.to_numpy()[1:])
+        assert np.isnan(tr.ladder[f"d_{col}"].iloc[0]) and np.isnan(tr.ladder.loc["zero", f"d_{col}"])
+    # the zero benchmark: no ranking, the RMSE of saying nothing, an OOS R2 of exactly 0
+    Bt = tr.variants["oracle"].to_numpy()
+    assert (tr.variants["zero"].to_numpy() == 0.0).all()
+    assert np.isnan(tr.ladder.loc["zero", "spearman"])
+    assert tr.ladder.loc["zero", "rmse"] == pytest.approx(float(np.sqrt(np.mean(Bt**2))), rel=1e-12)
+    assert tr.ladder.loc["zero", "median_r2"] == 0.0
     # the full-history constant is penalised away here, so "no constant" equals production
     if tr.chain["m_const"].abs().max() == 0.0:
         assert tr.variants["bks_no_const"].equals(tr.variants["bks_implied"])
@@ -157,6 +172,13 @@ def test_capture_shares(tr):
     assert cap["captured"].sum() == pytest.approx(tr.chain["gamma_rank"], abs=1e-9)  # trace of the projector
     assert len(cap["principal_cosines"]) == tr.K
     assert np.all((cap["principal_cosines"] >= 0.0) & (cap["principal_cosines"] <= 1.0))
+    # the least-squares reconstruction from the same K betas keeps at least what Eq. 5 keeps, at most the best K
+    assert cap["kept_share"] - 1e-12 <= cap["ls_share"] <= cap["best_share"] + 1e-12
+    # per asset: ||P c_i||^2 / ||c_i||^2, whose norm-weighted mean is the kept share
+    pa = cap["per_asset_share"]
+    assert list(pa.index) == tr.assets and pa.between(0.0, 1.0 + 1e-12).all()
+    n2 = (tr.instruments**2).sum(axis=1)
+    assert float((pa * n2).sum() / n2.sum()) == pytest.approx(cap["kept_share"], rel=1e-12)
     # the projection identity: m = P c + M Gamma_0'
     has = tr.instruments.notna().all(axis=1)
     m_alt = tr.instruments.loc[has] @ tr.chain["projector"].T.to_numpy() + tr.chain["m_const"].to_numpy()
@@ -182,9 +204,15 @@ def test_tables_and_frames(tr):
     assert any(f["title"] == "Which instruments the implied sensitivities use" for f in tr.findings)
     # shapes of the step tables
     L, N = len(tr.topics), len(tr.assets)
-    assert tr.units.shape == (N, 6) and tr.shock_table.shape == (L, 6) and tr.stability.shape == (L, 2)
+    assert list(tr.units.columns) == ["divisor", "ret_scale", "asset_vol", "divisor_over_ret_scale", "conversion",
+                                      "skipped", "conversion_exact", "kernel_divisor", "conversion_kernel"]
+    assert tr.units.shape == (N, 9) and tr.shock_table.shape == (L, 6) and tr.stability.shape == (L, 2)
     assert list(tr.weeks.index) == list(tr.forecast_periods)
-    assert list(tr.weeks.columns) == ["first_day", "n_assets", "r2", "r2_shuffled"] + [f"f{k + 1}" for k in range(tr.K)]
+    assert list(tr.weeks.columns) == (["first_day", "n_assets", "r2", "r2_shuffled"]
+                                      + [f"f{k + 1}" for k in range(tr.K)] + ["r2_exact"])
+    assert list(tr.sigma_table.columns) == ["train_over_population", "kernel_over_population", "train_over_kernel",
+                                            "max_corr_diff"]
+    assert list(tr.sigma_table.index) == tr.topics
     assert tr.gamma_std.shape == (L + 1, tr.K) and tr.kkt.shape == (L + 1, 3)
     assert list(tr.gamma_std.index) == ["const"] + tr.panel_topics
     assert tr.factors_in_sample.shape == (len(tr.train_periods), tr.K)
@@ -192,13 +220,14 @@ def test_tables_and_frames(tr):
     assert tr.instruments.shape == (N, L) and tr.population["instrument_ref"].shape == (N, L)
     assert tr.path is not None and list(tr.path.columns) == [
         "lam", "criterion", "se", "in_band", "best", "chosen", "n_selected", "total_r2", "objective", "zero_objective",
-        "above_zero", "converged", "n_iter", "sigma_ff_truncated"]
+        "above_zero", "converged", "n_iter", "sigma_ff_truncated", "null_q05", "null_q50", "null_q95",
+        "band_floor_code", "band_floor_relative", "edge"]
     assert tr.path["chosen"].sum() == 1 and tr.path["best"].sum() == 1
     assert tr.path.loc[tr.path["chosen"], "lam"].item() == pytest.approx(tr.lam)
     assert tr.path.loc[tr.path["chosen"], "in_band"].item()
     assert tr.gamma_path is not None and tr.gamma_path.shape == (len(tr.path), L + 1)
     assert tr.path_trace is not None and list(tr.path_trace.columns) == [
-        "lam", "n_selected", "criterion", "kept_share", "spearman", "median_r2", "gamma_rank"]
+        "lam", "n_selected", "criterion", "kept_share", "spearman", "median_r2", "gamma_rank", "gamma_sv_min"]
     chosen = tr.path_trace.loc[np.isclose(tr.path_trace["lam"], tr.lam)]
     assert chosen["spearman"].item() == pytest.approx(tr.ladder.loc["bks_implied", "spearman"], abs=1e-12)
     assert chosen["kept_share"].item() == pytest.approx(tr.capture["kept_share"], abs=1e-12)
@@ -218,6 +247,255 @@ def test_page_text_says_topic_sensitivity(tr):
     texts += tr.meta["shapes"].astype(str).to_numpy().ravel().tolist()
     bad = [t for t in texts if re.search(r"exposure", str(t), flags=re.IGNORECASE)]
     assert bad == []
+
+
+# ---------------------------------------------------------------------------
+# the "should be" references of the addendum (least squares, no-signal band, exact units, days, Sigma_z)
+# ---------------------------------------------------------------------------
+def test_least_squares_rung_recomputes_independently(session, cfg, tr):
+    """bks_ls: m_i = Sigma_c Gt (Gt' Sigma_c Gt)^+ beta_i' with Sigma_c = C'C / n over the Eq. 5 rows."""
+    fit = session.bks_fit(cfg)
+    has = tr.instruments.notna().all(axis=1).to_numpy()
+    C = tr.instruments.to_numpy()[has]  # simulation topic order
+    col = {t: j for j, t in enumerate(tr.panel_topics)}
+    order = [col[t] for t in tr.topics]
+    Gamma = np.asarray(fit.fit.Gamma)
+    Gt = Gamma[1:][order]
+    Sigma_c = C.T @ C / C.shape[0]
+    M = Sigma_c @ Gt @ np.linalg.pinv(Gt.T @ Sigma_c @ Gt)
+    beta = tr.chain["beta"].to_numpy()[has]  # includes the constant's part (c_i Gamma)
+    np.testing.assert_allclose(beta, np.column_stack([np.ones(len(C)), C]) @ Gamma[[0] + [c + 1 for c in order]],
+                               rtol=1e-12, atol=1e-15)
+    m_ls = beta @ M.T
+    np.testing.assert_allclose(tr.chain["m_ls"].to_numpy()[has], m_ls, rtol=1e-9, atol=1e-14)
+    # then the production divisor, Sigma_z and standardisation (the chain's own conversion)
+    conv = tr.chain["conversion"].to_numpy()[has]
+    Sz_pinv = np.linalg.pinv(tr.chain["sigma_z"]["train"].to_numpy(), hermitian=True)
+    zs, rs = tr.chain["z_scale"].to_numpy(), tr.chain["ret_scale"].to_numpy()[has]
+    B = ((m_ls * conv[:, None]) @ Sz_pinv * (zs[None, :] / rs[:, None])).T
+    np.testing.assert_allclose(tr.variants["bks_ls"].to_numpy()[:, has], B, rtol=1e-8, atol=1e-10)
+    rec = C @ Gt @ M.T  # the instruments' reconstruction (no constant)
+    assert tr.capture["ls_share"] == pytest.approx(float(np.sum(rec**2) / np.sum(C**2)), rel=1e-10)
+
+
+def test_least_squares_map_equals_eq5_on_instruments_in_the_fit_directions():
+    """When the instruments lie in the K directions of Gamma_tilde, both inversions return them exactly."""
+    rng = np.random.default_rng(3)
+    Gt = rng.normal(size=(9, 3))
+    C = rng.normal(size=(40, 3)) @ Gt.T  # every row in col(Gt)
+    M_ls, rank = T._ls_map(C, Gt, 1e-10)
+    M_eq5, _ = _lsq_map(Gt, 1e-10)
+    assert rank == 3
+    np.testing.assert_allclose((C @ Gt) @ M_ls.T, C, atol=1e-10)
+    np.testing.assert_allclose((C @ Gt) @ M_eq5.T, C, atol=1e-10)
+    # generic rows: the least-squares reconstruction keeps more than the projection (Frobenius-optimal in col(C Gt))
+    C2 = rng.normal(size=(40, 9))
+    M2, _ = T._ls_map(C2, Gt, 1e-10)
+    P = _lsq_map(Gt, 1e-10)[0] @ Gt.T
+    assert np.sum((C2 @ Gt @ M2.T) ** 2) >= np.sum((C2 @ P) ** 2) - 1e-12
+
+
+def test_null_sharpe_quantiles_closed_form_and_simulation():
+    """Hotelling: the no-signal in-sample annualised MVE Sharpe of K factors over T weeks (defaults 0.87/2.30/4.44)."""
+    np.testing.assert_allclose(T.null_sharpe_quantiles(3, 26), [0.8686, 2.3020, 4.4439], atol=5e-4)
+    assert np.isnan(T.null_sharpe_quantiles(3, 3)).all() and np.isnan(T.null_sharpe_quantiles(0, 26)).all()
+    rng = np.random.default_rng(11)
+    K, Tw, n = 3, 26, 40_000
+    R = rng.normal(size=(n, Tw, K))
+    mu = R.mean(axis=1)
+    D = R - mu[:, None, :]
+    S = np.einsum("ntk,ntl->nkl", D, D) / (Tw - 1)
+    sr = np.sqrt(52.0 * np.einsum("nk,nk->n", mu, np.linalg.solve(S, mu[:, :, None])[:, :, 0]))
+    np.testing.assert_allclose(np.quantile(sr, [0.05, 0.5, 0.95]), T.null_sharpe_quantiles(K, Tw), rtol=0.03)
+
+
+def test_path_band_floors_edge_and_null_columns(cfg, tr):
+    path = tr.path
+    crit = path["criterion"].to_numpy()
+    best = float(np.nanmax(crit))
+    tol = cfg.bks.tolerance
+    assert (path["band_floor_code"] == best - max(1e-9, tol) * max(1.0, abs(best))).all()
+    assert (path["band_floor_relative"] == best - tol * abs(best)).all()
+    np.testing.assert_array_equal(path["in_band"].to_numpy(), crit >= path["band_floor_code"].to_numpy())
+    np.testing.assert_allclose(path[["null_q05", "null_q50", "null_q95"]].iloc[0].to_numpy(),
+                               T.null_sharpe_quantiles(tr.K, len(tr.train_periods)))
+    assert path[["null_q05", "null_q50", "null_q95"]].nunique().eq(1).all()
+    ends = {int(path["lam"].idxmin()), int(path["lam"].idxmax())}
+    expected = [(i in ends) and bool(path["chosen"].iloc[i] or path["best"].iloc[i]) for i in range(len(path))]
+    assert path["edge"].tolist() == expected
+    assert tr.meta["null_sharpe_quantiles"] == tuple(path[["null_q05", "null_q50", "null_q95"]].iloc[0])
+    assert tr.meta["band_floor_code"] == path["band_floor_code"].iloc[0]
+    # gamma_sv_min: the smallest singular value of the standardised Gamma_tilde; zero exactly when a direction died
+    pt = tr.path_trace
+    assert (pt["gamma_sv_min"] >= 0.0).all()
+    assert ((pt["gamma_sv_min"] > 1e-8) | (pt["gamma_rank"] < tr.K)).all()
+
+
+def _findings_with_path(tr: T.BKSTrace, path: pd.DataFrame, *, rule: str = "tolerance", tolerance: float = 0.02,
+                        null_q=(0.5, 1.0, 2.0), floor_code: float, floor_rel: float) -> list[dict[str, str]]:
+    return T._findings(
+        [], cap=tr.capture, K=tr.K, history=tr.history, share=0.0, eff_days=1.0, n_pairs=10, ladder=tr.ladder,
+        path=path, rule=rule, tolerance=tolerance, dead=False, dead_ratio=1.0, k_eff=tr.K, ref_corr=1.0,
+        ref_slope=1.0, instrument_week=tr.instrument_week, window_end=tr.instrument_window_end,
+        train_end=tr.meta["train_end"], cal=pd.DatetimeIndex([]), conversion_exact=np.ones(3),
+        conversion_kernel=np.ones(3), scaled=True, zero_obj=1e9, null_q=np.asarray(null_q), T_train=20,
+        floor_code=floor_code, floor_rel=floor_rel)
+
+
+def test_findings_null_band_grid_edge_and_band_rules(tr):
+    lam = np.logspace(-2, 0, 5)
+    crit = np.array([0.80, 0.79, 0.785, 0.70, 0.60])  # best at the smallest lambda, below 1
+    best, tol = 0.80, 0.02
+    floor_code, floor_rel = best - tol * 1.0, best - tol * best  # 0.78 and 0.784: different picks
+    path = pd.DataFrame({"lam": lam, "criterion": crit, "se": 1.0, "in_band": crit >= floor_code,
+                         "best": [True, False, False, False, False], "chosen": [False, False, True, False, False],
+                         "n_selected": [9, 8, 7, 5, 2], "above_zero": False})
+    titles = {f["title"]: f for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_rel)}
+    # (a) every point inside the no-signal 5-95% band replaces "within noise"
+    assert "The lambda choice follows noise" in titles and "The lambda choice is within noise" not in titles
+    assert "0.50-2.00" in titles["The lambda choice follows noise"]["text"]
+    assert titles["The lambda choice follows noise"]["severity"] == "departure"
+    # (b) the best point is the grid's first point
+    edge = titles["The choice sits at the edge of the lambda grid"]
+    assert edge["severity"] == "departure" and "best in-sample Sharpe ratio is at the smallest lambda" in edge["text"]
+    assert "chosen lambda" not in edge["text"]
+    # (c) not here: the tuner's band (floor 0.78) and the relative band (0.784) both pick the third point
+    assert "The two readings of the tolerance band choose differently" not in titles
+    # outside the no-signal band: the standard-error rule applies again; argmax: no band note
+    far = _findings_with_path(tr, path, null_q=(0.9, 1.0, 2.0), floor_code=floor_code, floor_rel=floor_rel,
+                              rule="argmax", tolerance=0.0)
+    far_titles = {f["title"] for f in far}
+    assert "The lambda choice is within noise" in far_titles and "The lambda choice follows noise" not in far_titles
+    assert "The two readings of the tolerance band choose differently" not in far_titles
+
+
+def test_findings_band_rules_differ_only_when_picks_differ(tr):
+    lam = np.logspace(-2, 0, 4)
+    crit = np.array([0.50, 0.49, 0.482, 0.40])
+    best, tol = 0.50, 0.02
+    floor_code, floor_rel = best - tol, best - tol * best  # 0.48 (picks index 2) and 0.49 (picks index 1)
+    path = pd.DataFrame({"lam": lam, "criterion": crit, "se": 1.0, "in_band": crit >= floor_code,
+                         "best": [True, False, False, False], "chosen": [False, False, True, False],
+                         "n_selected": [9, 8, 7, 5], "above_zero": False})
+    found = {f["title"]: f for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_rel)}
+    band = found["The two readings of the tolerance band choose differently"]
+    assert band["severity"] == "note" and "0.480" in band["text"] and "0.490" in band["text"]
+    same = {f["title"] for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_code)}
+    assert "The two readings of the tolerance band choose differently" not in same
+
+
+def _exact_kernel_cov(tr: T.BKSTrace, panel, sim, asset: str) -> tuple[np.ndarray, float]:
+    """Independent recompute: the raw-return kernel covariance of the Eq. 5 instrument week and the kernel divisor."""
+    days = pd.DatetimeIndex(panel.aligned.calendar)
+    pid, ends = period_end_index(days, "W")
+    _, stop, cut = window_bounds(pid, int(tr.meta["skip_days"]))
+    j = int(ends.get_loc(tr.chain["row_period"][asset])) - 1
+    wts = kernel_weights(pid, j, float(tr.meta["xi"]))
+    wts[cut[j]:stop[j]] = 0.0
+    raw = sim.market.returns[asset].reindex(days).to_numpy(dtype=float)
+    Z = tr.z[tr.topics].to_numpy(dtype=float)
+    exact = brute_force_covariance(raw, Z, wts)
+    ok = np.isfinite(raw) & np.isfinite(Z).all(axis=1) & (wts > 0)
+    scale = (panel.aligned.scale[asset].to_numpy(dtype=float) if panel.aligned.scale is not None
+             else np.ones(len(days)))
+    return exact, float(wts[ok] @ scale[ok] / wts[ok].sum())
+
+
+@pytest.mark.parametrize("kw", [dict(), dict(history="training"), dict(asset_weighting="none")])
+def test_units_exact_conversion(session, kw):
+    c = _generic_cfg(**kw)
+    trace = _traced(session, c)
+    panel, sim = session.bks_panel(c), session.simulation(c)
+    u = trace.units
+    for asset in trace.assets[:4]:
+        exact, kdiv = _exact_kernel_cov(trace, panel, sim, asset)
+        conv = trace.instruments.loc[asset].to_numpy() * u.loc[asset, "divisor"]
+        ratio = float(conv @ exact / (exact @ exact))
+        assert u.loc[asset, "conversion_exact"] == pytest.approx(ratio, rel=1e-10)
+        assert u.loc[asset, "kernel_divisor"] == pytest.approx(kdiv, rel=1e-12)
+        assert u.loc[asset, "conversion_kernel"] == pytest.approx(ratio * kdiv / u.loc[asset, "divisor"], rel=1e-10)
+    by_name = {ch.name: ch for ch in trace.checks}
+    if c.bks.history == "training" or c.bks.asset_weighting == "none":
+        # the divisor is constant (or 1): the conversion is exact for every asset
+        np.testing.assert_allclose(u["conversion_exact"], 1.0, rtol=0, atol=1e-10)
+        ch = by_name["Implied covariances in exact return units"]
+        assert ch.status == T.OK and ch.kind == T.IDENTITY and ch.step == "align"
+        assert by_name["Return units are exact"].status == T.OK
+    else:
+        ch = by_name["Implied covariances against exact return units"]
+        assert ch.status == T.INFO and ch.value == pytest.approx(float(np.max(np.abs(u["conversion_exact"] - 1))))
+        assert by_name["Approximate return units"].status == T.INFO
+
+
+def test_forecast_in_exact_return_units(session, cfg, tr):
+    result = session.bks(cfg)
+    fitted = result.fitted
+    exact = result.meta["realized_exact"].reindex(index=fitted.index, columns=fitted.columns)
+    ok = fitted.notna() & exact.notna()
+    sse = ((exact - fitted) ** 2).where(ok).sum(axis=1)
+    syy = (exact**2).where(ok).sum(axis=1)
+    np.testing.assert_allclose(tr.weeks["r2_exact"].to_numpy(), (1 - sse / syy).reindex(tr.weeks.index), rtol=1e-12)
+    pooled = 1 - float(sse.sum()) / float(syy.sum())
+    assert tr.meta["r2_pooled_exact"] == pytest.approx(pooled, rel=1e-12)
+    assert tr.meta["r2_pooled_panel"] == result.r2_pooled
+    by_name = {ch.name: ch for ch in tr.checks}
+    ch = by_name["Pooled OOS R2 in exact return units"]
+    assert ch.status == T.INFO and ch.value == pytest.approx(pooled) and ch.reference == result.r2_pooled
+    rel = ((result.realized - exact).abs() / exact.abs()).where(ok & (exact != 0))
+    assert by_name["Approximate return units"].value == pytest.approx(float(np.nanmax(rel.to_numpy())), rel=1e-12)
+    assert tr.meta["realized_max_rel_error"] == by_name["Approximate return units"].value
+
+
+@pytest.mark.parametrize("history", ["full", "training"])
+def test_training_days_against_direct_days(session, history):
+    c = _generic_cfg(history=history)
+    trace = _traced(session, c)
+    panel, sim = session.bks_panel(c), session.simulation(c)
+    days = pd.DatetimeIndex(panel.aligned.calendar)
+    pid, ends = period_end_index(days, "W")
+    bks_days = days[pd.Index(ends[pid]).isin(trace.train_periods)]
+    first_week = days[ends[pid] == trace.train_periods.min()]
+    ts = pd.Timestamp(c.window.train_start)
+    shocks = session.shocks(c)
+    _, q_pos = training_pairs(sim, shocks, shock_matrix(shocks, sim.market.calendar, sim.topics.ids))
+    direct_days = pd.DatetimeIndex(sim.market.calendar[q_pos])
+    m = trace.meta
+    assert m["bks_train_days"] == len(bks_days) and m["days_before_train_start"] == int((first_week < ts).sum())
+    assert m["direct_train_days"] == len(direct_days) == trace.meta["n_pairs"]
+    missing = [d.date().isoformat() for d in direct_days.difference(bks_days)]
+    assert m["direct_days_not_in_bks_dates"] == missing and m["direct_days_not_in_bks"] == len(missing)
+    ch = next(x for x in trace.checks if x.name == "Training weeks cover the training days")
+    assert ch.step == "panel" and ch.status == T.INFO and ch.value == len(bks_days)
+    if history == "training":
+        assert m["days_before_train_start"] == 0
+
+
+def test_sigma_table_and_fit_info_checks(session, cfg, tr):
+    sz = tr.chain["sigma_z"]
+    d_tr, d_k, d_p = (np.diag(sz[k].to_numpy()) for k in ("train", "kernel", "population"))
+    np.testing.assert_allclose(tr.sigma_table["train_over_population"], d_tr / d_p, rtol=1e-12)
+    np.testing.assert_allclose(tr.sigma_table["kernel_over_population"], d_k / d_p, rtol=1e-12)
+    np.testing.assert_allclose(tr.sigma_table["train_over_kernel"], d_tr / d_k, rtol=1e-12)
+    c_tr = sz["train"].to_numpy() / np.sqrt(np.outer(d_tr, d_tr))
+    c_k = sz["kernel"].to_numpy() / np.sqrt(np.outer(d_k, d_k))
+    gap = np.abs(c_tr - c_k)
+    np.fill_diagonal(gap, -1.0)
+    np.testing.assert_allclose(tr.sigma_table["max_corr_diff"], gap.max(axis=1), rtol=1e-12)
+    fit = session.bks_fit(cfg)
+    by_name = {ch.name: ch for ch in tr.checks}
+    inner = by_name["Inner group-lasso solves converged"]
+    assert inner.status == T.INFO and inner.value == float(bool(fit.fit.meta["inner_all_converged"]))
+    assert tr.meta["inner_iters"] == fit.fit.meta["inner_iters"]
+    nxt = by_name["Next topic to enter"]
+    idle = tr.kkt.loc[~tr.kkt["active"] & tr.kkt["ratio"].notna(), "ratio"]
+    assert nxt.status == T.INFO and nxt.value == pytest.approx(idle.max())
+    assert tr.meta["next_to_enter"] == idle.idxmax() and tr.meta["next_to_enter"] in nxt.note
+    lam0 = _traced(session, _generic_cfg(lambda_rule="fixed", lam=0.0))
+    by0 = {ch.name: ch for ch in lam0.checks}
+    for name in ("Inner group-lasso solves converged", "Next topic to enter"):
+        assert by0[name].status == T.INFO and np.isnan(by0[name].value), name
+    assert lam0.meta["inner_all_converged"] is None and lam0.meta["next_to_enter"] == ""
+    assert lam0.path is None and np.isfinite(lam0.meta["null_sharpe_quantiles"]).all()
 
 
 # ---------------------------------------------------------------------------
@@ -442,9 +720,31 @@ def test_dashboard_defaults_reproduce_the_diagnosis():
     assert "The fit's directions keep little of the instruments" in titles
     assert "Instruments and the shocks' covariance cover different days" in titles
     assert trace.meta["timings"]["total"] < 5.0
+    # SPEC addendum A1-A4: the least-squares inversion, the zero benchmark, the no-signal band, units and days
+    assert sp["bks_ls"] == pytest.approx(0.685, abs=0.005)
+    assert trace.capture["ls_share"] == pytest.approx(0.89, abs=0.005)
+    assert trace.ladder.loc["zero", "rmse"] == pytest.approx(0.0784, abs=5e-4)
+    assert trace.ladder.loc["bks_implied", "rmse"] == pytest.approx(0.0914, abs=5e-4)
+    assert trace.ladder.loc["zero", "median_r2"] == 0.0
+    np.testing.assert_allclose(trace.meta["null_sharpe_quantiles"], [0.87, 2.30, 4.44], atol=0.005)
+    ce = trace.units["conversion_exact"]
+    assert ce.median() == pytest.approx(0.974, abs=0.001)
+    assert ce.min() == pytest.approx(0.514, abs=0.001) and ce.max() == pytest.approx(1.297, abs=0.001)
+    assert trace.meta["r2_pooled_exact"] == pytest.approx(0.2305, abs=5e-4)
+    assert trace.meta["r2_pooled_panel"] == pytest.approx(0.2777, abs=5e-4)
+    assert (trace.meta["bks_train_days"], trace.meta["days_before_train_start"],
+            trace.meta["direct_days_not_in_bks"]) == (130, 2, 1)
+    assert trace.meta["direct_days_not_in_bks_dates"] == ["2025-06-30"]
+    assert trace.sigma_table["train_over_kernel"].median() == pytest.approx(1.02, abs=0.01)
+    assert "The lambda choice follows noise" in titles
+    assert "The implied sensitivities are further from the truth than zero" in titles
+    assert "The unit conversion is approximate" in titles
     train = dataclasses.replace(c, bks=dataclasses.replace(c.bks, history="training"))
     s.bks_fit(train)
     t2 = s.bks_trace(train)
     assert _identity_off(t2) == []
     assert t2.meta["kernel_share_before_train"] == 0.0
     assert t2.ladder.loc["bks_implied", "spearman"] == pytest.approx(0.11, abs=0.01)
+    assert (t2.meta["bks_train_days"], t2.meta["direct_train_days"]) == (120, 129)
+    np.testing.assert_allclose(t2.units["conversion_exact"], 1.0, atol=1e-10)
+    assert "The choice sits at the edge of the lambda grid" in {f["title"] for f in t2.findings}

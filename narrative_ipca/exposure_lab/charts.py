@@ -2144,6 +2144,19 @@ def _lambda_frame(obj: Any) -> pd.DataFrame:
     return num.sort_index(kind="stable")
 
 
+def _null_quantiles(band: Any) -> tuple[float, float, float] | None:
+    """``(q05, q50, q95)`` as floats when all three are finite and ordered; ``None`` otherwise."""
+    if band is None:
+        return None
+    try:
+        vals = [_to_float(v) for v in band]
+    except TypeError:
+        return None
+    if len(vals) != 3 or not all(np.isfinite(vals)) or not vals[0] <= vals[1] <= vals[2]:
+        return None
+    return vals[0], vals[1], vals[2]
+
+
 def _nearest_lambda(lams: np.ndarray, lam: float | None, *, rel_tol: float = 0.05) -> int | None:
     """Position of the grid value nearest ``lam`` in log space; ``None`` when none is within ``rel_tol``."""
     if lam is None or lams.size == 0:
@@ -3144,6 +3157,8 @@ def lambda_trace_chart(
     extra_title: str | None = None,
     title: str | None = None,
     subtitle: str | None = None,
+    null_band: tuple[float, float, float] | Sequence[float] | None = None,
+    band_floor_alt: float | None = None,
 ) -> go.Figure:
     """The lambda path with its noise band: criterion, topics selected and, optionally, recovery (G.16; D51, D70).
 
@@ -3151,9 +3166,11 @@ def lambda_trace_chart(
     plus or minus one standard error, the tolerance threshold as a dashed
     horizontal line, the best point (ink ring) and the chosen point (orange
     diamond); points inside the tolerance band are filled, the others open.
-    Panel 2: the number of selected topics (steps). Panel 3 (with
-    ``extra``): recovery measures of the fit at each lambda. A dashed
-    vertical line marks the chosen lambda in every panel.
+    Optionally, beneath it, the range the criterion takes with no priced
+    signal (a light grey band with a dashed median line) and a second
+    tolerance threshold. Panel 2: the number of selected topics (steps).
+    Panel 3 (with ``extra``): recovery measures of the fit at each lambda. A
+    dashed vertical line marks the chosen lambda in every panel.
 
     Parameters
     ----------
@@ -3182,13 +3199,28 @@ def lambda_trace_chart(
         Title of panel 3 (default "Recovery along the path").
     title, subtitle:
         Figure title (default "BKS lambda path") and a second line.
+    null_band:
+        ``(q05, q50, q95)``: quantiles of the criterion when no factor is
+        priced (the trace's ``null_q05``, ``null_q50``, ``null_q95``). Drawn
+        in panel 1 as a light grey band from ``q05`` to ``q95`` across the
+        grid (traces "No priced signal: 95% quantile", without a legend
+        entry, then "No priced signal: 5-95%", filled to it) and a dashed
+        line at ``q50`` ("No priced signal: median"). ``None`` or non-finite
+        quantiles draw nothing.
+    band_floor_alt:
+        A second tolerance threshold (the trace's ``band_floor_relative``),
+        drawn as a dotted line labelled "Relative band floor" only when it
+        differs from ``band_floor``; the higher line gets its label above
+        it, the lower one below.
 
     Returns
     -------
     go.Figure
-        Stacked subplots with log x axes; traces for the band (upper edge,
-        then the filled lower edge), the criterion, the best and the chosen
-        point, the selected topics and the ``extra`` lines.
+        Stacked subplots with log x axes; traces for the no-signal band
+        (with ``null_band``: upper edge, filled lower edge, median), the
+        standard-error band (upper edge, then the filled lower edge), the
+        criterion, the best and the chosen point, the selected topics and
+        the ``extra`` lines.
 
     Validity boundaries
     -------------------
@@ -3237,6 +3269,29 @@ def lambda_trace_chart(
     crit_name = _esc(criterion_label)
     status = np.where(in_band == 1.0, "inside the tolerance band",
                       np.where(in_band == 0.0, "outside the tolerance band", ""))
+
+    null = _null_quantiles(null_band)
+    if null is not None and np.isfinite(crit).any():
+        q05, q50, q95 = null
+        span = [float(lams.min()), float(lams.max())]
+        fig.add_trace(
+            go.Scatter(x=span, y=[q95, q95], mode="lines", line={"width": 0, "color": INK_MUTED}, showlegend=False,
+                       name="No priced signal: 95% quantile", legendgroup="null",
+                       hovertemplate="No priced signal: 95% quantile %{y:.2f}<extra></extra>"),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=span, y=[q05, q05], mode="lines", line={"width": 0, "color": INK_MUTED}, fill="tonexty",
+                       fillcolor=_rgba(INK_MUTED, 0.16), name="No priced signal: 5-95%", legendgroup="null",
+                       hovertemplate="No priced signal: 5% quantile %{y:.2f}<extra></extra>"),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=span, y=[q50, q50], mode="lines", line={"width": 1.5, "color": INK_MUTED, "dash": "dash"},
+                       name="No priced signal: median", legendgroup="null",
+                       hovertemplate="No priced signal: median %{y:.2f}<extra></extra>"),
+            row=1, col=1,
+        )
 
     if np.isfinite(se).any() and np.isfinite(crit).any():
         upper, lower = crit + se, crit - se
@@ -3313,13 +3368,20 @@ def lambda_trace_chart(
     if n_panels == 3:
         fig.update_yaxes(title={"text": "Value"}, **_ZERO_LINE, row=3, col=1)
 
-    if band_floor is not None and np.isfinite(_to_float(band_floor)):
-        bf = _to_float(band_floor)
-        fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=bf, y1=bf,
-                      line={"color": INK_SECONDARY, "width": 1, "dash": "dash"})
-        fig.add_annotation(x=1.0, xref="x domain", y=bf, yref="y", text=f"Tolerance band floor {bf:.3g}",
-                           showarrow=False, xanchor="right", yanchor="bottom", xshift=-4, font=_NOTE_FONT,
-                           bgcolor=_NOTE_BG)
+    bf = _to_float(band_floor) if band_floor is not None else float("nan")
+    alt = _to_float(band_floor_alt) if band_floor_alt is not None else float("nan")
+    if np.isfinite(alt) and np.isfinite(bf) and math.isclose(alt, bf, rel_tol=1e-9, abs_tol=1e-12):
+        alt = float("nan")  # the same threshold: one line
+    floors = [(v, f"{label} {v:.3g}", dash, color) for v, label, dash, color in (
+        (bf, "Tolerance band floor", "dash", INK_SECONDARY), (alt, "Relative band floor", "dot", INK_MUTED))
+        if np.isfinite(v)]
+    top = max(v for v, *_ in floors) if len(floors) == 2 else None
+    for v, text, dash, color in floors:
+        fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=v, y1=v,
+                      line={"color": color, "width": 1, "dash": dash})
+        below = top is not None and v < top  # two lines: the lower one gets its label underneath
+        fig.add_annotation(x=1.0, xref="x domain", y=v, yref="y", text=text, showarrow=False, xanchor="right",
+                           yanchor="top" if below else "bottom", xshift=-4, font=_NOTE_FONT, bgcolor=_NOTE_BG)
     if lam_star is not None and np.isfinite(_to_float(lam_star)) and _to_float(lam_star) > 0:
         _vertical_lines(fig, _to_float(lam_star), n_panels)
         _top_note(fig, _to_float(lam_star), f"λ* = {_to_float(lam_star):.3g}", log_axis=True)
