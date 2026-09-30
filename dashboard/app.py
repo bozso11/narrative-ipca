@@ -1,4 +1,4 @@
-"""Streamlit dashboard of the topic-sensitivity lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85, D88).
+"""Streamlit dashboard of the topic-sensitivity lab (DESIGN.md G.9, G.10, G.15, G.16; D66-D70, D80, D83-D85, D88, D90).
 
 Terminology: the **topic sensitivity** of asset ``n`` to topic ``k`` is the
 expected return response of asset ``n`` to a one-standard-deviation attention
@@ -14,11 +14,15 @@ Run from the repository root::
 
     .venv/Scripts/python.exe -m streamlit run dashboard/app.py
 
-Two pages in the top navigation (D82): **Simulation lab** (this module's
-``main``) and **Real data** (``real_exposures.py``, a placeholder until the
-research pipeline delivers topic sensitivities).
+Three pages in the top navigation (D82, D90): **Simulation lab** (this
+module's ``main``), **BKS trace** (``bks_trace_page`` here, the steps in
+``trace_page.py``: the BKS run of the current settings traced step by step
+with a reference next to each result) and **Real data**
+(``real_exposures.py``, a placeholder until the research pipeline delivers
+topic sensitivities). :data:`PAGES` holds the page objects so that the BKS
+and Compare methods tabs can link to the trace (``st.page_link``).
 
-The sidebar is shared by both pages (owner request 2026-09-29): the
+The sidebar is shared by all pages (owner request 2026-09-29): the
 entrypoint at the bottom of this module draws it and validates its values
 before the chosen page runs, and keeps the result in :data:`_RUN` (page
 callables take no arguments). The Real data page lists the settings that will
@@ -38,7 +42,13 @@ training keys, so changing only the forecast window re-scores them without
 refitting. The tab never starts a BKS fit; it offers a Run BKS button that
 fits every selected BKS variant (full history, training window only; D88)
 this browser session has not fitted yet. The sidebar's "Covariance history"
-radio chooses the variant of the BKS tab and the sidebar's Run BKS.
+radio chooses the variant of the BKS tab, the BKS trace and the sidebar's
+Run BKS.
+
+Run BKS works on the Simulation lab and BKS trace pages: both handle the
+requests with :func:`_bks_sync` (a request is never left for a later visit to
+the other page) and write the same ``bks_store``, so the BKS tab and the trace
+always show the same run (D90).
 
 Widget state: every control keeps the user's own value in
 ``st.session_state["_values"]`` (copied back by an ``on_change`` callback),
@@ -80,6 +90,7 @@ import streamlit as st  # noqa: E402
 
 import _ui  # noqa: E402
 import real_exposures  # noqa: E402
+import trace_page  # noqa: E402
 from narrative_ipca.exposure_lab import charts, reference  # noqa: E402
 from narrative_ipca.exposure_lab import bks as lab_bks  # noqa: E402
 from narrative_ipca.exposure_lab import compare as lab_compare  # noqa: E402
@@ -105,6 +116,13 @@ _D0, _D1 = dt.date.fromisoformat(DATA_START), dt.date.fromisoformat(DATA_END)
 
 #: URL path of the Real data page (the sidebar's Run BKS button is disabled there).
 REAL_DATA_URL = "real-data"
+
+#: URL path of the BKS trace page (D90).
+BKS_TRACE_URL = "bks-trace"
+
+#: The ``StreamlitPage`` objects of this run by name (``simulation``, ``trace``, ``real``), set by the entrypoint
+#: before the page runs, so that pages can link to each other with ``st.page_link`` (D90).
+PAGES: dict[str, Any] = {}
 
 #: Result of the shared sidebar for this script run, set by the entrypoint before the page runs:
 #: ``values`` (in effect), ``cfg`` (or ``None``), ``errors``, ``notes``, ``train_window``,
@@ -136,6 +154,12 @@ MAIN_DEFAULTS: dict[str, Any] = {
     "bks_asset": _ui.DEFAULT_CONTRIB_ASSET,
     "cm_methods": list(_ui.COMPARE_DEFAULT_METHODS),
     "cm_inspect": None,  # None: follow the sidebar's direct method until the user picks one
+    # BKS trace page (D90); the asset is the BKS tab's "bks_asset", shared by both pages
+    "tr_step": "summary",
+    "tr_topic": None,  # None: follow the asset (its topic with the largest true sensitivity)
+    "tr_week": None,  # None: follow the run (the return week whose rows the implied sensitivities use)
+    "tr_fweek": None,  # None: follow the run (the first forecast week)
+    "tr_shock_all": False,
 }
 
 D47_NOTE = (
@@ -273,13 +297,13 @@ def show_chart(fig: Any, key: str) -> None:
 # Sidebar
 # ---------------------------------------------------------------------------
 def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict[str, Any]:
-    """All sidebar controls, shared by both pages.
+    """All sidebar controls, shared by every page.
 
     Returns the values in effect, the training window they give
     (:func:`_ui.training_window`) and the placeholder for the feasibility note
-    that the simulation page fills after its run. Off the simulation page
-    (``on_simulation=False``) the Run BKS button is disabled, because BKS runs
-    on the simulation page only.
+    that the simulation page fills after its run. With ``on_simulation=False``
+    (the Real data page) the Run BKS button is disabled, because BKS runs on
+    the Simulation lab and BKS trace pages only (D90).
     """
     sb = st.sidebar
     sb.header("Settings")
@@ -463,7 +487,7 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
         )["can_run"]
         st.button("Run BKS", key="sb_run_bks", type="primary", on_click=_request_bks, width="stretch",
                   disabled=not on_simulation or blocked,
-                  help="BKS runs on the Simulation lab page." if not on_simulation
+                  help="BKS runs on the Simulation lab and BKS trace pages." if not on_simulation
                   else "Change the training window first." if blocked else None)
     sb.button("Reset all settings", key="sb_reset", on_click=_reset_settings)
     return {"values": {**values, **st.session_state[_EFFECTIVE]}, "train_window": train_window,
@@ -798,15 +822,41 @@ def _bks_unavailable_box(ctx: dict[str, Any], lib_reasons: dict[str, str], key: 
     return reasons
 
 
+def follow_control(label: str, key: str, options: list[Any], default: Any, format_func: Any = str,
+                   container: Any = None, **kw: Any) -> Any:
+    """A selectbox that follows ``default`` until the user picks an option (stored ``None`` means "follow").
+
+    The user's choice is kept in ``st.session_state[_VALUES]`` like :func:`control`; a stored value that is no
+    longer among ``options`` falls back to ``default`` (else the first option) without being overwritten.
+    """
+    container = st if container is None else container
+    stored = st.session_state[_VALUES].get(key)
+    value = stored if stored in options else (default if default in options else options[0])
+    st.session_state[key] = value
+    out = container.selectbox(label, options, key=key, format_func=format_func, on_change=_sync, args=(key,), **kw)
+    st.session_state[_EFFECTIVE][key] = out
+    return out
+
+
 def _inspect_control(options: list[str], default: str, format_func: Any) -> str:
     """"Method to inspect": follows the sidebar's direct method until the user picks another one."""
-    stored = st.session_state[_VALUES].get("cm_inspect")
-    value = stored if stored in options else (default if default in options else options[0])
-    st.session_state["cm_inspect"] = value
-    out = st.selectbox("Method to inspect", options, key="cm_inspect", format_func=format_func, on_change=_sync,
-                       args=("cm_inspect",))
-    st.session_state[_EFFECTIVE]["cm_inspect"] = out
-    return out
+    return follow_control("Method to inspect", "cm_inspect", options, default, format_func)
+
+
+def _switch_to_trace(history: str) -> None:
+    """Compare tab: trace a BKS-implied variant whose covariance history the sidebar does not show (D88, D90).
+
+    Sets the sidebar's "Covariance history" to ``history`` and opens the BKS trace page; the variant's fit is
+    already in this browser session's fit keys (the Compare tab ran it), so the trace needs no refit.
+    """
+    st.session_state[_VALUES]["sb_bks_history"] = history
+    st.switch_page(PAGES["trace"])
+
+
+def trace_link(label: str) -> None:
+    """Link to the BKS trace page (D90); nothing when the page is not registered in this run."""
+    if "trace" in PAGES:
+        st.page_link(PAGES["trace"], label=label, icon=":material/troubleshoot:")
 
 
 def compare_tab(ctx: dict[str, Any]) -> None:
@@ -966,6 +1016,16 @@ def compare_tab(ctx: dict[str, Any]) -> None:
             f"{_ui.BKS_HISTORY_LABELS.get(hist, hist).lower()}{share_text}."
         )
         st.caption(_ui.how_bks_implied(cfg.bks.half_life_months))
+        inspect_history = lab_compare.BKS_HISTORY[inspect]
+        if inspect_history == cfg.bks.history:
+            trace_link("Trace the BKS-implied sensitivities step by step")
+        elif "trace" in PAGES:
+            st.button(
+                "Trace the BKS-implied sensitivities step by step", key="cm_trace", icon=":material/troubleshoot:",
+                on_click=_switch_to_trace, args=(inspect_history,),
+                help="Opens the BKS trace page with the sidebar's covariance history set to "
+                f"{_ui.BKS_HISTORY_LABELS[inspect_history].lower()}.",
+            )
     skipped = [a_labels.get(a, a) for a in fit.meta.get("skipped_assets", [])]
     if skipped:
         st.caption(f"{len(skipped)} asset(s) with too few training days get zero sensitivities: "
@@ -989,6 +1049,22 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         show_chart(charts.r2_bars(r2m, r2o, r2t, labels=a_labels, name=name,
                                   title=f"Out-of-sample R² per asset: {name}"), "fig_cm_r2_inspect")
         st.caption(_ui.how_r2_bars(name, overview=False))
+
+
+def bks_tiles(res: Any) -> None:
+    """The six tiles of a BKS run and their "How to read" caption (BKS tab and BKS trace page)."""
+    m = st.columns(6)
+    m[0].metric("Chosen lambda", f"{res.lam:.4g}", border=True)
+    m[1].metric("Factors K", f"{res.K}", border=True)
+    m[2].metric("Selected topics", f"{len(res.selected_topics)} of {len(res.gamma_norms)}", border=True)
+    m[3].metric("In-sample total R²", _ui.fmt_pct(res.in_sample_total_r2), border=True)
+    m[4].metric("Pooled OOS R² (weekly)", _ui.fmt_pct(res.r2_pooled), border=True,
+                help="Uncentered R² over all asset-weeks of the window, with each week's K factors fitted to that "
+                "week's returns.")
+    m[5].metric("Same, instruments shuffled", _ui.fmt_pct(res.meta.get("shuffled_r2_pooled")), border=True,
+                help="Reference: the topic instruments shuffled across assets within each week (20 shuffles). The "
+                "gap to the pooled OOS R² is what the instruments add beyond K freely fitted weekly factors.")
+    st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
 
 
 def bks_tab(ctx: dict[str, Any]) -> None:
@@ -1035,6 +1111,7 @@ def bks_tab(ctx: dict[str, Any]) -> None:
         )
     st.button("Run BKS", key="bks_run_tab", type="primary", on_click=_request_bks, disabled=not check["can_run"],
               help=None if check["can_run"] else "Change the training window first.")
+    trace_link("Trace this BKS run step by step")
     err = st.session_state.get("bks_error")
     if err and err[0] == ctx["bks_key"]:
         st.error(f"BKS could not run with these settings: {err[1]}")
@@ -1049,20 +1126,8 @@ def bks_tab(ctx: dict[str, Any]) -> None:
     res = store["result"]
     t_labels = store["t_labels"]
     a_labels = store["a_labels"]
-    n_sel = len(res.selected_topics)
     direct_r2 = ctx["ev"].r2  # always the current direct fit, never a copy stored with the BKS run
-    m = st.columns(6)
-    m[0].metric("Chosen lambda", f"{res.lam:.4g}", border=True)
-    m[1].metric("Factors K", f"{res.K}", border=True)
-    m[2].metric("Selected topics", f"{n_sel} of {len(res.gamma_norms)}", border=True)
-    m[3].metric("In-sample total R²", _ui.fmt_pct(res.in_sample_total_r2), border=True)
-    m[4].metric("Pooled OOS R² (weekly)", _ui.fmt_pct(res.r2_pooled), border=True,
-                help="Uncentered R² over all asset-weeks of the window, with each week's K factors fitted to that "
-                "week's returns.")
-    m[5].metric("Same, instruments shuffled", _ui.fmt_pct(res.meta.get("shuffled_r2_pooled")), border=True,
-                help="Reference: the topic instruments shuffled across assets within each week (20 shuffles). The "
-                "gap to the pooled OOS R² is what the instruments add beyond K freely fitted weekly factors.")
-    st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
+    bks_tiles(res)
     span = res.meta.get("evaluated_span")
     days = ctx["ev"].return_days
     span_text = f"BKS scores {span[0].date()} to {span[1].date()}" if span else "BKS span n/a"
@@ -1366,12 +1431,37 @@ def _run_bks_variants(session: LabSession, cfg: LabConfig, methods: tuple[str, .
     st.session_state.pop("bks_compare_requested", None)
 
 
+def _bks_sync(session: LabSession, cfg: LabConfig, ctx: dict[str, Any]) -> None:
+    """BKS on request, shared by the Simulation lab and BKS trace pages (D80, D90).
+
+    Runs the Compare tab's and the Run BKS buttons' requests (whichever page they were pressed on, so that a
+    request is never left for a later visit to the other page), and re-evaluates cheaply when a fit this browser
+    session requested is cached but the stored result is for other settings. ``ctx`` needs ``cfg``, ``bks_key``,
+    ``t_labels`` and ``a_labels``.
+    """
+    if st.session_state.get("bks_compare_requested"):
+        _run_bks_variants(session, cfg, tuple(st.session_state["bks_compare_requested"]))
+    if st.session_state.get("bks_requested", False):
+        _run_bks(session, cfg, ctx)
+        return
+    store = st.session_state.get("bks_store")
+    mine = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
+    if mine and (store is None or store["key"] != ctx["bks_key"]) and session.has("bks_fit", cfg) and \
+            session.has("bks_panel", cfg):
+        try:
+            t = time.perf_counter()
+            _store_bks(session.bks(cfg), ctx, time.perf_counter() - t, session.peek("bks_fit", cfg))
+        except ValueError as exc:
+            st.session_state["bks_error"] = (ctx["bks_key"], str(exc))
+
+
 def _store_bks(res: Any, ctx: dict[str, Any], seconds: float, fit: Any = None) -> None:
     raw = fit.meta.get("lam_max") if fit is not None else None
     lam_max = float(raw) if raw is not None else float("nan")
     st.session_state["bks_store"] = {
         "lam_max": lam_max,
         "key": ctx["bks_key"],
+        "cfg": ctx["cfg"],
         "result": res,
         "seconds": float(seconds),
         "t_labels": dict(ctx["t_labels"]),
@@ -1482,21 +1572,7 @@ def main() -> None:
             "needs none."
         )
 
-    # BKS: run on request; re-evaluate cheaply when a fit this browser session requested is cached
-    if st.session_state.get("bks_compare_requested"):
-        _run_bks_variants(session, cfg, tuple(st.session_state["bks_compare_requested"]))
-    if st.session_state.get("bks_requested", False):
-        _run_bks(session, cfg, ctx)
-    else:
-        store = st.session_state.get("bks_store")
-        mine = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
-        if mine and (store is None or store["key"] != ctx["bks_key"]) and session.has("bks_fit", cfg) and \
-                session.has("bks_panel", cfg):
-            try:
-                t = time.perf_counter()
-                _store_bks(session.bks(cfg), ctx, time.perf_counter() - t, session.peek("bks_fit", cfg))
-            except ValueError as exc:
-                st.session_state["bks_error"] = (ctx["bks_key"], str(exc))
+    _bks_sync(session, cfg, ctx)
 
     ev = ctx["ev"]
     sources = ", ".join(f"{v} {k}" for k, v in market.meta.get("sources", {}).items())
@@ -1539,14 +1615,104 @@ def real_data_page() -> None:
     real_exposures.render(_RUN.get("settings"))
 
 
-# Top level (D82): the simulation lab and the Real data placeholder are separate pages. The sidebar is
-# shared: it is drawn here, before the chosen page runs, and its result goes to the pages through _RUN.
-navigation = st.navigation(
-    [
-        st.Page(main, title="Simulation lab", icon=":material/science:", url_path="simulation", default=True),
-        st.Page(real_data_page, title="Real data", icon=":material/insights:", url_path=REAL_DATA_URL),
-    ],
-    position="top",
+#: Lead caption of the BKS trace page (D90).
+TRACE_LEAD = (
+    "The BKS run of the current settings, traced step by step: the inputs, what each stage computes and what "
+    "comes out, with an independent reference next to each result (a recomputation by the formula, an identity "
+    "that must hold, or the simulation's true value). Nothing here changes the run: the settings are the "
+    "sidebar's, and a BKS run here is the same run the Simulation lab's BKS tab shows."
 )
+
+
+def bks_trace_page() -> None:
+    """The BKS trace page (D90): the current settings' BKS run, step by step, with references.
+
+    Runs the cheap lab stages (cached after the Simulation lab page), handles the Run BKS requests of this page
+    and the sidebar (:func:`_bks_sync`), and traces only a fit this browser session requested for the current
+    settings (D80): it never starts a fit by itself. The trace itself (:meth:`LabSession.bks_trace`) is one
+    pure call inside one spinner; the steps are drawn by :func:`trace_page.render`.
+    """
+    run = _RUN
+    values = run["values"]
+    st.title("BKS trace")
+    st.caption(TRACE_LEAD)
+    st.page_link(PAGES["simulation"], label="Back to the Simulation lab", icon=":material/arrow_back:")
+    if run["ref_error"] and values["sb_asset_source"] == "listed":
+        st.error(f"The reference data could not be read: {run['ref_error']}")
+        st.stop()
+    cfg, errors = run["cfg"], run["errors"]
+    if errors:
+        for e in errors:
+            st.error(e)
+        st.stop()
+    assert cfg is not None
+
+    session = get_session()
+    try:
+        with st.spinner("Running the lab ..."):
+            for stage in ("market", "simulation", "truth", "shocks", "direct", "evaluation"):
+                getattr(session, stage)(cfg)
+    except (ValueError, FileNotFoundError, KeyError) as exc:
+        st.error(f"The lab could not run with these settings: {exc}")
+        st.stop()
+    market, sim = session.market(cfg), session.simulation(cfg)
+    ctx: dict[str, Any] = {
+        "cfg": cfg,
+        "session": session,
+        "market": market,
+        "sim": sim,
+        "truth": session.truth(cfg),
+        "shocks": session.shocks(cfg),
+        "fit": session.direct(cfg),
+        "ev": session.evaluation(cfg),
+        "a_labels": _ui.asset_labels(market.assets),
+        "t_labels": _ui.topic_labels(sim.topics.table),
+        "bks_key": session.stage_key("bks", cfg),
+    }
+    _bks_sync(session, cfg, ctx)
+
+    w = cfg.window
+    check = _ui.bks_training_check(w.train_start, w.train_end, cfg.bks, cfg.exposure.lead_days, w.shock_window)
+    if not check["can_run"]:
+        st.warning(f"{check['reason']} The direct estimator runs on windows down to one month.")
+    st.button("Run BKS", key="tr_run_bks", type="primary", on_click=_request_bks, disabled=not check["can_run"],
+              help=None if check["can_run"] else "Change the training window first.")
+    err = st.session_state.get("bks_error")
+    if err and err[0] == ctx["bks_key"]:
+        st.error(f"BKS could not run with these settings: {err[1]}")
+    mine = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
+    if not (mine and session.has("bks_panel", cfg) and session.has("bks_fit", cfg)):
+        if mine:
+            st.info("The BKS fit for these settings is no longer in the cache (it keeps the two most recent fits). "
+                    "Press Run BKS to fit it again; the trace then shows each step.")
+        else:
+            st.info("Press Run BKS (here or in the sidebar) to fit BKS on the current settings; the trace then shows "
+                    "each step. The default settings take about a second.")
+        return
+    try:
+        with st.spinner("Tracing BKS ...", show_time=True):
+            trace = session.bks_trace(cfg)
+            res = session.bks(cfg)
+    except LookupError:
+        st.info("The BKS fit for these settings is no longer in the cache. Press Run BKS to fit it again.")
+        return
+    except Exception as exc:  # show the reason, keep the page
+        logger.exception("BKS trace failed")
+        st.error(f"The BKS trace could not be built: {type(exc).__name__}: {exc}")
+        return
+    ctx.update(trace=trace, res=res, panel=session.peek("bks_panel", cfg), bks_fit=session.peek("bks_fit", cfg))
+    trace_page.render(ctx, {"control": control, "follow_control": follow_control, "show_chart": show_chart,
+                            "bks_tiles": bks_tiles})
+
+
+# Top level (D82, D90): the simulation lab, the BKS trace and the Real data placeholder are separate pages. The
+# sidebar is shared: it is drawn here, before the chosen page runs, and its result goes to the pages through _RUN.
+# PAGES holds the page objects so that the pages can link to each other.
+PAGES.update(
+    simulation=st.Page(main, title="Simulation lab", icon=":material/science:", url_path="simulation", default=True),
+    trace=st.Page(bks_trace_page, title="BKS trace", icon=":material/troubleshoot:", url_path=BKS_TRACE_URL),
+    real=st.Page(real_data_page, title="Real data", icon=":material/insights:", url_path=REAL_DATA_URL),
+)
+navigation = st.navigation(list(PAGES.values()), position="top")
 _RUN.update(shared_settings(on_simulation=navigation.url_path != REAL_DATA_URL))
 navigation.run()

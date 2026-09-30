@@ -1371,22 +1371,43 @@ def test_real_data_page_lists_settings_and_warns_on_invalid_ones():
 
 
 @needs_market
-def test_app_has_top_navigation_with_two_pages():
+def test_app_has_top_navigation_with_three_pages():
+    """D82, D90: Simulation lab (default), BKS trace and Real data in the top navigation; the BKS tab links to
+    the trace before a run too."""
     at = _app().run()
     _assert_clean(at)
     assert at.title[0].value == "Topic-sensitivity lab"  # the default page is the simulation lab
     src = APP.read_text(encoding="utf-8")
     assert 'title="Simulation lab"' in src and 'title="Real data"' in src and 'position="top"' in src
     assert 'REAL_DATA_URL = "real-data"' in src and "url_path=REAL_DATA_URL" in src
-
-
-def _open_real_data_page(at) -> None:
-    """Point a run AppTest at the Real data page (callable pages have no file for ``switch_page``)."""
+    assert 'title="BKS trace"' in src and 'BKS_TRACE_URL = "bks-trace"' in src and "url_path=BKS_TRACE_URL" in src
     pages = getattr(at, "_registered_pages", None)
-    hashes = [h for h, info in (pages or {}).items() if info.get("url_pathname") == "real-data"]
+    if pages:  # registration order is the navigation order
+        assert [info.get("page_name") for info in pages.values()] == ["Simulation lab", "BKS trace", "Real data"]
+    links = _page_links(at.tabs[4])
+    assert ("Trace this BKS run step by step", "bks-trace") in links
+
+
+def _page_links(block) -> list[tuple[str, str]]:
+    """``(label, url path)`` of every ``st.page_link`` under ``block`` (AppTest has no typed page_link element)."""
+    return [(str(e.proto.label), str(e.proto.page)) for e in block.get("page_link")]
+
+
+def _open_page(at, url_path: str) -> None:
+    """Point a run AppTest at a callable page by its URL path (callable pages have no file for ``switch_page``).
+
+    The default page (Simulation lab) is registered with an empty URL path.
+    """
+    pages = getattr(at, "_registered_pages", None)
+    hashes = [h for h, info in (pages or {}).items() if info.get("url_pathname") == url_path]
     if not hashes or not hasattr(at, "_page_hash"):
         pytest.skip("this Streamlit version's AppTest cannot open a callable page")
     at._page_hash = hashes[0]
+
+
+def _open_real_data_page(at) -> None:
+    """Point a run AppTest at the Real data page."""
+    _open_page(at, "real-data")
 
 
 @needs_market
@@ -1399,7 +1420,7 @@ def test_app_real_data_page_shares_the_sidebar():
     _assert_clean(at)
     assert at.title[0].value == "Real data"
     assert "Time windows" in [e.label for e in at.sidebar.get("expander")]
-    assert at.button(key="sb_run_bks").disabled  # BKS runs on the simulation page only
+    assert at.button(key="sb_run_bks").disabled  # BKS runs on the Simulation lab and BKS trace pages only
     got = _settings_dict(at.dataframe[0].value)
     assert got["Training window"] == "2025-01-01 to 2025-06-30 (129 weekdays)"
     assert got["Listed assets"] == "55 of 55"
