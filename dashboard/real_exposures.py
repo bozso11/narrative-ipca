@@ -184,6 +184,7 @@ def render(settings: dict[str, Any] | None = None) -> None:
     st.dataframe(status, hide_index=True, width="stretch")
     n_found = int((status["Found"] == "yes").sum())
     st.caption(f"{n_found} of {len(status)} input files found in {real_dir()}.")
+    st.caption(_ui.how_to_read(*_ui.HOW_REAL_STATUS))
 
     st.subheader("What this page will show")
     st.markdown(
@@ -235,3 +236,4 @@ def render(settings: dict[str, Any] | None = None) -> None:
         subtitle="Blank: coverage none or no estimate.",
     )
     st.plotly_chart(fig, width="stretch", theme=None, key="real_heatmap")
+    st.caption(_ui.how_to_read(*_ui.HOW_REAL_PREVIEW))

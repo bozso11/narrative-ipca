@@ -1342,8 +1342,14 @@ Main tabs:
    asset x topic heatmap in the layout of the
    owner's example (assets as rows, topics as columns, blank cells, an
    AVERAGE row). Cell metric: OOS correlation (default), estimated sensitivity,
-   true sensitivity, set sensitivity (`W`), OOS contribution. Blank rule: pairs the
-   estimator did not select, and/or `|value|` below a threshold. The AVERAGE
+   true sensitivity, set sensitivity (`W`), OOS contribution. Blank rule, which
+   follows the view (D69, amended 2026-09-30): the estimated sensitivity, the
+   OOS correlation and the OOS contribution blank the pairs the estimator did
+   not select; the true sensitivity blanks the pairs with `|B_true| < tau`
+   (standardised units, whatever the unit shown); the set sensitivity blanks
+   the pairs with no link. The checkbox label and the chart subtitle name the
+   rule in force, and a `|value|` threshold in the units shown applies on
+   top. The AVERAGE
    row averages over the displayed rows with blank cells counted as zero (the
    convention the example follows). Optional long/short view per asset flips
    the row sign and prefixes "L" or "S", as in the example's key-view
@@ -1400,6 +1406,37 @@ Main tabs:
 7. **Data and method**: sources, assumptions (TBC items), why BKS-implied
    scores lower than the direct methods (a short version of G.15.1; the
    Compare methods tab points to it), limitations (Section G.12).
+
+**"How to read" captions** (owner request 2026-09-30). Every chart, table and
+row of tiles, on both pages, has a caption right under it: a lead line ("How
+to read the tiles:", "How to read this chart:", ...), then one bullet per
+item, and each bullet ends with one sentence "Example: ...". The Topic
+contributions tab's "How to read the two views" block is the model. Rules:
+
+1. The examples use static, illustrative numbers, never figures computed from
+   the current run. They form one consistent set for the whole dashboard:
+   Energy Global v World EQ with a training volatility of about 1.1% a day, a
+   strong link of about 0.32 standardised (0.35 set times the attenuation of
+   about 0.90 at `w = 5`), 20 return days in the four-week default window, and
+   55 assets x 20 topics = 1,100 pairs. Figures quoted from the default run
+   (for example medians of 17% and 23%) were checked on the dashboard
+   defaults.
+2. Every example follows the code. The owner's sample wording ("a variance
+   share of 10% for a topic means it explains a 3% change") does not: the
+   variance share is a share of the window's uncentered squared-return
+   variation (G.8 point 4) and has no percentage-point value. The example
+   says instead that a topic has a 10% share when its explained return is one
+   tenth of the asset's return on every day of the window.
+3. The texts live in `dashboard/_ui.py` (`how_to_read` and the `HOW_*`
+   constants and `how_*` builders); a text part that depends on the settings
+   (the kernel half-life, the number of windows) is filled in, the example is
+   not. The Correlation table's metric caption shows the chosen metric's
+   bullet (and the unit bullet for the three sensitivity metrics), so it
+   follows the view as the blank rule does; the contributions tiles' caption
+   follows the chosen view, and the roll-up caption shows when the roll-up is
+   on.
+4. Plain words only: no decision numbers or other design-register codes in
+   these captions.
 
 ### G.10 Performance and caching
 
@@ -1487,7 +1524,19 @@ decisions continue at D74.
   rejected for the reasons in G.8. Since D76 the variance share is the
   default view and the return attribution the alternative.
 - **D69 Correlation-table conventions**: blanks count as zero in the AVERAGE row;
-  default blank rule is "not selected by the estimator".
+  default blank rule is "not selected by the estimator". **Amended
+  2026-09-30** (owner request): the blank rule follows the view. The true
+  sensitivity blanks the pairs below the true-sensitivity threshold
+  (`|B_true| < tau`, the run's `DirectConfig.select_tau`, in standardised
+  units whatever the unit shown), the same test as "truly sensitive" in the
+  MCC (G.8 point 5); the set sensitivity blanks the pairs with no link
+  (`W = 0`); the estimated sensitivity, the OOS correlation and the OOS
+  contribution keep "not selected by the estimator". Reason: with one rule
+  for every view, the True view hid the pairs the estimator missed (211 of
+  the 354 truly sensitive pairs at the defaults), and the Set view hid 45 of
+  the 95 links and showed 159 selected pairs without a link as zeros. The
+  rule stays on by default in every view (`_ui.blank_rule`,
+  `_ui.blank_keep`).
 - **D70 BKS in the lab**: weekly periods, half-life-matched `xi`,
   inverse-volatility asset weighting, 2% tolerance rule on a 12-point grid,
   train-until fit and in-window OOS factors; the per-topic split is labelled

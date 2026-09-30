@@ -3,11 +3,13 @@
 * :mod:`narrative_ipca.exposure_lab.session`: stage memoisation by config key.
 * ``dashboard/_ui.py``: config from widget values, the training window from
   its cut-off and length, the "Settings in use" table of the Real data page,
-  exposure-table layout, link edits (pure helpers, no Streamlit).
+  exposure-table layout and the blank rule that follows the view (D69), the
+  "How to read" captions, link edits (pure helpers, no Streamlit).
 * ``dashboard/app.py``: driven headless with ``streamlit.testing.v1.AppTest``
   on the default config, after widget changes, with invalid dates, with a
   BKS run on a small generic universe, in the Compare methods tab before and
-  after a BKS run (G.15), and on the Real data page with the shared sidebar.
+  after a BKS run (G.15), and on the Real data page with the shared sidebar;
+  a "How to read" caption with examples next to every chart (G.9).
 * ``scripts/run_lab.py``: files written for a small generic config.
 
 The default page needs ``data/market`` and ``data/reference``; those tests are
@@ -16,11 +18,13 @@ skipped when the market data store is missing.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import datetime as dt
 import importlib.util
 import json
 import math
+import re
 import sys
 import threading
 from pathlib import Path
@@ -359,7 +363,7 @@ def test_exposure_table_blanks_orders_and_flips():
     views = pd.Series("L", index=assets.index)
     views.iloc[0] = "S"
     tbl = _ui.exposure_table("OOS correlation", "Standardised", ev, fit, truth, assets, topics,
-                             blank_unselected=True, threshold=0.0, views=views)
+                             blank_rule_on=True, threshold=0.0, views=views)
     vals, blank = tbl["values"], tbl["blank"]
     first = assets.index[0]
     assert np.allclose(vals.loc[first].to_numpy(), -ev.corr.loc[first, vals.columns].to_numpy(), equal_nan=True)
@@ -370,12 +374,80 @@ def test_exposure_table_blanks_orders_and_flips():
     assert np.all(np.diff(score) <= 1e-12)
     # threshold rule and row order by OOS R2
     tbl2 = _ui.exposure_table("True sensitivity", "% per 1 sd shock", ev, fit, truth, assets, topics,
-                              blank_unselected=False, threshold=0.05, row_mode="OOS R²", max_rows=10)
+                              blank_rule_on=False, threshold=0.05, row_mode="OOS R²", max_rows=10)
     assert len(tbl2["values"]) == 10 and tbl2["n_rows_total"] == 30
     assert (tbl2["values"].abs() < 0.05).equals(tbl2["blank"])
     r2 = ev.r2.reindex(tbl2["values"].index).to_numpy()
     assert np.all(np.diff(r2[np.isfinite(r2)]) <= 0)
     assert "Showing the first 10 of 30" in tbl2["subtitle"]
+
+
+def test_blank_rule_follows_the_view():
+    """Owner request 2026-09-30 (D69 amended): the selection rule for the estimated sensitivity, correlation and
+    contribution; |B_true| < tau (standardised, in both units) for the true sensitivity; no link for W."""
+    out = run_lab(_generic_cfg())
+    ev, fit, truth, sim = out["evaluation"], out["direct"], out["truth"], out["simulation"]
+    assets, topics = sim.market.assets, sim.topics.table
+    tau = float(fit.meta["select_tau"])
+    selected = fit.selected.T
+    for metric in ("OOS correlation", "Estimated sensitivity", "OOS contribution (% points)"):
+        t = _ui.exposure_table(metric, "Standardised", ev, fit, truth, assets, topics)
+        assert t["blank"].equals(~selected.loc[t["blank"].index, t["blank"].columns]), metric
+        assert "Blank: pairs the estimator did not select." in t["subtitle"]
+        assert _ui.blank_rule(metric, tau)["label"] == "Blank pairs the estimator did not select"
+    # the true sensitivity: the threshold is tested in standardised units whatever the unit shown
+    sensitive = (truth.B_true.abs() >= tau).T
+    for units in _ui.EXPOSURE_UNITS:
+        t = _ui.exposure_table("True sensitivity", units, ev, fit, truth, assets, topics)
+        shown = ~t["blank"]
+        assert shown.equals(sensitive.loc[shown.index, shown.columns]), units
+        missed = shown & ~selected.loc[shown.index, shown.columns]
+        assert int(missed.to_numpy().sum()) > 0  # the True view shows pairs the estimator missed
+        assert f"|true sensitivity| below {tau:g} (standardised)" in t["subtitle"]
+    label = _ui.blank_rule("True sensitivity", 0.05)["label"]
+    assert label == "Blank pairs below the true-sensitivity threshold (0.05)"
+    # the set sensitivity: exactly the linked pairs, whatever the estimator selected
+    linked = (truth.W_unscaled != 0).T
+    t = _ui.exposure_table("Set sensitivity (W)", "% per 1 sd shock", ev, fit, truth, assets, topics)
+    assert (~t["blank"]).equals(linked.loc[t["blank"].index, t["blank"].columns])
+    assert "Blank: pairs with no link." in t["subtitle"]
+    assert _ui.blank_rule("Set sensitivity (W)", tau)["label"] == "Blank pairs with no link"
+    # the |value| threshold applies on top, in the units shown; the rule can be switched off
+    t = _ui.exposure_table("Set sensitivity (W)", "Standardised", ev, fit, truth, assets, topics, threshold=0.2)
+    assert t["blank"].equals(~linked.loc[t["blank"].index, t["blank"].columns] | (t["values"].abs() < 0.2))
+    t = _ui.exposure_table("True sensitivity", "Standardised", ev, fit, truth, assets, topics, blank_rule_on=False)
+    assert not t["blank"].to_numpy().any() and t["subtitle"].startswith("No blank rule.")
+    # a run's own tau
+    t = _ui.exposure_table("True sensitivity", "Standardised", ev, fit, truth, assets, topics, tau=0.1)
+    assert (~t["blank"]).equals((truth.B_true.abs() >= 0.1).T.loc[t["blank"].index, t["blank"].columns])
+
+
+def test_how_to_read_captions():
+    """Owner request 2026-09-30: lead, then bullets that each end with one "Example:" sentence."""
+    text = _ui.how_to_read("How to read this:", [("First item.", "one."), ("Second item.", "two.")])
+    assert text == "How to read this:\n\n- First item. Example: one.\n- Second item. Example: two."
+    with pytest.raises(ValueError):
+        _ui.how_to_read("How to read this:", [])
+    with pytest.raises(ValueError):
+        _ui.how_to_read("How to read this:", [("Text.", "")])
+    blocks = [_ui.how_to_read(*getattr(_ui, n)) for n in dir(_ui) if n.startswith("HOW_")]
+    blocks += [_ui.how_cell_metric(m) for m in _ui.METRICS]
+    blocks += [_ui.how_r2_bars("estimator"), _ui.how_compare_table("the 6 consecutive 4-week windows"),
+               _ui.how_compare_dots(True), _ui.how_compare_dots(False), _ui.how_compare_sweep("", True),
+               _ui.how_bks_implied(69.0), _ui.how_bks_history(69.0)]
+    for b in blocks:
+        lead, _, body = b.partition("\n\n")
+        assert lead.startswith("How to read") and lead.endswith(":"), lead
+        lines = body.split("\n")
+        assert lines and all(ln.startswith("- ") and ln.count(" Example: ") == 1 for ln in lines), lead
+        assert not any(c in b for c in "$*`~§"), lead  # no markdown or LaTeX surprises in st.caption
+        assert "exposure" not in b.lower() and not re.search(r"\bD\d\d\b", b), lead  # plain words, no D-codes
+    # the model block keeps its four views, each with an example that follows the code (G.8 point 4)
+    two = _ui.how_to_read(*_ui.HOW_TWO_VIEWS)
+    assert two.count("\n- ") == 4 and "one tenth of the asset's return on every day" in two
+    # the metric caption follows the view: the chosen metric, and the unit bullet for the sensitivities only
+    assert "% per 1 sd shock:" in _ui.how_cell_metric("True sensitivity")
+    assert "% per 1 sd shock:" not in _ui.how_cell_metric("OOS correlation")
 
 
 def test_feasibility_summary_and_linked_asset_note():
@@ -695,6 +767,10 @@ def test_app_bks_run_on_small_generic_config():
     assert "Chosen lambda" in [m.label for m in bks.metric]
     assert len(bks.get("plotly_chart")) >= 4
     assert not bks.warning, [w.value for w in bks.warning]
+    # every BKS chart and the tiles have their "How to read" caption with examples (owner request 2026-09-30)
+    assert _assert_how_to_read(bks) == {"fig_bks_gamma", "fig_bks_path", "fig_bks_r2", "fig_bks_split"}
+    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) in [c.value for c in bks.caption]
+    assert _ui.how_bks_history(69.0) in [c.value for c in bks.caption]
     # a new forecast window re-evaluates the cached fit: not stale
     at.slider(key="sb_forecast_weeks").set_value(8).run()
     _assert_clean(at)
@@ -752,6 +828,142 @@ def _generic_sidebar(at) -> None:
 
 def _trace_names(chart) -> list[str]:
     return [t.get("name") for t in json.loads(chart.proto.spec)["data"]]
+
+
+#: The lead of the "How to read" caption under each Plotly chart, by chart key (owner request 2026-09-30).
+HOW_TO_READ_LEADS: dict[str, str] = {
+    "fig_r2": "How to read this chart:",
+    "fig_sweep": "How to read this chart:",
+    "fig_scatter": "How to read this chart:",
+    "fig_exposure": "How to read the table:",
+    "fig_contrib": "How to read the bar chart:",
+    "fig_cumulative": "How to read the cumulative chart:",
+    "fig_attention": "How to read the attention chart:",
+    "fig_cm_r2": "How to read this chart:",
+    "fig_cm_sweep": "How to read this chart:",
+    "fig_cm_scatter": "How to read this chart:",
+    "fig_cm_r2_inspect": "How to read this chart:",
+    "fig_bks_gamma": "How to read the Gamma chart:",
+    "fig_bks_path": "How to read the lambda path:",
+    "fig_bks_r2": "How to read the R² comparison:",
+    "fig_bks_split": "How to read the per-topic split:",
+    "real_heatmap": "How to read the preview:",
+}
+
+
+def _chart_captions(block) -> dict[str, list[str]]:
+    """Every Plotly chart under ``block`` by key, with the captions that follow it in its own container, up to
+    the next chart there (the captions "next to" the chart)."""
+    out: dict[str, list[str]] = {}
+
+    def walk(node) -> None:
+        current = None
+        for i in sorted(node.children):
+            child = node.children[i]
+            if child.type == "plotly_chart":
+                current = str(child.proto.id).rsplit("-", 1)[-1]
+                out[current] = []
+            elif child.type == "caption" and current is not None:
+                out[current].append(str(child.value))
+            if getattr(child, "children", None) is not None:
+                walk(child)
+
+    walk(block)
+    return out
+
+
+def _assert_how_to_read(block) -> set[str]:
+    """Each Plotly chart under ``block`` has its "How to read" caption next to it, and every bullet of that
+    caption ends with an example. Returns the chart keys."""
+    captions = _chart_captions(block)
+    for key, caps in captions.items():
+        hits = [c for c in caps if c.startswith(HOW_TO_READ_LEADS[key])]
+        assert hits, (key, [c[:50] for c in caps])
+        bullets = hits[0].split("\n\n", 1)[1].split("\n")
+        assert bullets and all(b.startswith("- ") and " Example: " in b for b in bullets), key
+    return set(captions)
+
+
+def _leads(block) -> list[str]:
+    """First lines of the captions under ``block``."""
+    return [str(c.value).split("\n", 1)[0] for c in block.caption]
+
+
+def _heatmap_cells_shown(block) -> int:
+    """Number of non-blank cells of the Correlation table's heatmap (the AVERAGE row left out)."""
+    spec = json.loads(block.get("plotly_chart")[0].proto.spec)
+    z = next(t for t in spec["data"] if t.get("type") == "heatmap" and t.get("name") != "AVERAGE")["z"]
+    if isinstance(z, dict):  # Plotly >= 6 sends arrays as typed base64 data
+        arr = np.frombuffer(base64.b64decode(z["bdata"]), dtype=np.dtype(z["dtype"]))
+    else:
+        arr = np.array(z, dtype=float)
+    return int(np.isfinite(arr.astype(float)).sum())
+
+
+@needs_market
+def test_app_how_to_read_next_to_every_chart():
+    """Owner request 2026-09-30: a "How to read" caption whose bullets end with an example sits next to every
+    chart, table and row of tiles, for every cell metric and unit and both contribution views; the blank rule
+    of the Correlation table and its label follow the view."""
+    at = _app().run()
+    _assert_clean(at)
+    assert _assert_how_to_read(at.main) == {
+        "fig_r2", "fig_sweep", "fig_scatter", "fig_exposure", "fig_contrib", "fig_cumulative", "fig_attention",
+        "fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect",
+    }
+    assert _ui.how_to_read(*_ui.HOW_OVERVIEW_TILES) in [c.value for c in at.tabs[0].caption]
+    assert "How to read this note:" in _leads(at.tabs[0])  # 43 of 55 assets are linked at the defaults
+    assert _ui.how_to_read(*_ui.HOW_TILES_SHARE) in [c.value for c in at.tabs[2].caption]
+    assert _ui.how_to_read(*_ui.HOW_TWO_VIEWS) in [c.value for c in at.tabs[2].caption]
+    cm = [c.value for c in at.tabs[3].caption]
+    assert cm[0].startswith("Every method is scored") and cm[0].count(" Example: ") == 6
+    for text in (_ui.how_to_read(*_ui.HOW_COMPARE_TILES), _ui.how_compare_table("the 6 consecutive 4-week windows")):
+        assert text in cm
+    assert "How to read the covariance history:" in _leads(at.tabs[4])  # before a BKS run too
+    lists = _leads(at.tabs[5])
+    for lead in (_ui.HOW_ASSETS_TABLE[0], _ui.HOW_TOPICS_TABLE[0], _ui.HOW_LINK_MAP[0]):
+        assert lead in lists
+
+    # the Correlation table: every cell metric in both units; the blank rule and its label follow the view
+    cfg, _, _ = _ui.config_from_values(_ui.default_values(), (), reference.load_assets()["asset_class"])
+    s = LabSession()
+    truth, fit = s.truth(cfg), s.direct(cfg)
+    n_selected = int(fit.selected.to_numpy().sum())
+    n_sensitive = int((truth.B_true.abs() >= cfg.direct.select_tau).to_numpy().sum())
+    n_linked = int((truth.W_unscaled != 0).to_numpy().sum())
+    assert n_sensitive > n_selected > n_linked == 95
+    want = {"True sensitivity": n_sensitive, "Set sensitivity (W)": n_linked}
+    for metric in _ui.METRICS:
+        at.selectbox(key="ex_metric").set_value(metric).run()
+        for units in (_ui.EXPOSURE_UNITS if metric in _ui.EXPOSURE_METRICS else (None,)):
+            if units is not None:
+                at.radio(key="ex_units").set_value(units).run()
+            _assert_clean(at)
+            tab = at.tabs[1]
+            assert _assert_how_to_read(tab) == {"fig_exposure"}
+            caps = _chart_captions(tab)["fig_exposure"]
+            assert _ui.how_cell_metric(metric) in caps and _ui.how_to_read(*_ui.HOW_TABLE) in caps, metric
+            assert at.checkbox(key="ex_blank_rule").label == _ui.blank_rule(metric, 0.05)["label"]
+            assert f"Blank: {_ui.blank_rule(metric, 0.05)['subtitle']}" in tab.get("plotly_chart")[0].proto.spec
+            assert _heatmap_cells_shown(tab) == want.get(metric, n_selected), (metric, units)
+    at.selectbox(key="ex_metric").set_value("Set sensitivity (W)").run()
+    at.checkbox(key="ex_blank_rule").uncheck().run()  # off: every pair shows, zeros included
+    _assert_clean(at)
+    assert _heatmap_cells_shown(at.tabs[1]) == 1100 and "No blank rule." in at.tabs[1].get("plotly_chart")[0].proto.spec
+    at.checkbox(key="ex_blank_rule").check().run()
+
+    # the contributions tab's other view and the roll-up
+    at.radio(key="tc_view").set_value("Return attribution").run()
+    at.checkbox(key="tc_rollup").check().run()
+    _assert_clean(at)
+    assert _assert_how_to_read(at.tabs[2]) == {"fig_contrib", "fig_cumulative", "fig_attention"}
+    tc = [c.value for c in at.tabs[2].caption]
+    assert _ui.how_to_read(*_ui.HOW_TILES_ATTRIBUTION) in tc and _ui.how_to_read(*_ui.HOW_ROLLUP) in tc
+    # Compare methods without the oracle: the rows follow the first method, and the captions say so
+    at.multiselect(key="cm_methods").unselect("oracle").run()
+    _assert_clean(at)
+    assert _assert_how_to_read(at.tabs[3]) == {"fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect"}
+    assert _ui.how_compare_dots(False) in _chart_captions(at.tabs[3])["fig_cm_r2"]
 
 
 def test_app_compare_methods_with_a_bks_run():
@@ -825,6 +1037,8 @@ def test_app_compare_methods_with_a_bks_run():
     assert any(c.value.startswith(IMPLIED_NOTE) and "K = 3 factors" in c.value and "full history" in c.value
                for c in at.tabs[3].caption)
     assert [m.label for m in at.tabs[3].metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
+    assert _ui.how_bks_implied(69.0) in [c.value for c in at.tabs[3].caption]  # the note's "How to read"
+    assert _assert_how_to_read(at.tabs[3]) == {"fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect"}
     at.selectbox(key="cm_inspect").set_value("bks_implied_train").run()
     _assert_clean(at)
     assert any(c.value.startswith(IMPLIED_NOTE) and "training window only" in c.value for c in at.tabs[3].caption)
@@ -1105,6 +1319,8 @@ def test_real_exposures_page_empty_and_with_file(tmp_path, monkeypatch):
     at = _real_page_app().run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.get("plotly_chart")) == 1
+    assert _assert_how_to_read(at.main) == {"real_heatmap"}  # owner request 2026-09-30
+    assert _ui.how_to_read(*_ui.HOW_REAL_STATUS) in [c.value for c in at.caption]
     # the page says "topic sensitivity" and defines it; no "exposure" anywhere on it (2026-09-30)
     assert _ui.SENSITIVITY_DEFINITION in [c.value for c in at.caption]
     texts = [(k, t.replace(str(tmp_path), "<tmp>")) for k, t in _visible_texts(at)]  # the test's own path
