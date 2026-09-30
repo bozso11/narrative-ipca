@@ -1,11 +1,15 @@
-"""Pure helpers of the topic-exposure lab dashboard (DESIGN.md G.9, G.15; D66-D70, D83-D85, D88).
+"""Pure helpers of the topic-sensitivity lab dashboard (DESIGN.md G.9, G.15; D66-D70, D83-D85, D88).
 
 No Streamlit imports: everything here maps widget values and lab results to
 configurations, tables and figures, so it can be tested without a running
 app. ``dashboard/app.py`` owns the widgets.
 
-Conventions: asset x topic frames have assets as rows (the exposure-table
+Conventions: asset x topic frames have assets as rows (the correlation-table
 layout of G.9); the lab's topic x asset frames are transposed here.
+
+Naming: the text shown to the user says "topic sensitivity"
+(:data:`SENSITIVITY_DEFINITION`); in code, "exposure" (``exposure_table``,
+``EXPOSURE_METRICS``, ``ExposureConfig``, ``B_hat``) means topic sensitivity.
 """
 
 from __future__ import annotations
@@ -60,7 +64,7 @@ METHOD_LABELS: dict[str, str] = {
     "elastic_net": "Elastic net (plan baseline)",
     "ridge": "Ridge",
     "ols": "OLS",
-    "oracle": "Oracle (true exposures)",
+    "oracle": "Oracle (true sensitivities)",
 }
 PENALTY_LABELS: dict[str, str] = {
     "universal": "Universal: sqrt(2 ln L / n)",
@@ -268,7 +272,7 @@ def short_training_note(
 ) -> str | None:
     """Plain-words note on a training window shorter than about a year (D81), or ``None``.
 
-    States the standard error of one exposure (about ``1/sqrt(n)`` in
+    States the standard error of one sensitivity (about ``1/sqrt(n)`` in
     standardised units, ``n`` the training weekdays), the default elastic-net
     penalty ``sqrt(2 ln L / n)`` (``L`` the number of topics), and whether BKS
     can run (:func:`bks_training_check`, with ``bks_cfg`` default
@@ -283,19 +287,30 @@ def short_training_note(
     bks = "BKS can run." if check["can_run"] else check["reason"]
     return (
         f"Short training window ({plural(n, 'weekday')}, {plural(check['weeks'], 'week')}):\n\n"
-        f"- one exposure's standard error is about 1/sqrt(n) = {1.0 / math.sqrt(n):.2f} (a strong link is about 0.32);\n"
-        f"- the default elastic-net penalty sqrt(2 ln L / n) = {penalty:.2f} sets most exposures to zero;\n"
+        f"- one sensitivity's standard error is about 1/sqrt(n) = {1.0 / math.sqrt(n):.2f} "
+        "(a strong link is about 0.32);\n"
+        f"- the default elastic-net penalty sqrt(2 ln L / n) = {penalty:.2f} sets most sensitivities to zero;\n"
         f"- {bks}"
     )
 
+#: Plain definition of the topic sensitivity, shown on the Real data page (owner decision 2026-09-30). The
+#: simulation page's Data and method tab has the full version (``TERMINOLOGY`` in ``dashboard/app.py``).
+SENSITIVITY_DEFINITION = (
+    "Topic sensitivity: the expected return response of an asset to a one-standard-deviation attention shock in a "
+    "topic, with the other topics' shocks held fixed. It says how the asset's return moves with news attention, "
+    "not how much of the asset a portfolio holds."
+)
+
+#: Cell metrics of the correlation table. The three sensitivity metrics (:data:`EXPOSURE_METRICS`) are the
+#: estimated sensitivity ``B_hat``, the true sensitivity ``B_true`` and the set sensitivity ``W``.
 METRICS: tuple[str, ...] = (
     "OOS correlation",
-    "Estimated exposure",
-    "True exposure",
-    "Design value (W)",
+    "Estimated sensitivity",
+    "True sensitivity",
+    "Set sensitivity (W)",
     "OOS contribution (% points)",
 )
-EXPOSURE_METRICS = ("Estimated exposure", "True exposure", "Design value (W)")
+EXPOSURE_METRICS = ("Estimated sensitivity", "True sensitivity", "Set sensitivity (W)")
 EXPOSURE_UNITS: tuple[str, ...] = ("Standardised", "% per 1 sd shock")
 ROW_ORDERS: tuple[str, ...] = ("List order", "Asset class", "OOS R²")
 GROUP_ORDER: tuple[str, ...] = ("Sector", "Macro", "Micro", "Generic")
@@ -475,7 +490,7 @@ def config_from_values(
             n_generic=int(v["sb_n_generic_topics"]),
             generic_signal_share=float(v["sb_signal_share"]),
         ),
-        "Exposures": lambda: ExposureConfig(
+        "Sensitivities": lambda: ExposureConfig(
             n_betas=int(v["sb_n_betas"]),
             beta_1=float(v["sb_beta_1"]),
             beta_2=float(v["sb_beta_2"]),
@@ -523,7 +538,7 @@ def config_from_values(
     cfg = LabConfig(
         universe=parts["Universe"],
         topics=parts["Topics"],
-        exposure=parts["Exposures"],
+        exposure=parts["Sensitivities"],
         window=parts["Windows"],
         direct=parts["Direct estimator"],
         bks=parts["BKS model"],
@@ -536,8 +551,8 @@ def config_from_values(
 # ---------------------------------------------------------------------------
 #: The line under the "Settings in use" table of the Real data page.
 SIMULATION_ONLY_NOTE = (
-    "Simulation-only settings (price source, generic assets and topics, betas and link seeds) do not apply to "
-    "real data."
+    "Simulation-only settings (price source, generic assets and topics, set sensitivities (betas) and link "
+    "seeds) do not apply to real data."
 )
 
 
@@ -801,7 +816,7 @@ def share_positive(s: pd.Series) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Exposure table (G.9 tab 2, D69)
+# Correlation table (G.9 tab 2, D69; "exposure" in the code names)
 # ---------------------------------------------------------------------------
 def exposure_values(metric: str, units: str, ev: Any, fit: Any, truth: Any) -> tuple[pd.DataFrame, str]:
     """Asset x topic values of the chosen cell metric, in display units.
@@ -811,11 +826,11 @@ def exposure_values(metric: str, units: str, ev: Any, fit: Any, truth: Any) -> t
     metric:
         One of :data:`METRICS`.
     units:
-        One of :data:`EXPOSURE_UNITS` (exposure metrics only): standardised
-        units, or percent per one-standard-deviation shock (``b * sd * 100``
-        with the asset's training volatility ``fit.ret_scale`` for the
-        estimate, the truth and the design alike, so the three compare like
-        with like; D74).
+        One of :data:`EXPOSURE_UNITS` (sensitivity metrics only):
+        standardised units, or percent per one-standard-deviation shock
+        (``b * sd * 100`` with the asset's training volatility
+        ``fit.ret_scale`` for the estimated, true and set sensitivity alike,
+        so the three compare like with like; D74).
     ev, fit, truth:
         :class:`WindowEval`, :class:`DirectFit`, :class:`SimTruth`.
 
@@ -828,15 +843,15 @@ def exposure_values(metric: str, units: str, ev: Any, fit: Any, truth: Any) -> t
         return ev.corr.copy(), "OOS correlation"
     if metric == "OOS contribution (% points)":
         return ev.contrib * 100.0, "OOS contribution (% points)"
-    if metric == "Estimated exposure":
+    if metric == "Estimated sensitivity":
         vals = (fit.B_hat_pct if pct else fit.B_hat).T
-        return vals.copy(), "Estimated exposure" + (" (% per 1 sd shock)" if pct else " (standardised)")
-    if metric == "True exposure":
+        return vals.copy(), "Estimated sensitivity" + (" (% per 1 sd shock)" if pct else " (standardised)")
+    if metric == "True sensitivity":
         vals = truth.B_true.mul(fit.ret_scale * 100.0, axis=1) if pct else truth.B_true
-        return vals.T.copy(), "True exposure" + (" (% per 1 sd shock)" if pct else " (standardised)")
-    if metric == "Design value (W)":
+        return vals.T.copy(), "True sensitivity" + (" (% per 1 sd shock)" if pct else " (standardised)")
+    if metric == "Set sensitivity (W)":
         vals = truth.W.mul(fit.ret_scale * 100.0, axis=1) if pct else truth.W
-        return vals.T.copy(), "Design value W" + (" (% per 1 sd shock)" if pct else " (standardised)")
+        return vals.T.copy(), "Set sensitivity W" + (" (% per 1 sd shock)" if pct else " (standardised)")
     raise ValueError(f"unknown metric {metric!r}")
 
 
@@ -858,7 +873,7 @@ def blank_mask(
 
 
 def order_rows(assets: pd.DataFrame, r2: pd.Series | None, mode: str) -> list[str]:
-    """Row order of the exposure table: list order, asset class (then list order) or OOS R2 (descending)."""
+    """Row order of the correlation table: list order, asset class (then list order) or OOS R2 (descending)."""
     ids = [str(a) for a in assets.index]
     if mode == "Asset class" and "asset_class" in assets.columns:
         rank = {c: i for i, c in enumerate(ASSET_CLASSES)}
@@ -909,7 +924,7 @@ def exposure_table(
     views: pd.Series | None = None,
     max_rows: int | None = None,
 ) -> dict[str, Any]:
-    """Everything the exposure heatmap needs, in display order.
+    """Everything the sensitivity heatmap of the Correlation table tab needs, in display order.
 
     Returns
     -------

@@ -1,4 +1,4 @@
-"""Topics, link map and design matrix of the topic-exposure lab (DESIGN.md G.3, G.4; D57-D59, D71).
+"""Topics, link map and design matrix of the topic-sensitivity lab (DESIGN.md G.3, G.4; D57-D59, D71).
 
 Three steps, each a pure function:
 

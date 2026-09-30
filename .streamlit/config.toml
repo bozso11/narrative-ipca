@@ -1,4 +1,4 @@
-# Streamlit settings of the topic-exposure lab dashboard (DESIGN.md G.9).
+# Streamlit settings of the topic-sensitivity lab dashboard (DESIGN.md G.9).
 # Run from the repository root: .venv/Scripts/python.exe -m streamlit run dashboard/app.py
 
 [server]

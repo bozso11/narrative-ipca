@@ -369,7 +369,7 @@ def test_exposure_table_blanks_orders_and_flips():
     score = vals.where(~blank, 0.0).abs().mean(axis=0).to_numpy()
     assert np.all(np.diff(score) <= 1e-12)
     # threshold rule and row order by OOS R2
-    tbl2 = _ui.exposure_table("True exposure", "% per 1 sd shock", ev, fit, truth, assets, topics,
+    tbl2 = _ui.exposure_table("True sensitivity", "% per 1 sd shock", ev, fit, truth, assets, topics,
                               blank_unselected=False, threshold=0.05, row_mode="OOS R²", max_rows=10)
     assert len(tbl2["values"]) == 10 and tbl2["n_rows_total"] == 30
     assert (tbl2["values"].abs() < 0.05).equals(tbl2["blank"])
@@ -465,7 +465,7 @@ def _assert_clean(at) -> None:
 def test_app_default_page_renders():
     at = _app().run()
     _assert_clean(at)
-    assert at.title[0].value == "Topic-exposure lab"
+    assert at.title[0].value == "Topic-sensitivity lab"
     assert [t.label for t in at.tabs] == ["Overview", "Correlation table", "Topic contributions", "Compare methods",
                                          "BKS", "Lists", "Data and method"]
     labels = [m.label for m in at.metric]
@@ -474,7 +474,7 @@ def test_app_default_page_renders():
                   "Share explained by topics", "True share (simulation)", "Largest topic"):
         assert label in labels
     assert len(at.get("plotly_chart")) >= 7
-    assert at.tabs[1].get("plotly_chart"), "the exposure table tab has no chart"
+    assert at.tabs[1].get("plotly_chart"), "the correlation table tab has no chart"
     assert any("20 return days" in m.value for m in at.tabs[1].markdown)  # 2025-07-01 to 2025-07-28
     assert any("training 2025-01-01 to 2025-06-30 (129 weekdays)" in m.value for m in at.markdown)
     # the Time windows expander: cut-off, length and the resulting window, with the short-window note
@@ -496,7 +496,7 @@ def test_app_default_page_renders():
     cm = at.tabs[3]
     table = cm.dataframe[0].value
     assert list(table["Method"]) == ["Elastic net", "Ridge (GCV)", "BKS-implied (full history)",
-                                     "BKS-implied (training window)", "Oracle (true exposures)"]
+                                     "BKS-implied (training window)", "Oracle (true sensitivities)"]
     assert list(table.index) == ["elastic_net", "ridge", "bks_implied", "bks_implied_train", "oracle"]
     r2_col = "Median OOS R², this window"
     assert np.isfinite(table.loc[["elastic_net", "ridge", "oracle"], r2_col].astype(float)).all()
@@ -521,6 +521,70 @@ def test_app_default_page_renders():
     for label in ("Realised move", "Explained by topics", "Not explained by topics"):
         assert label in labels
     assert "Share explained by topics" not in labels
+
+
+def _visible_texts(at) -> list[tuple[str, str]]:
+    """Every text a user can see on the page, as ``(kind, text)``: titles, headings, captions, markdown and
+    LaTeX, alerts, metrics, tab and expander labels, widget labels, options and help texts, table headers and
+    text cells, and the Plotly figures (titles, axis titles, legend and hover labels, as the figure JSON)."""
+    out: list[tuple[str, str]] = []
+    for kind in ("title", "header", "subheader", "caption", "markdown", "latex", "info", "warning", "error",
+                 "success"):
+        out += [(kind, str(e.value)) for e in getattr(at, kind)]
+    for m in at.metric:
+        out += [("metric", str(m.label)), ("metric", str(m.value)), ("metric help", str(m.help or ""))]
+    out += [("tab", str(t.label)) for t in at.tabs]
+    out += [("expander", str(e.label)) for e in at.expander]
+    for kind in ("button", "download_button", "checkbox", "slider", "number_input", "date_input", "selectbox",
+                 "radio", "select_slider", "multiselect"):
+        for w in getattr(at, kind):
+            out += [(kind, str(w.label)), (f"{kind} help", str(getattr(w, "help", "") or ""))]
+            out += [(f"{kind} option", str(o)) for o in (getattr(w, "options", None) or [])]
+    for d in at.dataframe:
+        frame = d.value
+        out += [("table header", str(c)) for c in frame.columns]
+        for col in frame.columns:
+            if frame[col].dtype == object or pd.api.types.is_string_dtype(frame[col]):
+                out += [("table cell", str(v)) for v in frame[col].dropna()]
+    out += [("chart", el.proto.spec) for el in at.get("plotly_chart")]
+    return out
+
+
+@needs_market
+def test_app_default_page_says_sensitivity_not_exposure():
+    """Owner decision 2026-09-30: the page says "topic sensitivity", never "exposure", except in the text that
+    explains the old name. The rendered data/market/README.md is a verbatim import and is left out."""
+    at = _app().run()
+    _assert_clean(at)
+    readme = (reference.market_dir() / "README.md").read_text(encoding="utf-8")
+    texts = [(k, t) for k, t in _visible_texts(at) if t != readme]
+    assert len(texts) > 300  # the walk reaches every tab, the sidebar and the charts
+    explains = [t for _, t in texts if "formerly called 'exposure'" in t.lower()]
+    assert len(explains) == 1 and "Topic sensitivity" in explains[0]  # the Data and method tab's definition
+    found = [(k, t[:120]) for k, t in texts if "exposure" in t.lower() and t not in explains]
+    assert not found, found
+    # the new names are on the page
+    assert at.title[0].value == "Topic-sensitivity lab"
+    assert "Sensitivities" in [e.label for e in at.sidebar.get("expander")]
+    assert at.radio(key="sb_n_betas").label == "Number of set sensitivities (betas)"
+    assert at.slider(key="sb_beta_1").label == "Set sensitivity 1: strong links"
+    assert list(at.selectbox(key="ex_metric").options) == [
+        "OOS correlation", "Estimated sensitivity", "True sensitivity", "Set sensitivity (W)",
+        "OOS contribution (% points)",
+    ]
+    # every cell metric of the correlation table: no "exposure" in its chart or captions
+    for metric in _ui.METRICS[1:]:
+        at.selectbox(key="ex_metric").set_value(metric).run()
+        _assert_clean(at)
+        tab = at.tabs[1]
+        shown = [c.value for c in tab.caption] + [el.proto.spec for el in tab.get("plotly_chart")]
+        assert not [t[:120] for t in shown if "exposure" in t.lower()], metric
+    at.selectbox(key="ex_metric").set_value("Set sensitivity (W)").run()
+    at.radio(key="ex_units").set_value(_ui.EXPOSURE_UNITS[1]).run()
+    _assert_clean(at)
+    shown = [c.value for c in at.tabs[1].caption] + [el.proto.spec for el in at.tabs[1].get("plotly_chart")]
+    assert not [t[:120] for t in shown if "exposure" in t.lower()]
+    assert any("Set sensitivity W (% per 1 sd shock)" in t for t in shown)
 
 
 @needs_market
@@ -556,7 +620,7 @@ def test_app_widget_changes_rerun_cleanly():
     _assert_clean(at)
     assert at.slider(key="sb_beta_2").value == pytest.approx(0.15)
     assert at.slider(key="sb_beta_1").value == pytest.approx(0.5)
-    # exposure table options
+    # correlation table options
     at.selectbox(key="ex_metric").set_value("OOS contribution (% points)").run()
     at.checkbox(key="ex_ls_view").check().run()
     at.selectbox(key="ex_row_order").set_value("OOS R²").run()
@@ -865,17 +929,21 @@ def test_run_lab_script_writes_outputs(tmp_path, capsys):
     out_dir = tmp_path / "out"
     mod = _run_lab_script()
     assert mod.main(["--config", str(cfg_file), "--out", str(out_dir), "--bks", "--quiet"]) == 0
-    for name in ("exposure_corr.csv", "exposures.csv", "r2.csv", "contributions.csv", "recovery.json", "sweep.csv",
+    for name in ("oos_corr.csv", "sensitivities.csv", "r2.csv", "contributions.csv", "recovery.json", "sweep.csv",
                  "summary.json", "bks_r2.csv", "bks_contrib.csv"):
         assert (out_dir / name).is_file(), name
+    assert not list(out_dir.glob("*exposure*"))  # renamed 2026-09-30
+    pairs = pd.read_csv(out_dir / "sensitivities.csv")
+    assert list(pairs.columns) == ["topic_id", "asset_id", "b_hat", "b_true", "w_set", "selected"]
     summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["n_assets"] == 30 and summary["n_topics"] == 12
     assert summary["config"]["exposure"]["link_overrides"] == [["G001", "G_ASSET_001", "strong", -1]]
-    corr = pd.read_csv(out_dir / "exposure_corr.csv", index_col=0)
+    corr = pd.read_csv(out_dir / "oos_corr.csv", index_col=0)
     assert corr.shape == (30, 12)
     contrib = pd.read_csv(out_dir / "contributions.csv")
     assert len(contrib) == 30 * 12
-    assert "median OOS R2" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "median OOS R2" in printed and printed.startswith("Topic-sensitivity lab:")
     cfg = LabConfig.from_dict(d)  # the configs normalise lists themselves (D77); no helper in the script
     assert cfg.exposure.link_overrides == (("G001", "G_ASSET_001", "strong", -1),)
     assert not hasattr(mod, "normalise_config")
@@ -980,12 +1048,14 @@ def test_real_exposures_status_and_loading(tmp_path):
         ("2025-12-31", "S1", "NOK_v_USD", 0.12, 0.04, "regression", "2023-01-02/2025-12-31", "partial", "v1"),
         ("2025-12-31", "A4", "ENERGY_v_WEQ", -0.05, 0.03, "llm", "2023-01-02/2025-12-31", "none", "v1"),
     ]
+    assert real_exposures.SENSITIVITY_FILE == "sensitivities.parquet"
+    assert "sensitivity" in real_exposures.EXPOSURE_COLUMNS and "exposure" not in real_exposures.EXPOSURE_COLUMNS
     df = pd.DataFrame(rows, columns=list(real_exposures.EXPOSURE_COLUMNS))
-    df.to_parquet(tmp_path / "exposures.parquet")
+    df.to_parquet(tmp_path / "sensitivities.parquet")
     loaded, problems = real_exposures.load_exposures(tmp_path)
     assert problems == [] and len(loaded) == 3
     status = real_exposures.data_status(tmp_path)
-    assert status.loc[status["File"].str.endswith("exposures.parquet"), "Found"].item() == "yes"
+    assert status.loc[status["File"].str.endswith("sensitivities.parquet"), "Found"].item() == "yes"
     values, blank = real_exposures.exposure_table(loaded, "2025-12-31", ["NOK_v_USD", "ENERGY_v_WEQ"])
     assert list(values.index) == ["NOK_v_USD", "ENERGY_v_WEQ"]
     assert values.loc["ENERGY_v_WEQ", "S1"] == pytest.approx(0.40)
@@ -993,7 +1063,7 @@ def test_real_exposures_status_and_loading(tmp_path):
     assert bool(blank.loc["NOK_v_USD", "A4"])  # no estimate is blank
 
     df.loc[0, "source"] = "guess"
-    df.to_parquet(tmp_path / "exposures.parquet")
+    df.to_parquet(tmp_path / "sensitivities.parquet")
     _, problems = real_exposures.load_exposures(tmp_path)
     assert any("unknown source" in p for p in problems)
 
@@ -1030,10 +1100,16 @@ def test_real_exposures_page_empty_and_with_file(tmp_path, monkeypatch):
     assert "Settings in use" not in [h.value for h in at.subheader]  # no settings passed
 
     rows = [("2025-12-31", "S1", "ENERGY_v_WEQ", 0.40, 0.05, "blended", "2023-01-02/2025-12-31", "full", "v1")]
-    pd.DataFrame(rows, columns=list(real_exposures.EXPOSURE_COLUMNS)).to_parquet(data / "real" / "exposures.parquet")
+    pd.DataFrame(rows, columns=list(real_exposures.EXPOSURE_COLUMNS)).to_parquet(
+        data / "real" / "sensitivities.parquet")
     at = _real_page_app().run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.get("plotly_chart")) == 1
+    # the page says "topic sensitivity" and defines it; no "exposure" anywhere on it (2026-09-30)
+    assert _ui.SENSITIVITY_DEFINITION in [c.value for c in at.caption]
+    texts = [(k, t.replace(str(tmp_path), "<tmp>")) for k, t in _visible_texts(at)]  # the test's own path
+    found = [(k, t[:120]) for k, t in texts if "exposure" in t.lower()]
+    assert not found, found
     reference.clear_cache()
 
 
@@ -1063,7 +1139,7 @@ def test_real_data_page_lists_settings_and_warns_on_invalid_ones():
 def test_app_has_top_navigation_with_two_pages():
     at = _app().run()
     _assert_clean(at)
-    assert at.title[0].value == "Topic-exposure lab"  # the default page is the simulation lab
+    assert at.title[0].value == "Topic-sensitivity lab"  # the default page is the simulation lab
     src = APP.read_text(encoding="utf-8")
     assert 'title="Simulation lab"' in src and 'title="Real data"' in src and 'position="top"' in src
     assert 'REAL_DATA_URL = "real-data"' in src and "url_path=REAL_DATA_URL" in src

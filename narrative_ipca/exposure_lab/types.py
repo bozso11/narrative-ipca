@@ -2,9 +2,17 @@
 
 Conventions: returns are daily simple returns in decimals on the weekday
 calendar; topic x asset matrices are ``DataFrame`` with topics as rows
-(index ``topic_id``) and assets as columns (``asset_id``); exposures are in
-standardised units unless a name ends in ``_pct`` (percent per
+(index ``topic_id``) and assets as columns (``asset_id``); sensitivities are
+in standardised units unless a name ends in ``_pct`` (percent per
 one-standard-deviation shock).
+
+Naming: in code, "exposure" means topic sensitivity, the expected return
+response of an asset to a one-standard-deviation attention shock in a topic,
+with the other topics' shocks held fixed (not a position size or dollar
+exposure; see :mod:`narrative_ipca.exposure_lab`). ``SimTruth.B_true`` is the
+true sensitivity (the population value of the simulation) and
+``DirectFit.B_hat`` the estimated sensitivity (a method's training-window
+estimate); ``SimTruth.W`` holds the set sensitivities.
 """
 
 from __future__ import annotations
@@ -103,7 +111,7 @@ class SimTruth:
     attenuation:
         Per topic ``a_k`` (G.5.3) for the shock window used.
     B_true:
-        Population exposure on the observed standardised shocks
+        True sensitivity: population regression coefficients on the observed standardised shocks
         (topics x assets, standardised units).
     r2_true:
         Per asset population share of variance explained by the topics.
@@ -180,12 +188,12 @@ class ObservedShocks:
 
 @dataclass
 class DirectFit:
-    """Direct exposure regression fitted on the training window (G.7.1).
+    """Direct sensitivity regression fitted on the training window (G.7.1).
 
     Attributes
     ----------
     B_hat:
-        Exposures in standardised units (topics x assets).
+        Estimated sensitivities in standardised units (topics x assets).
     intercept:
         Per asset intercept in standardised units (not used for the
         explained return).
@@ -216,7 +224,7 @@ class DirectFit:
 
     @property
     def B_hat_pct(self) -> pd.DataFrame:
-        """Exposures in percent per one-standard-deviation shock."""
+        """Estimated sensitivities in percent per one-standard-deviation shock."""
         return self.B_hat.mul(self.ret_scale * 100.0, axis=1)
 
 
@@ -225,7 +233,7 @@ class WindowEval:
     """Out-of-sample evaluation in the forecast window (G.8).
 
     All asset x topic frames have assets as rows and topics as columns (the
-    exposure-table layout).
+    correlation-table layout).
 
     Attributes
     ----------

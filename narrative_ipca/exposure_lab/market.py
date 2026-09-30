@@ -1,4 +1,4 @@
-"""Market data of the topic-exposure lab: calendar, real and artificial returns (DESIGN.md G.2, G.2.1, G.2.2, G.13; D54-D56, D71).
+"""Market data of the topic-sensitivity lab: calendar, real and artificial returns (DESIGN.md G.2, G.2.1, G.2.2, G.13; D54-D56, D71).
 
 Symbols: ``t`` a trading day of the weekday calendar, ``n`` an asset.
 

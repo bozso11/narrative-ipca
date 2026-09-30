@@ -1,12 +1,13 @@
-"""Configuration of the topic-exposure lab (DESIGN.md Part G).
+"""Configuration of the topic-sensitivity lab (DESIGN.md Part G).
 
 One frozen dataclass per stage, collected in :class:`LabConfig`. Every stage
 of the lab is a pure function of its inputs and of the sub-configuration it
 depends on, so :meth:`LabConfig.key` gives a cache key per stage (D71).
 
 Symbols follow DESIGN.md Part G: ``k`` topics, ``n`` assets, ``t`` trading
-days; ``W`` the design matrix of exposure values (G.4); ``l`` the lead in days
-(G.5); ``w`` the shock window (D9).
+days; ``W`` the design matrix of set sensitivities (G.4); ``l`` the lead in
+days (G.5); ``w`` the shock window (D9). In code, "exposure" means topic
+sensitivity (see :mod:`narrative_ipca.exposure_lab`).
 
 Every config normalises its values on construction (D77): numbers become
 ``float`` or ``int`` as annotated, dates become ISO strings and lists become
@@ -236,7 +237,15 @@ class RandomLinkConfig:
 
 @dataclass(frozen=True)
 class ExposureConfig:
-    """Exposure values ("betas") and the link structure (G.4, G.5.1).
+    """Set sensitivities ("betas") and the link structure (G.4, G.5.1).
+
+    Naming: in code, "exposure" means topic sensitivity, the expected return
+    response of an asset to a one-standard-deviation attention shock in a
+    topic, with the other topics' shocks held fixed (not a position size or
+    dollar exposure). The class, the field ``LabConfig.exposure`` and the
+    stage-key part ``"exposure"`` keep the older name. The values set here
+    are the set sensitivities: each link's ``sign * beta(tier)`` gives the
+    design matrix ``W`` (:func:`.links.design_matrix`).
 
     Attributes
     ----------

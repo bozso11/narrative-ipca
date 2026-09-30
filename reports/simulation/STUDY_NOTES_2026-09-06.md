@@ -57,7 +57,7 @@ the two findings below.
    three metrics are reported, not pass/failed. For the research plan this
    means the BKS interpretation map (which topics, by how much) is a property
    of the representative the lasso picks; per-topic attribution needs the
-   separately identified exposure layer of the plan.
+   separately identified topic-sensitivity layer of the plan.
 
 5. **Runtime.** One full run (tune on 20 lambdas, 8 annual OOS refits with
    retuning, wrap-up, evaluation) takes 5-7 minutes on three BLAS threads with

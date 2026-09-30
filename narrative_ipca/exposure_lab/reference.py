@@ -1,4 +1,4 @@
-"""Reference data of the topic-exposure lab: locations and loaders (DESIGN.md G.2, G.3, G.4, G.13; D53, D55, D57, D58).
+"""Reference data of the topic-sensitivity lab: locations and loaders (DESIGN.md G.2, G.3, G.4, G.13; D53, D55, D57, D58).
 
 Files (all under :func:`data_dir`):
 

@@ -1,6 +1,6 @@
 # Market data: 55 lab assets (2015–2025)
 
-Daily returns for the 55 assets of the topic-exposure lab (DESIGN.md Part G), built from 58 **legs** (one proxy series each). Every asset "A v B" is long leg A and short leg B. The outright assets (Global Duration, Global Equity, Global Credit, USD) and every "XXX v USD" pair are long against the **cash** leg, which has a return of 0.
+Daily returns for the 55 assets of the topic-sensitivity lab (DESIGN.md Part G), built from 58 **legs** (one proxy series each). Every asset "A v B" is long leg A and short leg B. The outright assets (Global Duration, Global Equity, Global Credit, USD) and every "XXX v USD" pair are long against the **cash** leg, which has a return of 0.
 
 Status of the run on 2026-09-29: all 58 legs are `ok` (no missing level in the delivered window). Three FX legs come from FRED (CNY as the fallback, TWD pinned, and the JPY conversion of the JP 7-10y leg). No leg failed, so the lab uses no artificial fill for the listed assets.
 

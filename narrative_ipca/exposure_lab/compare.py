@@ -1,4 +1,4 @@
-"""Like-for-like comparison of exposure estimation methods (DESIGN.md G.7, G.8, G.15; D52, D65, D74, D88).
+"""Like-for-like comparison of topic-sensitivity estimation methods (DESIGN.md G.7, G.8, G.15; D52, D65, D74, D88).
 
 Every method delivers the same object, a :class:`~narrative_ipca.exposure_lab.types.DirectFit`
 with the same observed shocks and the same training scales: exposures
@@ -125,7 +125,7 @@ METHOD_LABELS: dict[str, str] = {
     "ols": "OLS",
     IMPLIED_METHOD: "BKS-implied (full history)",
     IMPLIED_TRAIN_METHOD: "BKS-implied (training window)",
-    "oracle": "Oracle (true exposures)",
+    "oracle": "Oracle (true sensitivities)",
 }
 
 #: Columns of :attr:`ComparisonResult.summary`.
@@ -147,7 +147,7 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 #: Note on the oracle row.
-ORACLE_NOTE = "Reference, not an estimator: the true exposures with the same training scales."
+ORACLE_NOTE = "Reference, not an estimator: the true sensitivities with the same training scales."
 
 _RECOVERY_COLUMNS = ("n_selected", "coverage", "sign_agreement", "mcc", "spearman", "rmse")
 
@@ -403,13 +403,13 @@ def _note(method: str, fit: DirectFit) -> str:
     skipped = meta.get("skipped_assets", [])
     parts: list[str] = []
     if skipped:
-        parts.append(f"{len(skipped)} asset(s) with too few training days are not fitted (exposures 0).")
+        parts.append(f"{len(skipped)} asset(s) with too few training days are not fitted (sensitivities 0).")
     low = int(meta.get("gcv_at_lower_edge", 0) or 0)
     if method == "ridge" and low:
         n_fitted = len(fit.B_hat.columns) - len(skipped)
         parts.append(
-            f"GCV chose the smallest lambda of its grid for {low} of {n_fitted} assets, so their exposures are "
-            "close to OLS."
+            f"GCV chose the smallest lambda of its grid for {low} of {n_fitted} assets, so their sensitivities "
+            "are close to OLS."
         )
     return " ".join(parts)
 

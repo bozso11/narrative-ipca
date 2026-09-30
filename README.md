@@ -123,10 +123,35 @@ reports under `reports/simulation/full/`. In short:
 4. Loading rows, impact vectors and latent states are not identified by the
    model (D52); the implied betas `c Gamma` are.
 
-## Topic-exposure lab and dashboard (2026-09-29)
+## Topic-sensitivity lab and dashboard (2026-09-29)
 
 An interactive lab that shows how much of an asset's return variation news
 topics explain out of sample. The spec and decisions are in `DESIGN.md` Part G.
+
+**Terms** (DESIGN.md G.0, D89). **Topic sensitivity** `b_{k,n}` (the matrix
+`B`, topics x assets) is the expected return response of asset `n` to a
+one-standard-deviation attention shock in topic `k`, with the other topics'
+shocks held fixed. It is the coefficient in the regression of the asset's
+return on all topics' attention shocks at once,
+`r_{n,t+l} = a_n + sum_k b_{k,n} s_{k,t} + e_{n,t+l}`, where `r_{n,t+l}` is
+asset `n`'s return on day `t + l`, `s_{k,t}` is topic `k`'s attention shock
+on day `t` (attention minus its mean over the previous `w` days, divided by
+its standard deviation), `a_n` is an intercept, `e_{n,t+l}` is the part not
+explained by topics and `l` is the lead (0 = same day, 1 = next day).
+
+- Units: % return per one-standard-deviation shock, or standardised (the
+  return also divided by its standard deviation).
+- It is not a position size or dollar exposure: it says how an asset's return
+  moves with news attention, not how much of the asset a portfolio holds.
+- The lab has three versions: set sensitivities (`W`, the "betas"), true
+  sensitivities (`B_true`) and estimated sensitivities (`B_hat`).
+- **"Exposure" in code means topic sensitivity.** The code keeps the older
+  word: the package `exposure_lab`, `ExposureConfig`, `exposure_heatmap`,
+  `B_hat` and the "exposures" in docstrings and variable names all mean topic
+  sensitivity. The documents use "topic sensitivity" since 2026-09-30,
+  because "exposure" is easily read as a dollar exposure to the asset.
+
+What the lab covers:
 
 - **Assets**: the 55 listed multi-asset spread trades ("A v B" is long leg A,
   short leg B; outrights and "XXX v USD" pairs are long against cash), with
@@ -137,19 +162,19 @@ topics explain out of sample. The spec and decisions are in `DESIGN.md` Part G.
   generic topics.
 - **Simulation**: each topic's attention is built from the returns of the
   assets it is linked to, plus noise. Links come in three tiers (strong,
-  moderate, weak) with one to three exposure values ("betas").
-- **Estimators**: the research plan's direct exposure regression (elastic net
+  moderate, weak) with one to three set sensitivities ("betas").
+- **Estimators**: the research plan's direct sensitivity regression (elastic net
   by default) and BKS Sparse IPCA, both fitted on a training window and scored
   on a separate forecast window of 1-12 weeks.
 - **Time windows**: the sidebar sets the training window by its end (cut-off)
   and a length of one month to 10 years counted back; dashboard defaults are
   6 months to 2025-06-30 and a 4-week forecast from 2025-07-01.
-- **Views**: explained variation per asset, an asset x topic exposure table in
-  the layout of the desk example, and a per-asset ranking of topic
-  contributions.
+- **Views**: explained variation per asset, an asset x topic table of
+  correlations or sensitivities (the Correlation table tab) in the layout of
+  the desk example, and a per-asset ranking of topic contributions.
 - **Compare methods**: elastic net, ridge, OLS, BKS (through its implied
-  topic exposures) and the oracle scored on the same forecast days with
-  exposures frozen at the training end, with one method at a time against
+  topic sensitivities) and the oracle scored on the same forecast days with
+  sensitivities frozen at the training end, with one method at a time against
   the oracle. BKS enters twice: with the full history before the cut-off (its
   instruments also weigh the days before the training window; the tab states
   how much) and with the training window only, which sees the data the direct

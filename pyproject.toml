@@ -22,7 +22,7 @@ stats = ["statsmodels>=0.14"]
 # Compiled Gamma-step kernel (narrative_ipca.grouplasso); without it the pure-numpy
 # reference path is used (about 30x slower on the full-size study).
 accel = ["numba>=0.59"]
-# Topic-exposure lab and dashboard (DESIGN.md Part G, D72).
+# Topic-sensitivity lab and dashboard (DESIGN.md Part G, D72).
 lab = ["streamlit>=1.40", "plotly>=5.20", "yfinance>=0.2.50", "scikit-learn>=1.4", "pyarrow>=14"]
 dev = ["pytest>=8", "pytest-cov>=4", "pyarrow>=14", "pyyaml>=6", "statsmodels>=0.14", "numba>=0.59"]
 

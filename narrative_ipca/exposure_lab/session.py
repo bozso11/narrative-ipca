@@ -1,4 +1,4 @@
-"""Cached orchestration of the topic-exposure lab stages (DESIGN.md G.10, G.13; D71, D88).
+"""Cached orchestration of the topic-sensitivity lab stages (DESIGN.md G.10, G.13; D71, D88).
 
 :class:`LabSession` runs the lab stages in order and memoises each result
 under the cache key of the sub-configuration the stage depends on

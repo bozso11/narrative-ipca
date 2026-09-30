@@ -1,4 +1,4 @@
-"""Direct topic-to-asset exposure regression of the topic-exposure lab (DESIGN.md G.7.1; D64-D66).
+"""Direct topic-to-asset sensitivity regression of the topic-sensitivity lab (DESIGN.md G.7.1; D64-D66).
 
 The plan's direct arm (research plan v0.3 Section 5): per asset ``n``, on the
 training pairs,

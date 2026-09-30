@@ -217,8 +217,8 @@ def test_heatmap_blank_cells_are_nan_and_average_counts_blanks_as_zero() -> None
     values = _exposure_frame(5, 7, offset=2)
     values.iloc[0, 1] = np.nan  # a missing value is blank too
     blank = values.abs() < 0.3
-    fig = charts.exposure_heatmap(values, blank=blank, value_label="Estimated exposure")
-    z = np.array(_trace(fig, "Estimated exposure").z, dtype=float)
+    fig = charts.exposure_heatmap(values, blank=blank, value_label="Estimated sensitivity")
+    z = np.array(_trace(fig, "Estimated sensitivity").z, dtype=float)
     expected_blank = blank.to_numpy() | values.isna().to_numpy()
     assert z.shape == values.shape
     assert np.isnan(z[expected_blank]).all()
@@ -231,7 +231,7 @@ def test_heatmap_blank_cells_are_nan_and_average_counts_blanks_as_zero() -> None
     assert fig.layout.yaxis2.domain[1] < fig.layout.yaxis.domain[0]  # separated by a gap
 
     # text only on displayed cells; white on strong cells, ink otherwise
-    text = _trace(fig, "Estimated exposure values")
+    text = _trace(fig, "Estimated sensitivity values")
     assert len(text.text) == int((~expected_blank).sum())
     zmax = fig.layout.coloraxis.cmax
     for x, y, colour in zip(text.x, text.y, text.textfont.color):
@@ -255,7 +255,7 @@ def test_heatmap_layout_rows_top_down_labels_on_top() -> None:
 
 def test_heatmap_zmax_default_for_non_correlation_values() -> None:
     values = _exposure_frame(3, 3) * 0.1
-    fig = charts.exposure_heatmap(values, value_label="True exposure")
+    fig = charts.exposure_heatmap(values, value_label="True sensitivity")
     assert fig.layout.coloraxis.cmax == pytest.approx(values.abs().to_numpy().max())
     assert fig.layout.coloraxis.cmin == pytest.approx(-values.abs().to_numpy().max())
 
@@ -409,7 +409,7 @@ def test_r2_bars_sorted_descending_with_clipping_note() -> None:
     xs = np.asarray(bars.x, dtype=float)[order]
     assert list(xs) == sorted(xs, reverse=True)
     assert fig.layout.yaxis.range[0] > fig.layout.yaxis.range[1]
-    assert _trace(fig, "Oracle (true exposures)").marker.color == charts.ORANGE
+    assert _trace(fig, "Oracle (true sensitivities)").marker.color == charts.ORANGE
 
     r2_low = r2.copy()
     r2_low.iloc[0] = -3.0
@@ -573,10 +573,11 @@ def test_method_colours_stay_with_the_training_window_bks_method() -> None:
 def test_method_r2_dots_sorted_by_oracle_colours_symbols_and_hover() -> None:
     r2 = _method_r2()
     labels = {"elastic_net": "Elastic net", "ridge": "Ridge (GCV)", "bks_implied": "BKS-implied",
-              "oracle": "Oracle (true exposures)"}
+              "oracle": "Oracle (true sensitivities)"}
     fig = charts.method_r2_dots(r2, labels={"A0": "Energy v World EQ"}, method_labels=labels)
     # one marker series per method, the oracle last (on top) as an ink tick; legend shown
-    assert [t.name for t in fig.data] == ["Elastic net", "Ridge (GCV)", "BKS-implied", "Oracle (true exposures)"]
+    assert [t.name for t in fig.data] == ["Elastic net", "Ridge (GCV)", "BKS-implied",
+                                          "Oracle (true sensitivities)"]
     assert all(t.mode == "markers" for t in fig.data)
     assert [t.marker.color for t in fig.data[:3]] == list(charts.CATEGORICAL[:3])
     assert [t.marker.symbol for t in fig.data[:3]] == list(charts.METHOD_SYMBOLS[:3])

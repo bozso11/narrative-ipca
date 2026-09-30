@@ -525,7 +525,7 @@ def test_both_bks_variants_in_one_comparison():
     res2 = s.comparison(cfg, methods=methods)
     assert res2.summary["available"].all() and list(res2.summary.index) == list(methods)
     assert list(res2.summary["label"]) == ["Elastic net", "BKS-implied (full history)",
-                                           "BKS-implied (training window)", "Oracle (true exposures)"]
+                                           "BKS-implied (training window)", "Oracle (true sensitivities)"]
     f_full, f_train = res2.fits["bks_implied"], res2.fits["bks_implied_train"]
     assert (f_full.method, f_train.method) == ("bks_implied", "bks_implied_train")
     assert f_full.meta["history"] == "full" and f_train.meta["history"] == "training"
@@ -640,7 +640,7 @@ def test_ridge_note_names_the_gcv_lower_edge(session_run):
     edge = dataclasses.replace(ridge, meta={**ridge.meta, "gcv_at_lower_edge": 7})
     out = compare_methods(s.simulation(cfg), s.shocks(cfg), s.truth(cfg), cfg.window, {"ridge": edge})
     assert out.summary.loc["ridge", "note"] == (
-        "GCV chose the smallest lambda of its grid for 7 of 30 assets, so their exposures are close to OLS."
+        "GCV chose the smallest lambda of its grid for 7 of 30 assets, so their sensitivities are close to OLS."
     )
 
 

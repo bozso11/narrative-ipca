@@ -1,12 +1,13 @@
-"""Run the topic-exposure lab once from the command line (DESIGN.md G.9, G.13).
+"""Run the topic-sensitivity lab once from the command line (DESIGN.md G.9, G.13).
 
 Runs every lab stage for one configuration with
 :func:`narrative_ipca.exposure_lab.session.run_lab` and writes the results:
 
-* ``exposure_corr.csv``: OOS correlation, assets x topics (the exposure table
+* ``oos_corr.csv``: OOS correlation, assets x topics (the correlation table
   of G.9, no blank rule);
-* ``exposures.csv``: estimated and true exposure and the design value per
-  topic-asset pair (long form, standardised units);
+* ``sensitivities.csv``: per topic-asset pair (long form, standardised units)
+  the estimated sensitivity ``b_hat``, the true sensitivity ``b_true``, the set
+  sensitivity ``w_set`` and whether the estimator selected the pair;
 * ``r2.csv``: per asset OOS R2 of the estimator and the oracle, population R2,
   realised, explained and residual move over the forecast window;
 * ``contributions.csv``: per topic-asset pair the contribution and the true
@@ -25,6 +26,13 @@ Usage (from the repository root)::
 The config file is JSON or YAML with the fields of
 :class:`~narrative_ipca.exposure_lab.config.LabConfig` (missing fields keep
 their defaults). The default output folder is ``output/lab/<config hash>``.
+
+Naming: a topic sensitivity is the expected return response of an asset to a
+one-standard-deviation attention shock in a topic, with the other topics'
+shocks held fixed. In code, "exposure" means topic sensitivity (the package
+``exposure_lab``, the config section ``exposure``). The output files were
+``exposure_corr.csv`` and ``exposures.csv`` (column ``w_design``) until
+2026-09-30.
 """
 
 from __future__ import annotations
@@ -73,18 +81,18 @@ def write_outputs(out: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     cfg: LabConfig = out["config"]
     ev, fit, truth, sim = out["evaluation"], out["direct"], out["truth"], out["simulation"]
 
-    ev.corr.to_csv(out_dir / "exposure_corr.csv", float_format="%.6g")
+    ev.corr.to_csv(out_dir / "oos_corr.csv", float_format="%.6g")
 
     pairs = pd.DataFrame(
         {
             "b_hat": fit.B_hat.stack(),
             "b_true": truth.B_true.reindex(index=fit.B_hat.index, columns=fit.B_hat.columns).stack(),
-            "w_design": truth.W.reindex(index=fit.B_hat.index, columns=fit.B_hat.columns).stack(),
+            "w_set": truth.W.reindex(index=fit.B_hat.index, columns=fit.B_hat.columns).stack(),
             "selected": fit.selected.stack(),
         }
     )
     pairs.index.names = ["topic_id", "asset_id"]
-    pairs.to_csv(out_dir / "exposures.csv", float_format="%.6g")
+    pairs.to_csv(out_dir / "sensitivities.csv", float_format="%.6g")
 
     r2 = pd.DataFrame(
         {
@@ -163,7 +171,7 @@ def write_outputs(out: dict[str, Any], out_dir: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the topic-exposure lab once and write its results.")
+    parser = argparse.ArgumentParser(description="Run the topic-sensitivity lab once and write its results.")
     parser.add_argument("--config", type=Path, default=None, help="JSON or YAML LabConfig (default: LabConfig()).")
     parser.add_argument("--bks", action="store_true", help="Also fit and evaluate BKS Sparse IPCA (weekly).")
     parser.add_argument("--out", type=Path, default=None, help="Output folder (default: output/lab/<config hash>).")
@@ -184,7 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = write_outputs(out, out_dir)
     rec = summary["recovery"]
     lines = [
-        f"Topic-exposure lab: {summary['n_assets']} assets x {summary['n_topics']} topics, {summary['n_links']} links",
+        f"Topic-sensitivity lab: {summary['n_assets']} assets x {summary['n_topics']} topics, "
+        f"{summary['n_links']} links",
         f"  forecast window {summary['forecast_first_day']} to {summary['forecast_last_day']} "
         f"({summary['forecast_days']} return days)",
         f"  median OOS R2: estimator {summary['median_r2']:.3f}, oracle {summary['median_r2_oracle']:.3f}, "

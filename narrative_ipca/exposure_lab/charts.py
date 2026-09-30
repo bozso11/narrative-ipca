@@ -1,4 +1,4 @@
-"""Plotly figure builders for the topic-exposure lab (DESIGN.md G.9, G.13; D52, D67-D70).
+"""Plotly figure builders for the topic-sensitivity lab (DESIGN.md G.9, G.13; D52, D67-D70).
 
 Pure functions from pandas objects to ``plotly.graph_objects.Figure``. No
 Streamlit imports: the dashboard (``dashboard/app.py``) only displays what
@@ -993,7 +993,7 @@ def r2_bars(
                 y=pos,
                 mode="markers",
                 marker={"symbol": "circle", "size": 9, "color": ORANGE, "line": {"width": 1.5, "color": SURFACE}},
-                name="Oracle (true exposures)",
+                name="Oracle (true sensitivities)",
                 hovertext=[f"{_esc(n)}<br>Oracle R²: {_fmt(v, 3)}" for n, v in zip(names, o.to_numpy())],
                 hovertemplate="%{hovertext}<extra></extra>",
             )
@@ -1550,20 +1550,20 @@ def exposure_scatter(
         Optional boolean frame (same orientation), ``True`` where the pair is
         linked in the design ``W``; linked pairs are blue, the others muted.
     title:
-        Title (default "Estimated vs true exposure").
+        Title (default "Estimated vs true sensitivity").
     """
-    title = title if title is not None else "Estimated vs true exposure"
+    title = title if title is not None else "Estimated vs true sensitivity"
     est = _float_frame(estimate)
     tru = _float_frame(truth)
     if est.size == 0 or tru.size == 0:
-        return _empty_figure("No exposures to compare", title=title)
+        return _empty_figure("No sensitivities to compare", title=title)
     rows = est.index.intersection(tru.index, sort=False)
     cols = est.columns.intersection(tru.columns, sort=False)
     e = est.reindex(index=rows, columns=cols).to_numpy()
     t = tru.reindex(index=rows, columns=cols).to_numpy()
     ok = np.isfinite(e) & np.isfinite(t)
     if not ok.any():
-        return _empty_figure("No exposures to compare", title=title)
+        return _empty_figure("No sensitivities to compare", title=title)
 
     ri, ci = np.nonzero(ok)
     xv, yv = t[ri, ci], e[ri, ci]
@@ -1605,8 +1605,9 @@ def exposure_scatter(
     subtitle = f"{n_pts} topic-asset pairs"
     fig.update_layout(**_base_layout(title, 480, subtitle=subtitle, legend=legend))
     _style_axes(fig)
-    fig.update_xaxes(range=[lo, hi], title={"text": "True exposure (standardised units)"}, **_ZERO_LINE)
-    fig.update_yaxes(range=[lo, hi], title={"text": "Estimated exposure"}, scaleanchor="x", scaleratio=1, **_ZERO_LINE)
+    fig.update_xaxes(range=[lo, hi], title={"text": "True sensitivity (standardised units)"}, **_ZERO_LINE)
+    fig.update_yaxes(range=[lo, hi], title={"text": "Estimated sensitivity"}, scaleanchor="x", scaleratio=1,
+                     **_ZERO_LINE)
     return fig
 
 

@@ -1,4 +1,4 @@
-"""Data-generating process of the topic-exposure lab: topics built from prices (DESIGN.md G.5; D60-D64, D71).
+"""Data-generating process of the topic-sensitivity lab: topics built from prices (DESIGN.md G.5; D60-D64, D71).
 
 Owner decision D60: asset returns stay as they are (real or artificial) and
 each topic's attention is built from the returns of its linked assets plus

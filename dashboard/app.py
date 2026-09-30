@@ -1,4 +1,14 @@
-"""Streamlit dashboard of the topic-exposure lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85, D88).
+"""Streamlit dashboard of the topic-sensitivity lab (DESIGN.md G.9, G.10, G.15; D66-D70, D80, D83-D85, D88).
+
+Terminology: the **topic sensitivity** of asset ``n`` to topic ``k`` is the
+expected return response of asset ``n`` to a one-standard-deviation attention
+shock in topic ``k``, with the other topics' shocks held fixed (the
+coefficient ``b_kn`` in the regression of the asset's return on all topics'
+attention shocks at once). It is not a position size or dollar exposure. The
+page text says "sensitivity" (renamed 2026-09-30); in code, "exposure" means
+topic sensitivity: ``exposure_tab``, the ``ex_`` widget keys,
+``ExposureConfig``, ``B_hat``, the package ``narrative_ipca.exposure_lab`` and
+the module ``real_exposures`` keep the older word.
 
 Run from the repository root::
 
@@ -6,7 +16,7 @@ Run from the repository root::
 
 Two pages in the top navigation (D82): **Simulation lab** (this module's
 ``main``) and **Real data** (``real_exposures.py``, a placeholder until the
-research pipeline delivers exposures).
+research pipeline delivers topic sensitivities).
 
 The sidebar is shared by both pages (owner request 2026-09-29): the
 entrypoint at the bottom of this module draws it and validates its values
@@ -23,7 +33,7 @@ config key and flagged as stale when the settings change. A cached BKS fit is
 reused automatically only when this browser session requested it.
 
 The Compare methods tab (G.15, D83) reads the session's ``comparison``
-stage: the direct fits and the BKS-implied exposures are cached by their
+stage: the direct fits and the BKS-implied sensitivities are cached by their
 training keys, so changing only the forecast window re-scores them without
 refitting. The tab never starts a BKS fit; it offers a Run BKS button that
 fits every selected BKS variant (full history, training window only; D88)
@@ -80,7 +90,7 @@ from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, LabSession
 
 logger = logging.getLogger("dashboard.app")
 
-st.set_page_config(page_title="Topic-exposure lab", layout="wide")
+st.set_page_config(page_title="Topic-sensitivity lab", layout="wide")
 
 _VALUES = "_values"
 _EFFECTIVE = "_effective"
@@ -127,6 +137,21 @@ D47_NOTE = (
     "information."
 )
 
+#: Data and method tab: the definition of the topic sensitivity (owner decision 2026-09-30). The only page
+#: text that says "exposure", to explain the old name.
+TERMINOLOGY = (
+    "**Topic sensitivity** $b_{k,n}$ (the matrix $B$, topics x assets): the expected return response of asset $n$ "
+    "to a one-standard-deviation attention shock in topic $k$, with the other topics' shocks held fixed. It is the "
+    "coefficient in the regression of the asset's return on all topics' attention shocks at once (step 6 below). "
+    "Its units are % per one-standard-deviation shock, or standardised units (the return divided by its standard "
+    "deviation), in which case $b^2$ is about the share of variance the topic explains. It says how an asset's "
+    "return moves with news attention, not how much of the asset a portfolio holds. The lab shows three versions: "
+    "the set sensitivity $W$ (set with the link map and the betas), the true sensitivity $B_{true}$ (the "
+    "population value the simulation produces, including spillovers) and the estimated sensitivity $\\hat B$ "
+    "(each method's training-window estimate). Formerly called 'exposure', a word easily read as a dollar "
+    "exposure; the code keeps the old name."
+)
+
 #: Compare tab: the pointer to the reasons (DESIGN.md G.15.1).
 WHY_BKS_LOWER_CAPTION = (
     "Why the BKS-implied rows score lower than the direct methods: see the Data and method tab (DESIGN.md G.15.1)."
@@ -134,12 +159,13 @@ WHY_BKS_LOWER_CAPTION = (
 
 #: Data and method tab: the reasons, measured on the dashboard defaults (DESIGN.md G.15.1; mean over noise seeds 0-2).
 WHY_BKS_LOWER = (
-    "The loss is in the step that turns the BKS fit back into topic exposures (BKS Eq. 5). Measured on the "
+    "The loss is in the step that turns the BKS fit back into topic sensitivities (BKS Eq. 5). Measured on the "
     "dashboard defaults, mean over noise seeds 0-2:\n\n"
-    "1. **The directions BKS keeps.** The implied exposures keep only the part of each asset's topic covariances "
-    "that lies in the K directions BKS fitted to explain weekly returns. With K = 3 those directions hold 3% "
-    "(lambda 0) to 38% (tuned) of the instruments' variation; the best three directions would hold 92%. This "
-    "step costs about 12 points of median OOS R² and 0.6 of Spearman correlation with the true exposures.\n"
+    "1. **The directions BKS keeps.** The implied sensitivities keep only the part of each asset's topic "
+    "covariances that lies in the K directions BKS fitted to explain weekly returns. With K = 3 those directions "
+    "hold 3% (lambda 0) to 38% (tuned) of the instruments' variation; the best three directions would hold 92%. "
+    "This step costs about 12 points of median OOS R² and 0.6 of Spearman correlation with the true "
+    "sensitivities.\n"
     "2. **Not the number of factors.** The best three directions of the same covariances score 10.7%, against "
     "11.0% with all 20.\n"
     "3. **Not the extra history, the units or the constant.** The full-history instruments alone score 11.0%, "
@@ -148,7 +174,7 @@ WHY_BKS_LOWER = (
     "4. **The training-window variant** goes through the same step from weaker instruments (about as good as "
     "OLS) and scores lower still: -36% on average.\n\n"
     "BKS is built to find the few factors that price the assets and the topics behind them, and it recovers "
-    "the factor betas well (D52). The exposure of each asset to each topic is what the direct methods estimate."
+    "the factor betas well (D52). The direct methods estimate the sensitivity of each asset to each topic."
 )
 
 
@@ -298,24 +324,25 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
         n_topics = n_manual + n_gen
         st.caption(f"L = {n_manual} manual + {n_gen} generic = {n_topics} topics.")
 
-    with sb.expander("Exposures", expanded=True):
+    with sb.expander("Sensitivities", expanded=True):
         n_betas = control(
-            "radio", "Number of betas", "sb_n_betas", options=[1, 2, 3], horizontal=True,
+            "radio", "Number of set sensitivities (betas)", "sb_n_betas", options=[1, 2, 3], horizontal=True,
             help="1: one value for every link. 2: strong links, and moderate plus weak links. 3: one value per tier.",
         )
         names = {1: ["all links"], 2: ["strong links", "moderate and weak links"],
                  3: ["strong links", "moderate links", "weak links"]}[n_betas]
         betas = []
         for i, name in enumerate(names, start=1):
-            betas.append(control("slider", f"Beta {i}: {name}", f"sb_beta_{i}", min_value=0.0, max_value=0.95,
-                                 step=0.01))
+            betas.append(control("slider", f"Set sensitivity {i}: {name}", f"sb_beta_{i}", min_value=0.0,
+                                 max_value=0.95, step=0.01))
         w = int(values.get("sb_shock_window", 5))
         acfg = AttentionConfig()
         att = attenuation(acfg.kappa, acfg.slow_ar1, acfg.slow_sd_ratio, w)
         implied = ", ".join(f"beta {i} = {b:.2f} about {_ui.fmt_pct(b * b)}" for i, b in enumerate(betas, 1))
         st.caption(
             "Standardised units, before feasibility scaling:\n\n"
-            "- a topic linked to one asset with value beta has shocks correlated about beta with its return;\n"
+            "- a topic linked to one asset with set sensitivity beta has shocks correlated about beta with its "
+            "return;\n"
             f"- it then explains about beta² of the asset's variance ({implied});\n"
             f"- the observed shock is attenuated by about {att:.2f} at w = {w}."
         )
@@ -380,8 +407,8 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
                 if est > 5.0:
                     st.warning(
                         f"Cross-validation fits each asset separately: about {est:.0f} s for {n_topics} topics and "
-                        f"{n_assets} assets, repeated after every change to the universe, topics, exposures or "
-                        "training window."
+                        f"{n_assets} assets, repeated after every change to the universe, topics, sensitivities "
+                        "or training window."
                     )
             control("slider", "L1 ratio", "sb_l1_ratio", min_value=0.05, max_value=1.0, step=0.05)
         elif method == "ridge":
@@ -390,8 +417,8 @@ def sidebar(ref_assets: pd.DataFrame | None, on_simulation: bool = True) -> dict
                 control("number_input", "Ridge lambda", "sb_ridge_lambda", min_value=0.0, max_value=100.0,
                         step=0.01, format="%.4f")
         control("slider", "Selection threshold tau", "sb_select_tau", min_value=0.0, max_value=0.3, step=0.01,
-                help="Dense methods select a pair when |b| >= tau; recovery counts a pair as truly exposed when "
-                "its true exposure is at least tau in absolute value.")
+                help="Dense methods select a pair when |b| >= tau; recovery counts a pair as truly sensitive "
+                "when its true sensitivity is at least tau in absolute value.")
 
     with sb.expander("BKS model", expanded=False):
         history = control(
@@ -446,8 +473,8 @@ def overview_tab(ctx: dict[str, Any]) -> None:
         ("Median OOS R², estimator", _ui.fmt_pct(_ui.median_finite(ev.r2)),
          "Median over assets of 1 - sum (r - rhat)² / sum r² in the forecast window (uncentered, topics only)."),
         ("Median OOS R², oracle", _ui.fmt_pct(_ui.median_finite(ev.r2_oracle)),
-         "The same with the true exposures and the estimator's training scales: what the estimator would "
-         "reach if it recovered the true exposures exactly. No forecast-window data enters it."),
+         "The same with the true sensitivities and the estimator's training scales: what the estimator would "
+         "reach if it recovered the true sensitivities exactly. No forecast-window data enters it."),
         ("Median population R²", _ui.fmt_pct(_ui.median_finite(truth.r2_true)),
          "Share of each asset's variance the topics explain in the simulation (G.5.3)."),
         ("Assets with positive OOS R²", _ui.fmt_pct(_ui.share_positive(ev.r2), 0),
@@ -456,9 +483,10 @@ def overview_tab(ctx: dict[str, Any]) -> None:
         ("Sign agreement", _ui.fmt_pct(rec.get("sign_agreement"), 0),
          "Share of linked and selected pairs whose estimated sign equals the true sign."),
         ("MCC", _ui.fmt_num(rec.get("mcc")),
-         "Matthews correlation of 'selected' against 'truly exposed' (true exposure at least tau in absolute "
-         "value), over all pairs."),
-        ("Spearman", _ui.fmt_num(rec.get("spearman")), "Rank correlation of estimated and true exposures, all pairs."),
+         "Matthews correlation of 'selected' against 'truly sensitive' (true sensitivity at least tau in "
+         "absolute value), over all pairs."),
+        ("Spearman", _ui.fmt_num(rec.get("spearman")),
+         "Rank correlation of estimated and true sensitivities, all pairs."),
     ]
     for row in (tiles[:4], tiles[4:]):
         for col, (label, value, help_) in zip(st.columns(4), row):
@@ -492,7 +520,7 @@ def overview_tab(ctx: dict[str, Any]) -> None:
         if low:
             parts.append(f"the smallest lambda of its grid for {_ui.plural(low, 'asset')} (close to OLS)")
         if high:
-            parts.append(f"the largest for {_ui.plural(high, 'asset')} (exposures shrunk towards zero)")
+            parts.append(f"the largest for {_ui.plural(high, 'asset')} (sensitivities shrunk towards zero)")
         st.caption(f"Ridge GCV chose {' and '.join(parts)}.")
 
     c1, c2 = st.columns([1.05, 1])
@@ -504,8 +532,8 @@ def overview_tab(ctx: dict[str, Any]) -> None:
             st.caption(f"Showing the 100 assets with the highest OOS R² of {len(ev.r2)}.")
         show_chart(charts.r2_bars(r2, r2o, r2t, labels=ctx["a_labels"]), "fig_r2")
         st.caption(
-            "Bars: estimator. Circles: oracle (true exposures, same training scales). Ticks: population R² of the "
-            "simulation. R² is uncentered over the window's return days, topics only, no intercept."
+            "Bars: estimator. Circles: oracle (true sensitivities, same training scales). Ticks: population R² of "
+            "the simulation. R² is uncentered over the window's return days, topics only, no intercept."
         )
     with c2:
         weeks = ctx["cfg"].window.forecast_weeks
@@ -530,7 +558,7 @@ def exposure_tab(ctx: dict[str, Any]) -> None:
     if len(days):
         st.markdown(
             f"**Forecast window** {days[0].date()} to {days[-1].date()} · **{ev.n_days} return days** · "
-            f"exposures fitted on {cfg.window.train_start} to {cfg.window.train_end} (out of sample)."
+            f"sensitivities fitted on {cfg.window.train_start} to {cfg.window.train_end} (out of sample)."
         )
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -600,20 +628,21 @@ def exposure_tab(ctx: dict[str, Any]) -> None:
     notes = {
         "OOS correlation": "Pearson correlation over the forecast window of the asset's daily return with the topic's "
         "observed standardised shock on the matching shock day (at least 3 days).",
-        "Estimated exposure": "Training-window exposure b of the direct estimator.",
-        "True exposure": "Population exposure of the simulation on the observed shocks; it includes "
+        "Estimated sensitivity": "Training-window topic sensitivity b of the direct estimator: the expected return "
+        "response to a one-standard-deviation shock in the topic, with the other topics' shocks held fixed.",
+        "True sensitivity": "Population sensitivity of the simulation on the observed shocks; it includes "
         "spillovers through correlated assets, so it is not sparse.",
-        "Design value (W)": "Exposure value set by the link map and the betas (after feasibility scaling).",
-        "OOS contribution (% points)": "Frozen training exposure times the topic's realised shocks over the window, "
-        "in percentage points of return.",
+        "Set sensitivity (W)": "Sensitivity set with the link map and the betas (after feasibility scaling).",
+        "OOS contribution (% points)": "Frozen training sensitivity times the topic's realised shocks over the "
+        "window, in percentage points of return.",
     }
     unit_note = ""
     if metric in _ui.EXPOSURE_METRICS and units == _ui.EXPOSURE_UNITS[1]:
-        unit_note = " The % view multiplies every exposure metric by the asset's training volatility."
+        unit_note = " The % view multiplies every sensitivity metric by the asset's training volatility."
     st.caption(notes[metric] + unit_note + " Columns: manual topics in ontology order, then generic topics by mean "
                "|value|.")
     csv = tbl["values"].rename(index=ctx["a_labels"]).to_csv().encode("utf-8")
-    st.download_button("Download the table (CSV)", data=csv, file_name="exposure_table.csv", mime="text/csv",
+    st.download_button("Download the table (CSV)", data=csv, file_name="sensitivity_table.csv", mime="text/csv",
                        key="ex_download", on_click="ignore")
 
 
@@ -641,7 +670,7 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
         m[0].metric("Realised move", _ui.fmt_pts(ev.realized.get(asset)), border=True,
                     help="Sum of the asset's daily returns over the window.")
         m[1].metric("Explained by topics", _ui.fmt_pts(ev.explained.get(asset)), border=True,
-                    help="Sum of the topic contributions (estimated exposures).")
+                    help="Sum of the topic contributions (estimated sensitivities).")
         m[2].metric("Not explained by topics", _ui.fmt_pts(ev.residual.get(asset)), border=True,
                     help="Realised move minus the explained move.")
     else:
@@ -651,7 +680,7 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
         m[0].metric("Share explained by topics", _ui.fmt_pct(shares.sum(min_count=1)), border=True,
                     help="Share of the window's return variation that co-moves with the topics; the bars sum to it.")
         m[1].metric("True share (simulation)", _ui.fmt_pct(shares_true.sum(min_count=1)), border=True,
-                    help="The same share with the simulation's true exposures.")
+                    help="The same share with the simulation's true sensitivities.")
         m[2].metric("Largest topic", f"{top} · {_ui.fmt_pct(shares.get(top))}" if top is not None else "n/a",
                     border=True, help=f"{t_labels.get(top, top)}" if top is not None else None)
     m[3].metric("OOS R², estimator / oracle",
@@ -693,18 +722,18 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
         "How to read the two views:\n\n"
         "- Variance share (default): each topic's share of the window's day-to-day return variation. It uses "
         "every day of the window.\n"
-        "- Return attribution: each topic's exposure, estimated on the training window and frozen, times the sum "
-        "of its standardised shocks over the window, times the asset's training volatility. The contributions and "
-        "the residual add up exactly to the realised move.\n"
+        "- Return attribution: each topic's sensitivity, estimated on the training window and frozen, times the "
+        "sum of its standardised shocks over the window, times the asset's training volatility. The contributions "
+        "and the residual add up exactly to the realised move.\n"
         "- Summed shocks largely cancel over a window: each shock is attention minus its trailing mean, so their "
         "sum depends mostly on the attention level at the window's edges. The return attribution therefore "
         "understates the topics' role, and the explained line in the cumulative chart drifts back towards zero.\n"
-        "- Diamonds use the true exposures of the simulation."
+        "- Diamonds use the true sensitivities of the simulation."
     )
     with st.expander("Why this method"):
         st.markdown(
-            "The lab uses the out-of-sample linear regression proposed for this question: exposures fitted on the "
-            "training window, frozen, and applied to the window's shocks.\n\n"
+            "The lab uses the out-of-sample linear regression proposed for this question: sensitivities fitted on "
+            "the training window, frozen, and applied to the window's shocks.\n\n"
             "1. **A regression inside the window** is rejected. It is in-sample for the window and has 5 to 60 "
             "daily observations against 9 to 520 topics, so it is either not identified or fits noise.\n"
             "2. **One-topic-at-a-time regressions** double count correlated topics and do not add up to the move.\n"
@@ -785,7 +814,7 @@ def _inspect_control(options: list[str], default: str, format_func: Any) -> str:
 
 
 def compare_tab(ctx: dict[str, Any]) -> None:
-    """Compare methods (G.15, D83): every method scored on the same forecast days, exposures frozen at the cut-off."""
+    """Compare methods (G.15, D83): all methods on the same forecast days, sensitivities frozen at the cut-off."""
     cfg, session, truth = ctx["cfg"], ctx["session"], ctx["truth"]
     a_labels = ctx["a_labels"]
     w = cfg.window
@@ -799,10 +828,10 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     if store is not None and store["key"] == ctx["bks_key"]:
         bks_r2 = f" (here {_ui.fmt_pct(store['result'].r2_pooled)})"
     st.caption(
-        "Every method is scored on the same forecast days, with its exposures frozen at the training end.\n\n"
+        "Every method is scored on the same forecast days, with its sensitivities frozen at the training end.\n\n"
         "- The direct methods are fitted on the training window only.\n"
-        "- BKS enters through its implied exposures: the topic-asset covariances that the BKS fit implies for "
-        "each asset, turned into exposures with the training covariance of the topic shocks. Both BKS variants "
+        "- BKS enters through its implied sensitivities: the topic-asset covariances that the BKS fit implies for "
+        "each asset, turned into sensitivities with the training covariance of the topic shocks. Both BKS variants "
         "use the sidebar's BKS model and differ in the covariance history and the return scaling.\n"
         "- BKS-implied (full history) sees more past data than the direct methods. Its Gamma and scales use the "
         "training window, but its instruments weigh all days before the cut-off (half-life "
@@ -811,7 +840,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         "and return scales start at the training start. It is the like-for-like BKS figure.\n"
         f"- The BKS tab's OOS R²{bks_r2} fits K factors to each forecast week's own returns, so it cannot be set "
         "next to the direct methods. The BKS-implied rows here are the comparable figures.\n"
-        "- The oracle uses the true exposures of the simulation. It is the reference, not an estimator."
+        "- The oracle uses the true sensitivities of the simulation. It is the reference, not an estimator."
     )
     options = list(lab_compare.METHODS)
 
@@ -859,8 +888,8 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         "data, with every training fit frozen.\n"
         "- Windows above the oracle: the share of those windows where the method's median R² beats the oracle's. "
         "The oracle is not the best fit in every window, so a method can beat it by chance.\n"
-        "- The columns from Selected pairs to RMSE compare each method's training exposures with the true "
-        "exposures, over all topic-asset pairs (as on the Overview).\n"
+        "- The columns from Selected pairs to RMSE compare each method's training sensitivities with the true "
+        "sensitivities, over all topic-asset pairs (as on the Overview).\n"
         "- Fit time: seconds to fit on the training window; for the BKS-implied rows, the BKS panel and fit plus "
         "the conversion. The oracle row is last, as the reference. A dash marks a figure that does not apply."
     )
@@ -924,10 +953,10 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     m[1].metric("Sign agreement", _ui.fmt_pct(rec.get("sign_agreement"), 0), border=True,
                 help="Share of linked and selected pairs whose estimated sign equals the true sign.")
     m[2].metric("MCC", _ui.fmt_num(rec.get("mcc")), border=True,
-                help="Matthews correlation of 'selected' against 'truly exposed' (true exposure at least tau in "
-                "absolute value), over all pairs.")
+                help="Matthews correlation of 'selected' against 'truly sensitive' (true sensitivity at least tau "
+                "in absolute value), over all pairs.")
     m[3].metric("Spearman", _ui.fmt_num(rec.get("spearman")), border=True,
-                help="Rank correlation of estimated and true exposures, all pairs.")
+                help="Rank correlation of estimated and true sensitivities, all pairs.")
     if inspect in lab_compare.BKS_METHODS:
         meta = fit.meta
         n_topics = len(fit.B_hat.index)
@@ -945,14 +974,15 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         )
     skipped = [a_labels.get(a, a) for a in fit.meta.get("skipped_assets", [])]
     if skipped:
-        st.caption(f"{len(skipped)} asset(s) with too few training days get zero exposures: {', '.join(skipped)}.")
+        st.caption(f"{len(skipped)} asset(s) with too few training days get zero sensitivities: "
+                   f"{', '.join(skipped)}.")
 
     c1, c2 = st.columns(2)
     with c1:
         linked = truth.W_unscaled != 0
         est, n_total = _ui.subsample_pairs(fit.B_hat, linked, max_points=20000)
         show_chart(charts.exposure_scatter(est, truth.B_true, linked=linked,
-                                           title=f"Estimated vs true exposure: {name}"), "fig_cm_scatter")
+                                           title=f"Estimated vs true sensitivity: {name}"), "fig_cm_scatter")
         if est.size and n_total > int(np.isfinite(est.to_numpy()).sum()):
             st.caption(f"Showing all linked pairs and a seeded sample of the others ({n_total} pairs in total).")
     with c2:
@@ -963,8 +993,8 @@ def compare_tab(ctx: dict[str, Any]) -> None:
             st.caption(f"Showing the 100 assets with the highest OOS R² of {len(ev.r2)}.")
         show_chart(charts.r2_bars(r2m, r2o, r2t, labels=a_labels, name=name,
                                   title=f"Out-of-sample R² per asset: {name}"), "fig_cm_r2_inspect")
-        st.caption(f"Bars: {name}. Circles: oracle (true exposures, same training scales). Ticks: population R² "
-                   "of the simulation.")
+        st.caption(f"Bars: {name}. Circles: oracle (true sensitivities, same training scales). Ticks: population "
+                   "R² of the simulation.")
 
 
 def bks_tab(ctx: dict[str, Any]) -> None:
@@ -1184,6 +1214,7 @@ def lists_tab(ctx: dict[str, Any]) -> None:
 
 def method_tab(ctx: dict[str, Any]) -> None:
     st.subheader("Method")
+    st.markdown(TERMINOLOGY)
     st.markdown(
         "Asset returns are real (or artificial); topic attention is simulated from them with a known link "
         "structure, so the lab can compare estimates with the truth (DESIGN.md G.5-G.8)."
@@ -1192,9 +1223,10 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "1. **Returns.** $r_{n,t}$ is asset $n$'s daily return on day $t$. The standardised return "
         "$\\tilde r_{n,t} = (r_{n,t} - \\mu_n)/\\sigma_n$ uses the full-sample mean $\\mu_n$ and standard deviation "
         "$\\sigma_n$ and is clipped at $\\pm 8$.\n"
-        "2. **Designed shocks.** Topic $k$'s designed attention shock on day $t$ is the exposure-weighted sum of its "
-        "linked assets' standardised returns $l$ days later (the lead $l$ is 0 or 1) plus news noise $u_{k,t}$ with "
-        "unit variance. $W_k$ is row $k$ of the design matrix (sign times beta on linked pairs, 0 elsewhere), and "
+        "2. **Designed shocks.** Topic $k$'s designed attention shock on day $t$ is the sum of its linked assets' "
+        "standardised returns $l$ days later (the lead $l$ is 0 or 1), weighted by the set sensitivities, plus news "
+        "noise $u_{k,t}$ with unit variance. $W_k$ is row $k$ of the design matrix $W$ of set sensitivities (sign "
+        "times beta on linked pairs, 0 elsewhere), and "
         "$\\sigma_{u,k}^2 = 1 - W_k R W_k'$ makes the shock's variance 1 ($R$ the return correlation matrix):"
     )
     st.latex(r"s_{k,t} = W_k\,\tilde r_{t+l} + \sigma_{u,k}\,u_{k,t}")
@@ -1214,15 +1246,15 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "on the observed shocks ($S_z$ the shocks' correlation matrix, $C$ their covariance with the returns). They "
         "include spillovers through correlated assets, so $B_{true}$ is not sparse even though $W$ is.\n"
         "6. **Direct regression.** Per asset on the training days, with $\\hat r$ the return standardised by its "
-        "training mean and standard deviation, $\\alpha_n$ an intercept and $b_{k,n}$ the exposure; elastic net with "
-        "the universal penalty $\\sqrt{2 \\ln L / n}$ by default ($L$ topics, $n$ training days):"
+        "training mean and standard deviation, $\\alpha_n$ an intercept and $b_{k,n}$ the topic sensitivity; elastic "
+        "net with the universal penalty $\\sqrt{2 \\ln L / n}$ by default ($L$ topics, $n$ training days):"
     )
     st.latex(r"\hat r_{n,t+l} = \alpha_n + \sum_k b_{k,n}\, sh_{k,t} + e_{n,t+l}")
     st.markdown(
         "7. **Evaluation.** Over the forecast window's return days $H$, the topic-explained return is "
         "$\\hat r^{top}_{n,t+l} = \\mathrm{sd}_{train}(r_n) \\sum_k b_{k,n}\\, sh_{k,t}$. The OOS R² is uncentered; "
-        "topic $k$'s contribution $c_{k,n}$ uses the frozen exposure and the realised shocks, and the contributions "
-        "plus the residual add up to the realised move:"
+        "topic $k$'s contribution $c_{k,n}$ uses the frozen sensitivity and the realised shocks, and the "
+        "contributions plus the residual add up to the realised move:"
     )
     st.latex(r"R^2_n = 1 - \frac{\sum_H (r - \hat r^{top})^2}{\sum_H r^2}, \qquad "
              r"c_{k,n} = \mathrm{sd}_{train}(r_n)\, b_{k,n} \sum_H sh_{k,t}")
@@ -1230,10 +1262,10 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "8. **BKS Sparse IPCA** runs on weekly periods with the package stages unchanged; its per-topic split of "
         "the fitted return is not identified (D52).\n"
         "9. **Method comparison.** The Compare methods tab scores every method on the same forecast days, with its "
-        "exposures frozen at the training end. BKS enters through its implied exposures: the topic covariances "
-        "that each asset's BKS factor betas imply, turned into exposures with the training covariance of the topic "
-        "shocks (DESIGN.md G.15). It enters twice: with the full covariance history, as in BKS, and with the "
-        "training window only, which sees the data the direct methods see (D88)."
+        "sensitivities frozen at the training end. BKS enters through its implied sensitivities: the topic "
+        "covariances that each asset's BKS factor betas imply, turned into sensitivities with the training "
+        "covariance of the topic shocks (DESIGN.md G.15). It enters twice: with the full covariance history, as in "
+        "BKS, and with the training window only, which sees the data the direct methods see (D88)."
     )
 
     st.subheader("Why BKS-implied scores lower (G.15.1)")
@@ -1258,7 +1290,7 @@ def method_tab(ctx: dict[str, Any]) -> None:
         "dominated by noise. The window sweep shows the distribution across windows.\n"
         "7. **BKS identification.** D47 and D52 apply: noise topics' instruments inherit betas, and the per-topic "
         "split of BKS fitted returns is not identified.\n"
-        "8. **BKS-implied exposures.** They keep only the part of each asset's topic covariances in the K "
+        "8. **BKS-implied sensitivities.** They keep only the part of each asset's topic covariances in the K "
         "directions BKS fitted to explain weekly returns, which on the lab data carry little of the topic signal "
         "(see above). With the full history their instruments also weigh the days before the training window, so "
         "that variant is not strictly like for like; the training-window variant is, at the cost of noisy "
@@ -1402,9 +1434,9 @@ def main() -> None:
     ref_assets, legs, topics_ref, ref_error = run["ref_assets"], run["legs"], run["topics_ref"], run["ref_error"]
     sb = {"feas_slot": run["feas_slot"]}
 
-    st.title("Topic-exposure lab")
+    st.title("Topic-sensitivity lab")
     st.caption(
-        "Topic attention is simulated from asset returns with a known link structure. The direct exposure "
+        "Topic attention is simulated from asset returns with a known link structure. The direct sensitivity "
         "regression and BKS Sparse IPCA are fitted on the training window and evaluated out of sample. Every "
         "number is a property of the simulation settings, not evidence about real news."
     )

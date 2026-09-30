@@ -2,11 +2,20 @@
 
 Nothing here is simulated. The page lists the settings of the shared sidebar
 that will apply to real data, checks ``data/real/`` for the files of the data
-contract (TBC), explains what it will show, and previews the exposure table
-when an exposures file is present. The pure helpers (:func:`data_status`,
-:func:`load_exposures`, :func:`exposure_table`) have no Streamlit dependency;
-:func:`render` draws the page. The module keeps its name ``real_exposures``;
-the page was called "Real exposures" until 2026-09-29.
+contract (TBC), explains what it will show, and previews the sensitivity table
+when ``sensitivities.parquet`` is present. The pure helpers
+(:func:`data_status`, :func:`load_exposures`, :func:`exposure_table`) have no
+Streamlit dependency; :func:`render` draws the page.
+
+Naming: the page says "topic sensitivity" (the expected return response of an
+asset to a one-standard-deviation attention shock in a topic, with the other
+topics' shocks held fixed; :data:`_ui.SENSITIVITY_DEFINITION`). In code,
+"exposure" means topic sensitivity: the module keeps its name
+``real_exposures`` (the page was called "Real exposures" until 2026-09-29),
+and ``EXPOSURE_COLUMNS``, :func:`load_exposures` and :func:`exposure_table`
+keep theirs. The contract's file and value column were renamed from
+``exposures.parquet`` and ``exposure`` to ``sensitivities.parquet`` and
+``sensitivity`` on 2026-09-30.
 """
 
 from __future__ import annotations
@@ -23,9 +32,12 @@ from narrative_ipca.exposure_lab import charts, reference
 SOURCES: tuple[str, ...] = ("structural", "regression", "llm", "blended")
 COVERAGES: tuple[str, ...] = ("full", "partial", "none")
 
-#: Required columns of ``exposures.parquet`` (one row per as_of x topic x asset).
+#: File name of the topic sensitivities in ``data/real/`` (one row per as_of x topic x asset).
+SENSITIVITY_FILE = "sensitivities.parquet"
+
+#: Required columns of :data:`SENSITIVITY_FILE`; ``sensitivity`` holds the topic sensitivity.
 EXPOSURE_COLUMNS: tuple[str, ...] = (
-    "as_of", "topic_id", "asset_id", "exposure", "uncertainty", "source", "effective_window", "coverage", "version",
+    "as_of", "topic_id", "asset_id", "sensitivity", "uncertainty", "source", "effective_window", "coverage", "version",
 )
 #: Required columns of ``topics.csv``.
 TOPIC_COLUMNS: tuple[str, ...] = ("topic_id", "name", "taxonomy_class", "origin", "model_version")
@@ -43,9 +55,9 @@ CONTRACT: tuple[dict[str, str], ...] = (
         "columns": "date index; one column per topic_id",
     },
     {
-        "file": "data/real/exposures.parquet",
-        "content": "Estimated exposure of each asset to each topic, per estimation date.",
-        "columns": "as_of, topic_id, asset_id, exposure (% return per one-sd attention shock), uncertainty (sd), "
+        "file": f"data/real/{SENSITIVITY_FILE}",
+        "content": "Estimated topic sensitivity of each asset to each topic, per estimation date.",
+        "columns": "as_of, topic_id, asset_id, sensitivity (% return per one-sd attention shock), uncertainty (sd), "
                    "source (structural | regression | llm | blended), effective_window, coverage "
                    "(full | partial | none), version",
     },
@@ -83,9 +95,9 @@ def data_status(root: Path | None = None) -> pd.DataFrame:
 
 
 def load_exposures(root: Path | None = None) -> tuple[pd.DataFrame | None, list[str]]:
-    """Read and check ``exposures.parquet``; returns ``(frame or None, problems)``."""
+    """Read and check ``sensitivities.parquet``; returns ``(frame or None, problems)``."""
     root = real_dir() if root is None else Path(root)
-    path = root / "exposures.parquet"
+    path = root / SENSITIVITY_FILE
     if not path.exists():
         return None, []
     df = pd.read_parquet(path)
@@ -107,9 +119,9 @@ def load_exposures(root: Path | None = None) -> tuple[pd.DataFrame | None, list[
 
 
 def exposure_table(df: pd.DataFrame, as_of: Any, asset_order: list[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Asset x topic exposures at ``as_of`` and the blank mask (``coverage == "none"`` or missing)."""
+    """Asset x topic sensitivities at ``as_of`` and the blank mask (``coverage == "none"`` or missing)."""
     day = df[df["as_of"] == pd.Timestamp(as_of)]
-    values = day.pivot_table(index="asset_id", columns="topic_id", values="exposure", aggfunc="first")
+    values = day.pivot_table(index="asset_id", columns="topic_id", values="sensitivity", aggfunc="first")
     cov = day.pivot_table(index="asset_id", columns="topic_id", values="coverage", aggfunc="first")
     if asset_order:
         order = [a for a in asset_order if a in values.index] + [a for a in values.index if a not in asset_order]
@@ -159,9 +171,10 @@ def render(settings: dict[str, Any] | None = None) -> None:
 
     st.title("Real data")
     st.info(
-        "Placeholder. This page will show the topic exposures that the research pipeline estimates on real news "
-        "and real returns. Nothing on it is simulated, and there is no truth or oracle to compare against."
+        "Placeholder. This page will show the topic sensitivities that the research pipeline estimates on real "
+        "news and real returns. Nothing on it is simulated, and there is no truth or oracle to compare against."
     )
+    st.caption(_ui.SENSITIVITY_DEFINITION)
 
     if settings is not None:
         render_settings(settings)
@@ -174,27 +187,27 @@ def render(settings: dict[str, Any] | None = None) -> None:
 
     st.subheader("What this page will show")
     st.markdown(
-        "1. **Exposure table**: estimated exposure of each asset to each topic (% return per one-sd attention "
-        "shock) with its uncertainty, in the layout of the simulation's correlation table, for a chosen "
+        "1. **Sensitivity table**: estimated topic sensitivity of each asset to each topic (% return per one-sd "
+        "attention shock) with its uncertainty, in the layout of the simulation's correlation table, for a chosen "
         "estimation date.\n"
-        "2. **Topic contributions**: for a chosen asset and period, the frozen exposures times the realised "
+        "2. **Topic contributions**: for a chosen asset and period, the frozen sensitivities times the realised "
         "attention shocks, ranked with the largest on top, plus the part not explained by topics.\n"
         "3. **Explained variation over time**: out-of-sample R² per asset on consecutive windows.\n"
-        "4. **Provenance**: each exposure's source, estimation window and coverage."
+        "4. **Provenance**: each sensitivity's source, estimation window and coverage."
     )
 
     st.subheader("What it needs (data contract, TBC)")
     st.dataframe(pd.DataFrame(CONTRACT).rename(columns=str.capitalize), hide_index=True, width="stretch")
     st.caption(
         "Assets and returns come from data/reference/assets.csv and data/market/; asset_id must match. The "
-        "column names follow the interface fields of the research plan (exposure, uncertainty, source, "
+        "column names follow the interface fields of the research plan (sensitivity, uncertainty, source, "
         "effective window, coverage)."
     )
 
     st.subheader("How it differs from the simulation lab")
     st.markdown(
-        "- There is no truth and no oracle: exposures are judged on realised returns and on the golden set.\n"
-        "- Exposures come from the plan's estimation (B = M·L + S), not from the lab's direct regression.\n"
+        "- There is no truth and no oracle: sensitivities are judged on realised returns and on the golden set.\n"
+        "- Sensitivities come from the plan's estimation (B = M·L + S), not from the lab's direct regression.\n"
         "- Attention shocks and contributions use the same definitions as the lab, so the views are comparable."
     )
 
@@ -203,7 +216,7 @@ def render(settings: dict[str, Any] | None = None) -> None:
         return
     st.subheader("Preview")
     for p in problems:
-        st.error(f"exposures.parquet: {p}")
+        st.error(f"{SENSITIVITY_FILE}: {p}")
     if df is None or df.empty:
         return
     dates = sorted(df["as_of"].unique())
@@ -217,8 +230,8 @@ def render(settings: dict[str, Any] | None = None) -> None:
         a_labels, order = {}, None
     values, blank = exposure_table(df, as_of, order)
     fig = charts.exposure_heatmap(
-        values, blank=blank, value_label="Exposure (% per one-sd shock)", row_labels=a_labels,
-        title=f"Estimated exposures at {pd.Timestamp(as_of).date()}",
+        values, blank=blank, value_label="Sensitivity (% per one-sd shock)", row_labels=a_labels,
+        title=f"Estimated topic sensitivities at {pd.Timestamp(as_of).date()}",
         subtitle="Blank: coverage none or no estimate.",
     )
     st.plotly_chart(fig, width="stretch", theme=None, key="real_heatmap")

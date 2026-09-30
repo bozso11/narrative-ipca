@@ -1,4 +1,4 @@
-"""BKS Sparse IPCA run by the topic-exposure lab (DESIGN.md G.7.2, G.8, G.10; D52, D65, D70, D88).
+"""BKS Sparse IPCA run by the topic-sensitivity lab (DESIGN.md G.7.2, G.8, G.10; D52, D65, D70, D88).
 
 The lab calls the package's BKS stages directly, with weekly periods, and
 does not change them (D53):
@@ -219,7 +219,7 @@ IMPLIED_METHODS: dict[str, str] = {"full": IMPLIED_METHOD, "training": IMPLIED_T
 #: Plain-words name of each covariance history (dashboard radio and captions).
 HISTORY_LABELS: dict[str, str] = {"full": "Full history before the cut-off", "training": "Training window only"}
 
-#: Caveat attached to the BKS-implied exposures (D52; DESIGN.md G.15.1). Where the signal goes, dashboard
+#: Caveat attached to the BKS-implied sensitivities (D52; DESIGN.md G.15.1). Where the signal goes, dashboard
 #: defaults, mean over noise seeds 0-2
 #: (2026-09-30): the instruments alone, through the same unit conversion, reach Spearman 0.69 with
 #: ``B_true`` and a median OOS R2 of 11.0%; their best rank-3 version 0.66 and 10.7%; the implied
@@ -227,11 +227,11 @@ HISTORY_LABELS: dict[str, str] = {"full": "Full history before the cut-off", "tr
 #: directions ``Gamma_tilde`` spans (3% of the instruments' squared norm at lambda 0, 38% tuned,
 #: against 92% for the best three), not from having only K of them, nor from topic selection.
 IMPLIED_NOTE = (
-    "BKS identifies the assets' factor betas, not how they split across topics (D52). The implied exposures "
-    "keep only the part of each asset's topic covariances that lies in the K directions BKS fitted to explain "
-    "weekly returns. On the lab data those directions carry little of the topic signal, although K = 3 "
-    "well-chosen directions would keep most of it. The exposures also depend on which topics the sparse fit "
-    "kept."
+    "BKS identifies the assets' factor betas, not how they split across topics (D52). The implied topic "
+    "sensitivities keep only the part of each asset's topic covariances that lies in the K directions BKS fitted "
+    "to explain weekly returns. On the lab data those directions carry little of the topic signal, although "
+    "K = 3 well-chosen directions would keep most of it. The sensitivities also depend on which topics the "
+    "sparse fit kept."
 )
 
 
