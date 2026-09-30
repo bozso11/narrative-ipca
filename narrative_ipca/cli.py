@@ -254,7 +254,7 @@ def _write_simulation(sim: Any, out: Path, csv: bool = False) -> list[str]:
         Sigma_ff_period=np.asarray(truth.Sigma_ff_period),
         Sigma_ff_daily=np.asarray(truth.Sigma_ff_daily),
         f_period=truth.f_period.to_numpy(),
-        periods=np.asarray(pd.DatetimeIndex(truth.periods).asi8),
+        periods=pd.DatetimeIndex(truth.periods).as_unit("ns").to_numpy(),  # unit in the dtype, as covariances.npz
         topics=np.asarray(topics, dtype=str),
     )
     written.append("truth.npz")

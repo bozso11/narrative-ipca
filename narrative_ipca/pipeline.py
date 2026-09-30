@@ -508,9 +508,15 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 def _json_default(o: Any) -> Any:
     """JSON fallback: numpy scalars/arrays, pandas objects, timestamps, dataclasses; ``str`` otherwise."""
+    if isinstance(o, np.datetime64):  # before np.generic: .item() of a [ns] value is a bare integer
+        return pd.Timestamp(o).isoformat()
+    if isinstance(o, np.timedelta64):
+        return str(pd.Timedelta(o))
     if isinstance(o, np.generic):
         return o.item()
     if isinstance(o, np.ndarray):
+        if o.dtype.kind in "mM":  # element-wise, so the datetime unit never leaks into the output
+            return _json_default(o[()]) if o.ndim == 0 else [_json_default(v) for v in o]
         return o.tolist()
     if isinstance(o, (pd.Timestamp, datetime)):
         return o.isoformat()
@@ -595,7 +601,8 @@ def save_result(result: PipelineResult, out_dir: str | Path) -> dict[str, str]:
     placebo test: ``placebo.json``. With pricing tests: ``pricing_summary.csv``
     and ``pricing_<model>.csv``; with benchmark factors:
     ``factor_correlations.csv``. With ``cfg.save_panel``: ``covariances.npz``
-    (the ``(T, N, L)`` array and its labels) and ``panel.parquet`` (long form;
+    (the ``(T, N, L)`` array and its labels; ``periods``/``window_end`` as
+    ``datetime64[ns]``) and ``panel.parquet`` (long form;
     CSV when pyarrow is unavailable).
 
     Numbers go through ``pandas.to_csv`` (full float precision) and
@@ -704,12 +711,14 @@ def save_result(result: PipelineResult, out_dir: str | Path) -> dict[str, str]:
 
     if bool(cfg_dict.get("save_panel", False)):
         cov = result.covariances
+        # timestamps as datetime64[ns]: the unit travels with the dtype (raw asi8 integers are
+        # in pandas' in-memory unit, microseconds under pandas 3, but read back as nanoseconds)
         np.savez(
             put("covariances", "covariances.npz"),
             values=np.asarray(cov.values),
             n_days=np.asarray(cov.n_days),
-            periods=np.asarray(pd.DatetimeIndex(cov.periods).asi8),
-            window_end=np.asarray(pd.DatetimeIndex(cov.window_end).asi8),
+            periods=pd.DatetimeIndex(cov.periods).as_unit("ns").to_numpy(),
+            window_end=pd.DatetimeIndex(cov.window_end).as_unit("ns").to_numpy(),
             assets=np.asarray(cov.assets, dtype=str),
             topics=np.asarray(cov.topics, dtype=str),
             xi=np.asarray(cov.xi),

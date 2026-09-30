@@ -349,6 +349,12 @@ Each entry: the decision, why, and the config field or code location to change i
   (attention rows are optimal-transport allocations, still on the simplex);
   multi-asset universe with optional inverse-vol weighting; term-level
   interpretation optional (needs `phi`).
+- **D73 Timestamps in `.npz` artefacts are `datetime64[ns]`** (`periods` and
+  `window_end` in `covariances.npz`, `periods` in `truth.npz`), not int64
+  epoch counts. Reason (2026-09-29): pandas 3 holds datetimes in
+  microseconds, so the old `asi8` integers read back as 1970 timestamps; the
+  unit now travels with the dtype and `pd.DatetimeIndex(npz["periods"])`
+  restores the instants under any pandas version.
 
 ### Added after the verification round (2026-09-06)
 

@@ -334,15 +334,31 @@ def test_save_panel_writes_npz_and_parquet(result, cfg, tmp_path):
     manifest = pipeline.save_result(res, tmp_path / "with_panel")
     with np.load(manifest["covariances"], allow_pickle=False) as npz:
         np.testing.assert_array_equal(npz["values"], np.asarray(result.covariances.values))
+        # timestamps carry their unit in the dtype, so they read back as the same instants
+        assert npz["periods"].dtype == npz["window_end"].dtype == np.dtype("datetime64[ns]")
         assert pd.DatetimeIndex(npz["periods"]).equals(result.covariances.periods)
+        assert pd.DatetimeIndex(npz["window_end"]).equals(result.covariances.window_end)
         assert list(npz["topics"]) == [str(t) for t in result.covariances.topics]
         assert float(npz["xi"]) == result.covariances.xi
     panel_path = Path(manifest["panel"])
     long = pd.read_parquet(panel_path) if panel_path.suffix == ".parquet" else pd.read_csv(panel_path, parse_dates=["period"])
     assert len(long) == result.panel.n_obs
+    assert pd.DatetimeIndex(long["period"]).equals(result.panel.periods[result.panel.t_idx])
     np.testing.assert_allclose(long[list(result.panel.instrument_names)].to_numpy(), result.panel.X, rtol=1e-12)
     np.testing.assert_allclose(long["y"].to_numpy(), result.panel.y, rtol=1e-12)
     assert list(long["asset"]) == [str(a) for a in np.asarray(result.panel.assets)[result.panel.asset_idx]]
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_save_panel_periods_round_trip_in_any_datetime_unit(result, cfg, tmp_path, unit):
+    # pandas 2 builds datetime64[ns] indexes, pandas 3 datetime64[us]; the npz must not depend on it
+    cov = result.covariances
+    cov_u = replace(cov, periods=cov.periods.as_unit(unit), window_end=cov.window_end.as_unit(unit))
+    res = replace(result, config=replace(cfg, save_panel=True), covariances=cov_u)
+    manifest = pipeline.save_result(res, tmp_path / unit)
+    with np.load(manifest["covariances"], allow_pickle=False) as npz:
+        assert pd.DatetimeIndex(npz["periods"]).equals(cov.periods)
+        assert pd.DatetimeIndex(npz["window_end"]).equals(cov.window_end)
 
 
 def test_json_default_handles_numpy_and_pandas(tmp_path):
@@ -356,6 +372,10 @@ def test_json_default_handles_numpy_and_pandas(tmp_path):
     assert back["i"] == 3 and back["f"] == 1.5 and back["arr"] == [0, 1, 2]
     assert back["ts"].startswith("2020-01-31") and back["s"] == {"2020-01-31 00:00:00": 1.0, "2020-02-29 00:00:00": 2.0}
     assert back["cfg"]["annualization"] == 12.0 and math.isnan(back["nan"]) and back["path"] == "x"
+    # numpy datetimes serialise as ISO strings whatever their unit ([ns] .item() would be an int)
+    for unit in ("ns", "us", "s"):
+        dt = {"d": np.datetime64("2020-01-31", unit), "a": np.array(["2020-01-31", "NaT"], dtype=f"datetime64[{unit}]")}
+        assert json.loads(json.dumps(dt, default=pipeline._json_default)) == {"d": "2020-01-31T00:00:00", "a": ["2020-01-31T00:00:00", "NaT"]}
 
 
 # ---------------------------------------------------------------------------
@@ -511,8 +531,10 @@ def test_cli_simulate_scenario_seed_and_csv(tmp_path):
     assert summary["scenario"] == "null" and summary["seed"] == 11
     cfg = load_config(d / "simulation_config.json", SimulationConfig)
     assert cfg.signal_strength == 0.0 and cfg.seed == 11 and cfg.n_assets == 80
-    with np.load(d / "truth.npz") as npz:
+    truth_periods = pd.read_csv(d / "truth_f_period.csv", index_col="period", parse_dates=True).index
+    with np.load(d / "truth.npz", allow_pickle=False) as npz:
         assert npz["A"].shape == (16, 3) and not np.any(npz["A"])
+        assert pd.DatetimeIndex(npz["periods"]).equals(truth_periods)
 
 
 def _write(tmp_path: Path, cfg) -> Path:
