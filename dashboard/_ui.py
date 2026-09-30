@@ -865,7 +865,7 @@ def blank_rule(metric: str, tau: float) -> dict[str, str]:
     link, and the other metrics the pairs the estimator did not select.
     """
     if metric == "True sensitivity":
-        return {"label": f"Blank pairs below the true-sensitivity threshold ({float(tau):g})",
+        return {"label": f"Blank pairs below the true-sensitivity threshold ({float(tau):g}, standardised)",
                 "subtitle": f"pairs with |true sensitivity| below {float(tau):g} (standardised)"}
     if metric == "Set sensitivity (W)":
         return {"label": "Blank pairs with no link", "subtitle": "pairs with no link"}
@@ -1310,10 +1310,11 @@ def timings_frame(timings: dict[str, dict[str, Any]]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # One caption under each chart, table or row of tiles: a lead line, then one bullet per item, and each bullet
 # ends with one example sentence. The examples use static, illustrative numbers, one consistent set for the
-# whole dashboard: Energy Global v World EQ with a training volatility of about 1.1% a day, a strong link of
-# about 0.32 standardised (0.35 set, times the attenuation of about 0.90 at w = 5), 20 return days in the
-# 4-week default window, 55 assets and 20 topics (1,100 pairs). They were checked against the code on the
-# dashboard defaults (DESIGN.md G.9); an example is never computed from the current run.
+# whole dashboard: Energy Global v World EQ with a training volatility of about 1.1% a day, its strong Energy
+# link set at 0.35 with a true sensitivity of 0.35 and an estimate of 0.32 standardised, shocks summing to +2.0
+# (a +0.70 pp contribution), a realised move of +1.20 pp, 20 return days in the 4-week default window, 55
+# assets and 20 topics (1,100 pairs). They were checked against the code on the dashboard defaults (DESIGN.md
+# G.9); an example is never computed from the current run.
 Bullets = Sequence[tuple[str, str]]
 
 
@@ -1337,11 +1338,11 @@ def how_to_read(lead: str, bullets: Bullets) -> str:
 
 # --- Overview -----------------------------------------------------------------
 HOW_OVERVIEW_TILES: tuple[str, Bullets] = ("How to read the tiles:", (
-    ("Median OOS R², estimator: for each asset, 1 minus the sum of squared forecast errors over the sum of "
-     "squared returns across the forecast window's return days, then the median over assets. The forecast is the "
-     "training sensitivities, frozen, times the window's shocks, times the asset's training volatility, with no "
-     "intercept, so a forecast of zero scores 0. 'Assets with positive OOS R²' is the share of assets above 0; an "
-     "asset with no selected topic gets a zero forecast and scores exactly 0.",
+    ("Median OOS R², estimator: per asset, 1 minus the squared forecast errors over the squared returns, summed "
+     "over the forecast window's return days; then the median over assets. The forecast is the frozen training "
+     "sensitivities times the window's shocks times the training volatility, with no intercept. 'Assets with "
+     "positive OOS R²' is the share above 0. With the elastic net, an asset with no selected topic gets a zero "
+     "forecast and scores exactly 0.",
      "for an asset at 17%, the squared forecast errors over the 20 return days add up to 83% of its squared "
      "returns; 45 of 55 assets above zero show as 82% on the 'Assets with positive OOS R²' tile."),
     ("Median OOS R², oracle: the same, with the simulation's true sensitivities in place of the estimates and "
@@ -1357,7 +1358,8 @@ HOW_OVERVIEW_TILES: tuple[str, Bullets] = ("How to read the tiles:", (
     ("Coverage: the share of the pairs with a link in the link map that the estimator selected (elastic net: "
      "estimate not zero; the other methods: |estimate| at least tau). Sign agreement: among the linked pairs it "
      "selected, the share whose estimate has the sign of the true sensitivity. Both compare the training fit "
-     "with the truth; the forecast window plays no part.",
+     "with the link map (sign agreement also with the sign of the true sensitivity); the forecast window plays "
+     "no part.",
      "50 of 95 links selected gives a coverage of 53%; if one of those 50 had the wrong sign, sign agreement "
      "would be 98%."),
     ("MCC: the correlation between two yes/no labels over all topic-asset pairs: selected by the estimator, and "
@@ -1499,11 +1501,10 @@ def how_cell_metric(metric: str) -> str:
 
 
 HOW_TABLE: tuple[str, Bullets] = ("How to read the table:", (
-    ("Blank cells follow the view. Estimated sensitivity, OOS correlation and OOS contribution blank the pairs "
-     "the estimator did not select (elastic net: estimate zero; the other methods: |estimate| below tau). True "
-     "sensitivity blanks the pairs whose true sensitivity is below tau in absolute value (0.05 by default, in "
-     "standardised units whatever the unit shown). Set sensitivity blanks the pairs with no link. The checkbox "
-     "turns the rule off.",
+    ("Blank cells follow the view. The Estimated sensitivity, OOS correlation and OOS contribution views blank "
+     "the pairs the estimator did not select (elastic net: a zero estimate; other methods: |estimate| below tau). "
+     "The True view blanks pairs with |true sensitivity| below tau (0.05 by default, standardised in both units), "
+     "the Set view pairs with no link. The checkbox turns the rule off.",
      "the Materials topic on Energy Global v World EQ, with a true sensitivity of 0.11, no link and no "
      "selection, shows 0.11 in the True view and is blank in the Set and Estimated views."),
     ("The '|value| below' slider blanks, on top, every cell whose absolute value is below it, in the units "
@@ -1532,10 +1533,8 @@ HOW_TABLE: tuple[str, Bullets] = ("How to read the table:", (
 # --- Topic contributions ----------------------------------------------------------
 #: The model block the owner asked to extend (2026-09-30); the other blocks follow its style.
 HOW_TWO_VIEWS: tuple[str, Bullets] = ("How to read the two views:", (
-    ("Variance share (default): each topic's share of the window's day-to-day return variation. The share is the "
-     "topic's explained daily returns multiplied by the asset's daily returns and summed, divided by the sum of "
-     "squared daily returns. It uses every day of the window, and it is a share of the variation, not of the "
-     "net move.",
+    ("Variance share (default): each topic's share of the window's day-to-day return variation. It uses every "
+     "day of the window.",
      "a variance share of 10% for a topic is what you get when its explained return is one tenth of the asset's "
      "return on every day of the window (+0.10% on a +1.0% day, -0.05% on a -0.5% day)."),
     ("Return attribution: each topic's sensitivity, estimated on the training window and frozen, times the sum "
@@ -1547,13 +1546,12 @@ HOW_TWO_VIEWS: tuple[str, Bullets] = ("How to read the two views:", (
     ("Summed shocks largely cancel over a window: each shock is attention minus its trailing mean, so their sum "
      "depends mostly on the attention level at the window's edges. The return attribution therefore understates "
      "the topics' role, and the explained line in the cumulative chart drifts back towards zero.",
-     "with w = 5, a topic whose attention is 0.20 on the five days before the window and 0.20 on its last five "
-     "days has shocks summing to zero, so its contribution is 0.00 pp however much its attention moved in "
-     "between."),
-    ("Diamonds use the true sensitivities of the simulation, with the same shocks and the same training "
-     "volatility, so the ratio of a bar to its diamond is the ratio of the estimated to the true sensitivity.",
-     "a bar at +0.70 pp next to a diamond at +0.88 pp means the estimated sensitivity is 0.8 times the true one "
-     "(0.32 against 0.40)."),
+     "with w = 5 and the same-day lead, a topic whose attention is 0.20 on the five days before the window and "
+     "0.20 on its last five days has shocks summing to zero, so its contribution is 0.00 pp however much its "
+     "attention moved in between."),
+    ("Diamonds use the true sensitivities of the simulation.",
+     "with the same shocks and training volatility, a bar at +0.70 pp next to a diamond at +0.77 pp (1.1% × "
+     "0.35 × 2.0) means the estimated sensitivity is about 0.9 times the true one (0.32 against 0.35)."),
 ))
 
 _HOW_TILE_R2: tuple[str, str] = (
@@ -1583,8 +1581,8 @@ HOW_TILES_SHARE: tuple[str, Bullets] = ("How to read the tiles:", (
     ("True share (simulation): the same sum with the true sensitivities. The diamonds sum to it.",
      "a true share of 30% against 8% estimated means the true sensitivities, applied to the same shocks, would "
      "co-move with 30% of the window's variation."),
-    ("Largest topic: the topic with the largest share in absolute value, shown with its sign. The tooltip gives "
-     "its name.",
+    ("Largest topic: the topic with the largest share in absolute value, shown with its sign; 'none' when every "
+     "share is zero. The tooltip gives its name.",
      "with S1 at +6%, S10 at +3% and S5 at -1% the tile shows 'S1 · 6.0%'; had S5 been at -7%, it would show "
      "'S5 · -7.0%'."),
     ("The share explained is not the OOS R². The R² also subtracts the size of the explained returns: R² = 2 × "
@@ -1596,8 +1594,8 @@ HOW_TILES_SHARE: tuple[str, Bullets] = ("How to read the tiles:", (
 
 HOW_CONTRIB_BARS: tuple[str, Bullets] = ("How to read the bar chart:", (
     ("Topics are sorted by the size of their bar, largest on top. 'Topics shown' sets how many get their own "
-     "bar, and the rest are summed into one 'Other topics (n)' bar. Topics with no bar (not selected by the "
-     "estimator) are ordered by their diamond.",
+     "bar, and the rest are summed into one 'Other topics (n)' bar. Topics with a zero bar (with the elastic net, "
+     "the topics it did not select) are ordered by their diamond.",
      "with 20 topics and 15 shown, the last topic bar is 'Other topics (5)', the sum of the five smallest."),
     ("The lower panel has its own scale. The grey bar is the part not explained by topics. The black bar is the "
      "realised move (Return attribution) or the total variation of 100% (Variance share). The topic bars, "
@@ -1607,8 +1605,10 @@ HOW_CONTRIB_BARS: tuple[str, Bullets] = ("How to read the bar chart:", (
     ("Blue bars are positive and red bars negative. A red bar in Return attribution pulled the move down. In "
      "Variance share, a red bar means the topic's explained return moved against the asset's daily returns.",
      "a sensitivity of 0.07 with shocks summing to -2.0 gives 1.1% × 0.07 × (-2.0) = -0.15 pp, a red bar."),
-    ("The diamond on the grey row is the realised move minus the sum of the true contributions.",
-     "true contributions summing to +0.90 pp on a +1.20 pp move put that diamond at +0.30 pp."),
+    ("The diamond on the grey row is the realised move minus the sum of the true contributions (Variance share: "
+     "100% minus the true share).",
+     "true contributions summing to +0.90 pp on a +1.20 pp move put that diamond at +0.30 pp; in Variance share, "
+     "a true share of 30% puts it at 70%."),
 ))
 
 HOW_CUMULATIVE: tuple[str, Bullets] = ("How to read the cumulative chart:", (
@@ -1622,15 +1622,15 @@ HOW_CUMULATIVE: tuple[str, Bullets] = ("How to read the cumulative chart:", (
      "+1.20%, +0.54% and +0.90%."),
     ("The explained lines follow the summed shocks: a topic's part of a line returns to zero once its attention "
      "has been back at its level from before the window for w days.",
-     "with w = 5, attention at 0.20, raised to 0.24 on days 5 to 9 of the window and back at 0.20 from day 10, "
-     "moves that topic's part of the blue line away from zero from day 5 and puts it back at exactly zero from "
-     "day 14."),
+     "with w = 5 and the same-day lead, attention at 0.20, raised to 0.24 on days 5 to 9 of the window and back "
+     "at 0.20 from day 10, moves that topic's part of the blue line away from zero from day 5 and puts it back "
+     "at exactly zero from day 14."),
 ))
 
 HOW_ATTENTION: tuple[str, Bullets] = ("How to read the attention chart:", (
     ("The chart shows up to three topics with the largest contributions to the move in absolute value (Return "
      "attribution), whichever view is chosen. Topics with a zero contribution are left out.",
-     "with contributions of -0.15, +0.06 and -0.03 pp and zero for all other topics, it shows those three, even "
+     "with contributions of +0.70, -0.15 and -0.01 pp and zero for all other topics, it shows those three, even "
      "if the Variance share view ranks them differently."),
     ("Top panel: the simulated attention level, averaged per week (weeks ending Friday). Base levels are drawn "
      "between 0.15 and 0.35 and only changes feed the shocks, so the level itself says nothing about how much a "
@@ -1640,10 +1640,11 @@ HOW_ATTENTION: tuple[str, Bullets] = ("How to read the attention chart:", (
      "divided by the standard deviation of that difference on the training window.",
      "for a topic whose difference has a training standard deviation of 0.02, attention 0.04 above its average "
      "of the previous five days gives a shock of +2.0."),
-    ("The sum of a topic's shocks over the shaded forecast window, times its sensitivity and the training "
-     "volatility, is its bar in Return attribution.",
-     "shocks summing to +2.0 over the shaded days, a sensitivity of 0.32 and a training volatility of 1.1% give "
-     "the +0.70 pp bar."),
+    ("The sum of a topic's shocks over the shaded forecast window (with the next-day lead, the shocks of the "
+     "weekday before each shaded day), times its sensitivity and the training volatility, is its bar in Return "
+     "attribution.",
+     "with the same-day lead, shocks summing to +2.0 over the shaded days, a sensitivity of 0.32 and a training "
+     "volatility of 1.1% give the +0.70 pp bar."),
     ("The shaded band is the forecast window and the vertical line the training end. The chart runs from 26 "
      "weeks before the window to 8 weeks after it.",
      "for the window 2025-07-01 to 2025-07-28 the chart covers 2024-12-31 to 2025-09-22."),
@@ -1686,9 +1687,8 @@ def how_compare_table(windows: str) -> str:
     """The Compare methods table; ``windows`` names the run's consecutive windows ("the 6 consecutive ...")."""
     return how_to_read("How to read the table:", (
         ("Median OOS R², this window: each asset's out-of-sample R² on the forecast window's return days, with "
-         "the sensitivities frozen at the training end, then the median over assets. R² is 1 minus the squared "
-         "gaps between the realised and the topic-explained returns divided by the squared returns, so 0% is "
-         "what predicting a zero return every day would score.",
+         "the sensitivities frozen at the training end, then the median over assets. 0% is what predicting a "
+         "zero return every day would score.",
          "with 55 assets, a median of 17% means 27 assets score above it and 27 below; an asset at 17% has "
          "squared gaps adding up to 83% of its squared returns."),
         (f"Median OOS R², all windows: the same median for each of {windows} from the forecast start to the end "
@@ -1700,10 +1700,10 @@ def how_compare_table(windows: str) -> str:
          "oracle's. The oracle is not the best fit in every window, so a method can beat it by chance; the "
          "oracle's own row shows a dash.",
          "a method above the oracle in 1 of 6 windows shows 16.7%."),
-        ("The columns from Selected pairs to Spearman vs truth compare each method's training sensitivities with "
-         "the true sensitivities over all topic-asset pairs, as on the Overview; the tiles under Inspect one "
-         "method explain them. Selected pairs counts the pairs a method keeps: a non-zero estimate for the "
-         "elastic net, an estimate of at least tau in absolute value for the other methods.",
+        ("Selected pairs counts the pairs a method keeps: a non-zero estimate for the elastic net, an estimate of "
+         "at least tau in absolute value for the other methods. Coverage and Sign agreement use the pairs linked "
+         "in the link map, as on the Overview; MCC and Spearman vs truth use all topic-asset pairs. The tiles "
+         "under Inspect one method explain them.",
          "20 topics and 55 assets make 1,100 pairs, and the oracle row's Selected pairs, about 350, is the "
          "number of pairs whose true sensitivity is at least 0.05 in absolute value."),
         ("RMSE vs truth: the root mean squared gap between estimated and true sensitivities over all pairs, in "
@@ -1727,7 +1727,7 @@ def how_compare_dots(has_oracle: bool) -> str:
     ]
     if has_oracle:
         bullets += [
-            ("The ink tick is the oracle: the true sensitivities with the same training volatility. Rows are "
+            ("The black tick is the oracle: the true sensitivities with the same training volatility. Rows are "
              "sorted by it, highest on top. The gap between a marker and the tick is what estimating the "
              "sensitivities cost on that asset.",
              "on a row with the tick at 34% and the elastic-net marker at 2%, the true sensitivities explain 34% "
@@ -1739,8 +1739,10 @@ def how_compare_dots(has_oracle: bool) -> str:
         ]
     else:
         bullets.append(
-            ("Without the oracle, rows are sorted by the first chosen method's R², highest on top.",
-             "with the elastic net and ridge chosen, the asset with the highest elastic-net R² is on top."))
+            ("Without the oracle, rows are sorted by the R² of the first chosen method in the list's fixed order "
+             "(elastic net, ridge, OLS, then BKS-implied), highest on top.",
+             "with ridge and the elastic net chosen, rows follow the elastic net, so an asset at 41% for the "
+             "elastic net sits above one at 17%."))
     bullets += [
         ("Below 0% the topic-explained returns did worse than predicting a zero return every day. Values below "
          "-50% are drawn at -50% and counted under the title; the hover shows the value.",
@@ -1768,7 +1770,7 @@ def how_compare_sweep(span: str, has_oracle: bool) -> str:
     ]
     if has_oracle:
         bullets.append(
-            ("The dashed ink line is the oracle, the true sensitivities: it shows what they reach in each window, "
+            ("The dashed black line is the oracle, the true sensitivities: it shows what they reach in each window, "
              "so compare a line with it rather than with zero. The table's all-windows column is the median of a "
              "line's points, and Windows above the oracle is the share of points above the dashed line.",
              "in a window where the oracle's median is 6%, a method at 7% is above it, and one such window out of "
@@ -1805,8 +1807,8 @@ HOW_COMPARE_SCATTER: tuple[str, Bullets] = ("How to read this chart:", (
     ("Each point is one topic-asset pair: across, its true sensitivity; up, the method's estimate from the "
      "training window. Both are in standardised units: return standard deviations per 1 standard deviation of "
      "the topic shock.",
-     "a point at (0.40, 0.32) is a pair with a true sensitivity of 0.40 that the method puts at 0.32; on an "
-     "asset with a training volatility of 1.1%, that is 0.35% of return per 1 sd shock instead of 0.44%."),
+     "a point at (0.35, 0.32) is a pair with a true sensitivity of 0.35 that the method puts at 0.32; on an "
+     "asset with a training volatility of 1.1%, that is 0.35% of return per 1 sd shock instead of about 0.39%."),
     ("The diagonal marks estimate = truth. Points between the diagonal and the horizontal zero line are shrunk "
      "towards zero; points on the zero line are pairs the method set to zero.",
      "an elastic net that keeps 200 of the 1,100 pairs puts the other 900 on the zero line."),
@@ -1885,8 +1887,8 @@ HOW_BKS_GAMMA: tuple[str, Bullets] = ("How to read the Gamma chart:", (
     ("Each bar is the length of the topic's Gamma row (the map from the topic's instrument to the K factor "
      "loadings) times the standard deviation of that instrument over the training asset-weeks. It says how far "
      "a one-standard-deviation move in the instrument shifts an asset's factor loadings.",
-     "A3 Monetary Policy & Liquidity at 0.24 against S11 Real Estate at 0.03 means the same "
-     "one-standard-deviation move shifts the loadings 8 times as far."),
+     "A3 Monetary Policy & Liquidity at 0.24 against S11 Real Estate at 0.026 means the same "
+     "one-standard-deviation move shifts the loadings about 9 times as far."),
     ("The scaling puts the topics on the scale the lasso penalty uses. Raw row norms are large and not "
      "comparable across topics, because the instruments are small covariances with different spreads.",
      "a raw row norm of 80 on an instrument with a standard deviation of 0.003 gives a bar of 0.24."),
@@ -1943,9 +1945,10 @@ HOW_BKS_SPLIT: tuple[str, Bullets] = ("How to read the per-topic split:", (
     ("The topic bars, the constant's bar and the 'Other topics' bar add up to the fitted return. Adding 'Not "
      "explained by BKS' gives the realised move exactly.",
      "bars summing to -0.21 pp plus -0.59 pp not explained give the realised -0.80 pp."),
-    ("Only selected topics have non-zero bars. The constant's bar is zero when its Gamma row is zero, as with "
-     "the default penalised intercept.",
-     "with 10 of 20 topics selected, the other 10 topics and the constant all read 0.00 pp."),
+    ("Only selected topics have non-zero bars. The constant's bar is zero when its Gamma row is zero, as in the "
+     "default full-history run; under the training-window history the penalised constant can stay non-zero.",
+     "with 10 of 20 topics selected under the full history, the other 10 topics and the constant all read "
+     "0.00 pp; under the training-window history the constant of Energy Global v World EQ reads +0.11 pp."),
     ("The split is not unique. Only each asset's loadings are pinned down, and in the model the topic "
      "instruments move along only K common directions, so another Gamma with the same fitted values would split "
      "them differently.",
@@ -1955,7 +1958,7 @@ HOW_BKS_SPLIT: tuple[str, Bullets] = ("How to read the per-topic split:", (
      "days. Under the full history its units are approximate: each week's volatility-scaled value times the "
      "asset's average daily volatility that week.",
      "for Energy Global v World EQ the weeks run 30 June to 25 July and give -0.80 pp (-0.81 pp from the daily "
-     "returns), while the Topic contributions tab shows +1.19 pp for 1 to 28 July."),
+     "returns), while the Topic contributions tab shows about +1.2 pp for 1 to 28 July."),
 ))
 
 
@@ -2002,6 +2005,17 @@ HOW_ASSETS_TABLE: tuple[str, Bullets] = (
          "Artificial marks the other 54 rows 'artificial'."),
     ))
 
+HOW_GENERIC_ASSETS: tuple[str, Bullets] = ("How to read the generic assets table:", (
+    ("One row per generic asset of this run, G_ASSET_001 onwards. The name repeats the asset class, drawn at "
+     "random for each asset: Equity with probability 0.5, FX 0.3 and Fixed income 0.2.",
+     "with 55 generic assets, on average 27.5 are Equity, 16.5 FX and 11 Fixed income, each named like "
+     "'Generic asset 002 (Equity)'."),
+    ("Sub class and source read 'generic' on every row: a generic asset has no legs, index or proxy, and its "
+     "returns are artificial.",
+     "G_ASSET_001 reads 'generic' in both columns, where Energy Global v World EQ has two legs in the assets "
+     "table above."),
+))
+
 HOW_TOPICS_TABLE: tuple[str, Bullets] = ("How to read the manual topics table:", (
     ("The table lists the 20 manual topics of the report (Tables 1-2), with names and scope as printed. S1-S11 "
      "are in group Sector (Sector Ontology). A1-A6 are in group Macro and B1-B3 in group Micro (Global "
@@ -2046,6 +2060,30 @@ HOW_LINK_MAP: tuple[str, Bullets] = (
 
 
 # --- Real data page ---------------------------------------------------------------
+HOW_REAL_SETTINGS: tuple[str, Bullets] = ("How to read the settings table:", (
+    ("One row per sidebar setting that will apply to real data, in four groups: time windows, direct estimator, "
+     "BKS model and asset selection.",
+     "on the defaults, Training window reads '2025-01-01 to 2025-06-30 (129 weekdays)' and Forecast length "
+     "'4 weeks (2025-07-01 to 2025-07-28)'."),
+    ("The direct estimator rows follow the chosen method: the elastic net lists its penalty rule and L1 ratio, "
+     "ridge its lambda, and every method the selection threshold tau.",
+     "with ridge chosen, one Ridge lambda row ('chosen by generalised cross-validation' by default) replaces "
+     "the Penalty rule and L1 ratio rows."),
+    ("Settings that only shape the simulation are left out; the note below the table lists them.",
+     "changing the set sensitivities (betas) or the price source leaves this table unchanged."),
+))
+
+HOW_REAL_CONTRACT: tuple[str, Bullets] = ("How to read the data contract:", (
+    ("One row per input file in data/real/: what it holds and its columns. The contract is still to be "
+     "confirmed (TBC).",
+     "attention.parquet has a date index and one column per topic_id, so 20 topics make 20 columns."),
+    ("sensitivities.parquet has one row per estimation date (as_of), topic and asset: the sensitivity in % "
+     "return per one-sd attention shock, its uncertainty as a standard deviation, its source, the window it was "
+     "estimated on and its coverage.",
+     "a row dated 2025-12-31 for S1 and ENERGY_v_WEQ with sensitivity 0.40, uncertainty 0.05 and coverage full "
+     "reads: a +1 sd shock in S1 goes with +0.40% on that asset, give or take 0.05 (one standard deviation)."),
+))
+
 HOW_REAL_STATUS: tuple[str, Bullets] = ("How to read the status table:", (
     ("One row per file of the data contract. Found says whether the file is in data/real/.",
      "with only sensitivities.parquet in place the rows read no, no, yes, and the caption says 1 of 3 input "

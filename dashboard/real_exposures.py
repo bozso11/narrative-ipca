@@ -148,6 +148,7 @@ def render_settings(settings: dict[str, Any]) -> None:
             st.warning(f"The settings could not be listed: {exc}")
         else:
             st.dataframe(table, hide_index=True, width="stretch", height=35 * (len(table) + 1) + 3)
+            st.caption(_ui.how_to_read(*_ui.HOW_REAL_SETTINGS))
     errors = list(settings.get("errors") or [])
     if errors:
         st.warning("The current settings are not valid, so they would not run:\n\n"
@@ -199,6 +200,7 @@ def render(settings: dict[str, Any] | None = None) -> None:
 
     st.subheader("What it needs (data contract, TBC)")
     st.dataframe(pd.DataFrame(CONTRACT).rename(columns=str.capitalize), hide_index=True, width="stretch")
+    st.caption(_ui.how_to_read(*_ui.HOW_REAL_CONTRACT))
     st.caption(
         "Assets and returns come from data/reference/assets.csv and data/market/; asset_id must match. The "
         "column names follow the interface fields of the research plan (sensitivity, uncertainty, source, "

@@ -46,9 +46,12 @@ so values survive while a control is hidden and come back when a range that
 had clamped them widens again. The value in effect in a run (after clamping)
 is in ``st.session_state["_effective"]``. Sidebar keys start with ``sb_``.
 
-Every chart, table and row of tiles has a "How to read" caption under it
-whose bullets end with a static example (owner request 2026-09-30, G.9); the
-texts are in ``_ui`` (``how_to_read`` and the ``HOW_*`` constants).
+Every chart, results or reference table and row of tiles has a "How to read"
+caption whose bullets end with a static example (owner request 2026-09-30,
+G.9): under it, or directly above the link map's editor. Diagnostics (stage
+timings) and input editors (the long/short view, the session's link edits)
+have none. The texts are in ``_ui`` (``how_to_read`` and the ``HOW_*``
+constants).
 
 The BKS run makes no Streamlit call while it computes: a widget change
 during a long fit would otherwise raise Streamlit's rerun exception inside
@@ -669,13 +672,16 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
     else:
         shares = ev.var_share.loc[asset].astype(float)
         shares_true = ev.var_share_true.loc[asset].astype(float)
-        top = shares.abs().idxmax() if shares.notna().any() else None
+        # "none" when every share is zero (the elastic net selected no topic for this asset), "n/a" without data
+        top = shares.abs().idxmax() if (shares.abs() > 0).any() else None
+        largest = f"{top} · {_ui.fmt_pct(shares.get(top))}" if top is not None else (
+            "none" if shares.notna().any() else "n/a")
         m[0].metric("Share explained by topics", _ui.fmt_pct(shares.sum(min_count=1)), border=True,
                     help="Share of the window's return variation that co-moves with the topics; the bars sum to it.")
         m[1].metric("True share (simulation)", _ui.fmt_pct(shares_true.sum(min_count=1)), border=True,
                     help="The same share with the simulation's true sensitivities.")
-        m[2].metric("Largest topic", f"{top} · {_ui.fmt_pct(shares.get(top))}" if top is not None else "n/a",
-                    border=True, help=f"{t_labels.get(top, top)}" if top is not None else None)
+        m[2].metric("Largest topic", largest, border=True,
+                    help=f"{t_labels.get(top, top)}" if top is not None else None)
     m[3].metric("OOS R², estimator / oracle",
                 f"{_ui.fmt_pct(ev.r2.get(asset))} / {_ui.fmt_pct(ev.r2_oracle.get(asset))}", border=True)
     st.caption(_ui.how_to_read(*(_ui.HOW_TILES_ATTRIBUTION if view == "Return attribution" else _ui.HOW_TILES_SHARE)))
@@ -734,9 +740,13 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
 
     with st.expander("Simulated attention of the largest contributors"):
         c = ev.contrib.loc[asset].abs().sort_values(ascending=False)
-        top = [t for t in c.index[:3] if np.isfinite(c[t]) and c[t] > 0] or list(c.index[:1])
+        top = [t for t in c.index[:3] if np.isfinite(c[t]) and c[t] > 0]
         shocks = ctx["shocks"].s_hat
-        if len(days):
+        if len(days) and not top:  # e.g. the elastic net selected no topic for this asset
+            st.info("No topic contributes to this asset's move in the window (every estimated sensitivity of the "
+                    "asset is zero), so there is no attention to show."
+                    if np.isfinite(c.to_numpy(dtype=float)).any() else "No contributions to show for this asset.")
+        elif len(days):
             lo, hi = days[0] - pd.Timedelta(weeks=26), days[-1] + pd.Timedelta(weeks=8)
             att = sim.attention.loc[lo:hi, top]
             sh = shocks.loc[lo:hi, top]
@@ -815,8 +825,9 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         bks_r2 = f" (here {_ui.fmt_pct(store['result'].r2_pooled)})"
     ex = _ui.COMPARE_LEAD_EXAMPLES
     st.caption(_ui.how_to_read(
-        "Every method is scored on the same forecast days, with its sensitivities frozen at the training end.", (
-            ("The direct methods are fitted on the training window only.", ex["direct"]),
+        "How to read the comparison:", (
+            ("Every method is scored on the same forecast days, with its sensitivities frozen at the training end. "
+             "The direct methods are fitted on the training window only.", ex["direct"]),
             ("BKS enters through its implied sensitivities: the topic-asset covariances that the BKS fit implies "
              "for each asset, turned into sensitivities with the training covariance of the topic shocks. Both BKS "
              "variants use the sidebar's BKS model and differ in the covariance history and the return scaling.",
@@ -1116,6 +1127,7 @@ def lists_tab(ctx: dict[str, Any]) -> None:
     if cfg.universe.asset_source == "generic":
         st.markdown(f"**Generic assets of this run** ({len(market.assets)}, artificial returns)")
         st.dataframe(market.assets[["name", "asset_class", "sub_class", "source"]], height=300)
+        st.caption(_ui.how_to_read(*_ui.HOW_GENERIC_ASSETS))
 
     st.subheader("Manual topics")
     topics_ref = ctx["topics_ref"]

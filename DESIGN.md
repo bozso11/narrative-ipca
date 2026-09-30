@@ -1364,7 +1364,11 @@ Main tabs:
    panel with its own scale, so the topic bars stay readable; units pp for
    returns and % for shares; optional roll-up by topic group; the cumulative
    realised versus explained return through the window; a "Why this method"
-   note (G.8).
+   note (G.8); the simulated attention of up to three topics with the largest
+   non-zero return-attribution contributions. When no topic contributes
+   (every estimated sensitivity of the asset is zero, as when the elastic net
+   selects no topic for it), a note replaces the attention chart and the
+   "Largest topic" tile reads "none" (2026-09-30).
 4. **Compare methods** (G.15, D83, D88): the methods to compare (default
    elastic net, ridge with GCV, BKS-implied (full history), BKS-implied
    (training window) and the oracle; OLS on request) and a
@@ -1407,20 +1411,26 @@ Main tabs:
    scores lower than the direct methods (a short version of G.15.1; the
    Compare methods tab points to it), limitations (Section G.12).
 
-**"How to read" captions** (owner request 2026-09-30). Every chart, table and
-row of tiles, on both pages, has a caption right under it: a lead line ("How
-to read the tiles:", "How to read this chart:", ...), then one bullet per
-item, and each bullet ends with one sentence "Example: ...". The Topic
-contributions tab's "How to read the two views" block is the model. Rules:
+**"How to read" captions** (owner request 2026-09-30). Every chart, results
+or reference table and row of tiles, on both pages, has a caption right under
+it (the link map's sits directly above its editor, which the edit buttons
+follow): a lead line ("How to read the tiles:", "How to read this chart:",
+...), then one bullet per item, and each bullet ends with one sentence
+"Example: ...". Diagnostics (the stage timings) and input editors (the
+long/short view, the session's link edits) have none. The Topic
+contributions tab's "How to read the two views" block is the model: its
+bullets keep the owner's wording and only gain the example. Rules:
 
 1. The examples use static, illustrative numbers, never figures computed from
    the current run. They form one consistent set for the whole dashboard:
-   Energy Global v World EQ with a training volatility of about 1.1% a day, a
-   strong link of about 0.32 standardised (0.35 set times the attenuation of
-   about 0.90 at `w = 5`), 20 return days in the four-week default window, and
-   55 assets x 20 topics = 1,100 pairs. Figures quoted from the default run
-   (for example medians of 17% and 23%) were checked on the dashboard
-   defaults.
+   Energy Global v World EQ with a training volatility of about 1.1% a day;
+   its strong Energy link set at 0.35, with a true sensitivity of 0.35 and an
+   estimate of 0.32 standardised; shocks summing to +2.0 over the window
+   (1.1% x 0.32 x 2.0 = +0.70 pp; +0.77 pp with the true sensitivity); a
+   realised move of +1.20 pp; 20 return days in the four-week default window;
+   and 55 assets x 20 topics = 1,100 pairs. Figures quoted from the default
+   run (for example medians of 17% and 23%) were checked on the dashboard
+   defaults. Examples that count days assume the same-day lead.
 2. Every example follows the code. The owner's sample wording ("a variance
    share of 10% for a topic means it explains a 3% change") does not: the
    variance share is a share of the window's uncentered squared-return

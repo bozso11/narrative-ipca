@@ -405,7 +405,7 @@ def test_blank_rule_follows_the_view():
         assert int(missed.to_numpy().sum()) > 0  # the True view shows pairs the estimator missed
         assert f"|true sensitivity| below {tau:g} (standardised)" in t["subtitle"]
     label = _ui.blank_rule("True sensitivity", 0.05)["label"]
-    assert label == "Blank pairs below the true-sensitivity threshold (0.05)"
+    assert label == "Blank pairs below the true-sensitivity threshold (0.05, standardised)"
     # the set sensitivity: exactly the linked pairs, whatever the estimator selected
     linked = (truth.W_unscaled != 0).T
     t = _ui.exposure_table("Set sensitivity (W)", "% per 1 sd shock", ev, fit, truth, assets, topics)
@@ -445,6 +445,11 @@ def test_how_to_read_captions():
     # the model block keeps its four views, each with an example that follows the code (G.8 point 4)
     two = _ui.how_to_read(*_ui.HOW_TWO_VIEWS)
     assert two.count("\n- ") == 4 and "one tenth of the asset's return on every day" in two
+    # ... and keeps the owner's wording: the bullets only gained their examples
+    texts = [text for text, _ in _ui.HOW_TWO_VIEWS[1]]
+    assert texts[0] == ("Variance share (default): each topic's share of the window's day-to-day return "
+                        "variation. It uses every day of the window.")
+    assert texts[3] == "Diamonds use the true sensitivities of the simulation."
     # the metric caption follows the view: the chosen metric, and the unit bullet for the sensitivities only
     assert "% per 1 sd shock:" in _ui.how_cell_metric("True sensitivity")
     assert "% per 1 sd shock:" not in _ui.how_cell_metric("OOS correlation")
@@ -761,6 +766,7 @@ def test_app_bks_run_on_small_generic_config():
     at.slider(key="sb_signal_share").set_value(0.5).run()
     _assert_clean(at)
     assert any("12 topics" in m.value for m in at.markdown)
+    assert _ui.how_to_read(*_ui.HOW_GENERIC_ASSETS) in [c.value for c in at.tabs[5].caption]  # Lists tab
     at.button(key="sb_run_bks").click().run()
     _assert_clean(at)
     bks = at.tabs[4]
@@ -916,7 +922,7 @@ def test_app_how_to_read_next_to_every_chart():
     assert _ui.how_to_read(*_ui.HOW_TILES_SHARE) in [c.value for c in at.tabs[2].caption]
     assert _ui.how_to_read(*_ui.HOW_TWO_VIEWS) in [c.value for c in at.tabs[2].caption]
     cm = [c.value for c in at.tabs[3].caption]
-    assert cm[0].startswith("Every method is scored") and cm[0].count(" Example: ") == 6
+    assert cm[0].startswith("How to read the comparison:\n\n- Every method is scored") and cm[0].count(" Example: ") == 6
     for text in (_ui.how_to_read(*_ui.HOW_COMPARE_TILES), _ui.how_compare_table("the 6 consecutive 4-week windows")):
         assert text in cm
     assert "How to read the covariance history:" in _leads(at.tabs[4])  # before a BKS run too
@@ -951,6 +957,17 @@ def test_app_how_to_read_next_to_every_chart():
     _assert_clean(at)
     assert _heatmap_cells_shown(at.tabs[1]) == 1100 and "No blank rule." in at.tabs[1].get("plotly_chart")[0].proto.spec
     at.checkbox(key="ex_blank_rule").check().run()
+
+    # an asset the elastic net gives no topic: a note instead of the attention chart, and no largest topic
+    empty = [str(a) for a in fit.B_hat.columns if not fit.selected[a].any()]
+    if empty:
+        at.selectbox(key="tc_asset").set_value(empty[0]).run()
+        _assert_clean(at)
+        tab = at.tabs[2]
+        assert "fig_attention" not in _chart_captions(tab)
+        assert any(i.value.startswith("No topic contributes") for i in tab.info)
+        assert next(m for m in tab.metric if m.label == "Largest topic").value == "none"
+        at.selectbox(key="tc_asset").set_value(_ui.DEFAULT_CONTRIB_ASSET).run()
 
     # the contributions tab's other view and the roll-up
     at.radio(key="tc_view").set_value("Return attribution").run()
@@ -1321,6 +1338,7 @@ def test_real_exposures_page_empty_and_with_file(tmp_path, monkeypatch):
     assert len(at.get("plotly_chart")) == 1
     assert _assert_how_to_read(at.main) == {"real_heatmap"}  # owner request 2026-09-30
     assert _ui.how_to_read(*_ui.HOW_REAL_STATUS) in [c.value for c in at.caption]
+    assert _ui.how_to_read(*_ui.HOW_REAL_CONTRACT) in [c.value for c in at.caption]
     # the page says "topic sensitivity" and defines it; no "exposure" anywhere on it (2026-09-30)
     assert _ui.SENSITIVITY_DEFINITION in [c.value for c in at.caption]
     texts = [(k, t.replace(str(tmp_path), "<tmp>")) for k, t in _visible_texts(at)]  # the test's own path
@@ -1349,6 +1367,7 @@ def test_real_data_page_lists_settings_and_warns_on_invalid_ones():
     assert got["Forecast start"] == "2025-06-02"
     assert any("not valid" in w.value and "must be after training end" in w.value for w in at.warning)
     assert _ui.SIMULATION_ONLY_NOTE in [c.value for c in at.caption]
+    assert _ui.how_to_read(*_ui.HOW_REAL_SETTINGS) in [c.value for c in at.caption]  # owner request 2026-09-30
 
 
 @needs_market
