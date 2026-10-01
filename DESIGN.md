@@ -1329,10 +1329,11 @@ Sidebar controls, grouped:
    when cross-validation would take more than about 5 seconds (about 25 s at
    520 topics x 55 assets).
 6. **BKS model**: covariance history (a radio, "Full history before the
-   cut-off" or "Training window only", D88; it drives the BKS tab and this
-   Run BKS button), `K`, kernel half-life, lambda rule, grid, intercept
-   penalty; a "Run BKS" button, disabled when BKS cannot use the training
-   window (the BKS tab's check, `_ui.bks_training_check`, D87).
+   cut-off" or "Training window only", D88; it drives the BKS tab, the BKS
+   trace page and this Run BKS button), `K`, kernel half-life, lambda rule,
+   grid, intercept penalty; a "Run BKS" button, disabled on the Real data
+   page and when BKS cannot use the training window (the BKS tab's check,
+   `_ui.bks_training_check`, D87).
 
 Main tabs:
 
@@ -1397,7 +1398,9 @@ Main tabs:
    factor directions used when `Gamma_tilde` has rank below `K`, and a link
    to the BKS trace (G.16; for the variant whose history the sidebar does not
    show, a button that sets the sidebar's covariance history and opens the
-   trace).
+   trace). When the variant's fit has left the two-entry fit cache while the
+   comparison still holds its scores, a caption under the link says that the
+   trace page will ask for Run BKS, which fits it again.
    Each BKS-implied variant needs a BKS run of this browser session on the
    current settings and its history (D80); without one the tab says why, per
    variant, and offers one Run BKS button that fits every selected variant
@@ -1410,7 +1413,9 @@ Main tabs:
    asset against the current direct fit (labelled as not the same measure,
    with the days each one scores), and the per-topic split for the chosen
    asset with the D52 caveat. A link under the Run BKS button opens the BKS
-   trace of the same run (G.16, D90).
+   trace of the same run (G.16, D90). Above 100 topics a run-time warning
+   sits above the Run BKS button, here and on the BKS trace page
+   (`_ui.bks_runtime_warning`).
 6. **Lists**: the 55 assets (with legs, index, proxy, data source), the 20
    manual topics (ID, group, name, scope), and the link map (editable for the
    session, with a reset).
@@ -1421,7 +1426,9 @@ Main tabs:
 **"How to read" captions** (owner request 2026-09-30). Every chart, results
 or reference table and row of tiles, on every page, has a caption right under
 it (the link map's sits directly above its editor, which the edit buttons
-follow): a lead line ("How to read the tiles:", "How to read this chart:",
+follow; on the BKS trace page, where the six BKS tiles repeat above every
+step, the tiles' caption, `HOW_TRACE_TILES`, sits in a collapsed "How to read
+the tiles" expander right under them): a lead line ("How to read the tiles:", "How to read this chart:",
 ...), then one bullet per item, and each bullet ends with one sentence
 "Example: ...". Diagnostics (the stage timings) and input editors (the
 long/short view, the session's link edits) have none. The Topic
@@ -1485,9 +1492,12 @@ covariance array (about 1.1 GB at 500 assets x 500 topics).
 
 The BKS trace (G.16) is the stage `bks_trace`, keyed by the `bks` key and
 cached like the BKS stages (two results). It reads the cached panel and fit
-and never starts a fit. It recomputes the daily shocks, and the covariance
-instruments only for the selected asset (one asset's column of the
-recursion is exact on its own), never the whole 3-D array. Measured
+and never starts a fit. It recomputes the daily shocks; the instruments of
+the Eq. 5 week for every asset, by direct kernel summation (once more from
+raw returns for the exact-unit check); and, for the selection on show, one
+asset-topic instrument over every week (a weeks x days kernel matrix) or one
+asset's row of one week. It never runs the covariance recursion or builds
+the 3-D array. Measured
 2026-09-30: 0.3–0.5 s on the dashboard defaults including a refit of the
 twelve-point lambda path (skipped above 60 topics; the `lambda_max` recompute
 above 100 topics), 1.4 s at 200 assets x 120 topics, 2–10 s at 500 x 500
@@ -1759,16 +1769,22 @@ decisions continue at D74.
   own address and loads only when opened. Not chosen: editing intermediate
   values (the page reads, the owner changes settings in the sidebar);
   keeping the daily shocks and the covariance array in the cached panel (1.1
-  GB at 500 x 500; the trace recomputes the selected asset's instruments).
-  Findings of the first trace, 2026-09-30, dashboard defaults: every identity
-  check holds (timing, lag, units, instruments, panel, fit, forecast factors
-  and the Eq. 5 chain reproduce to about 1e-12 or better); the departures are
-  the Eq. 5 projection (the fit's K directions keep 38% of the instruments'
-  squared norm against 91% for the best three; Spearman with `B_true` 0.19
-  against 0.71 for the instruments alone), the moment windows of the full
-  history (instruments 92% before the training start, `Sigma_z` over the 129
-  training days; 0.91 with `Sigma_z` over the instruments' own history) and a
-  lambda choice within the noise of the in-sample Sharpe ratio (G.16).
+  GB at 500 x 500; the trace recomputes the Eq. 5 week's instruments for every
+  asset by direct kernel summation, and the selected asset-topic instrument
+  over the weeks, never the recursion or the 3-D array).
+  Findings of the trace, 2026-09-30 (checks and findings revised after the
+  review of the same day), dashboard defaults: every identity check holds
+  (timing, lag, units, instruments, panel, fit, forecast factors and the Eq.
+  5 chain, also rebuilt with numpy and pandas alone, reproduce to about 1e-12
+  or better; the fit's stationarity to its stopping tolerance); the four
+  departures are the Eq. 5 projection (the fit's K directions keep 38% of
+  the instruments' squared norm against 91% for the best three; Spearman with
+  `B_true` 0.19 against 0.71 for the instruments alone), a lambda choice
+  within the noise of the in-sample Sharpe ratio and a BKS-implied RMSE
+  (0.091) above that of the all-zero matrix (0.078), all properties of the
+  method, and the window of `Sigma_z`, a choice of this implementation
+  (instruments 92% before the training start, `Sigma_z` over the 129 training
+  days; 0.91 with `Sigma_z` over the instruments' own history) (G.16).
 
 ### G.12 Limitations of the lab
 
@@ -1895,8 +1911,8 @@ def compare_methods(sim: SimData, shocks: ObservedShocks, truth: SimTruth, windo
 # session.py — cached orchestration used by the dashboard and scripts/run_lab.py
 class LabSession:            # stage results memoised by LabConfig.key(stage); LabSession(max_entries=6, bks_max_entries=2)
     def market(cfg) / simulation(cfg) / truth(cfg) / shocks(cfg) / direct(cfg) / evaluation(cfg) / sweep(cfg) / bks(cfg)
-    def bks_implied(cfg) -> DirectFit                   # from the cached BKS panel and fit; LookupError if not cached
-    def bks_trace(cfg) -> BKSTrace                      # G.16: from the cached BKS panel and fit; LookupError if not cached
+    def bks_implied(cfg) -> DirectFit                   # from the cached BKS panel and fit; BKSNotCached if not cached
+    def bks_trace(cfg) -> BKSTrace                      # G.16: from the cached BKS panel and fit; BKSNotCached if not cached
     def method_fit(cfg, method: str) -> DirectFit
     def comparison(cfg, methods=None, use_bks: bool | Iterable[str] = True,
                    bks_errors: Mapping[str, str] | None = None) -> ComparisonResult
@@ -1906,6 +1922,8 @@ class LabSession:            # stage results memoised by LabConfig.key(stage); L
     def comparison_key(cfg, methods=None, use_bks=True) -> str
     def bks_ready(cfg, method=None) -> bool
 BKS_NOT_RUN, BKS_OFF, BKS_REFUSED                       # reasons shown for an unavailable BKS-implied fit
+class BKSNotCached(LookupError)                         # the BKS panel or fit of a config is not cached (the only
+                                                        # exception the trace page reads as an eviction)
 def run_lab(cfg: LabConfig, with_bks: bool = False, progress=None, with_compare: bool = False) -> dict[str, Any]
                              # with both flags also fits the other BKS variant as stage bks_fit_training
                              # (or bks_fit_full), timed and keyed; when it refuses, the comparison lists it
@@ -1955,18 +1973,31 @@ def coefficient_path_chart(norms, *, selected=(), labels=None, lam_star=None, ma
                            subtitle=None) -> go.Figure   # standardised Gamma row norms along lambda (log axis)
 
 # trace.py — G.16: a cached lab BKS run traced step by step, with references (pure, no Streamlit)
-STEPS: dict[str, str]                               # summary, inputs, align, shocks, instruments, panel, fit, forecast, implied
-LADDER: dict[str, str]                              # reference ladder variants, top to bottom (G.16)
+STEPS, STEP_WHAT: dict[str, str]                    # summary, inputs, align, shocks, instruments, panel, fit, forecast,
+                                                    # implied; what each step computes (the status table)
+LADDER, LADDER_WHAT: dict[str, str]                 # reference ladder variants, top to bottom (G.16), and what each is
+LADDER_BENCHMARKS = ("zero",)                       # ladder rows outside the chain (no change from the row above)
+OK, OFF, INFO; IDENTITY, DIAGNOSTIC                 # check statuses and kinds
+SEVERITIES, ORIGINS: dict[str, str]                 # a finding's severity (defect, departure, note) and origin
+                                                    # (method, implementation, data, defect)
+TOPIC_TABLE_COLUMNS                                 # sum_abs_B_true, truth_rank, n_links, selected, gamma_norm,
+                                                    # enter_lambda
+PATH_TRACE_MAX_TOPICS = 60; LAMBDA_MAX_MAX_TOPICS = 100   # the per-lambda refit and the lambda_max recompute
 @dataclass class TraceCheck: step, name, relation, value, reference, tolerance, status ("ok" | "off" | "info"),
                              note, kind ("identity" | "diagnostic")
 @dataclass class BKSTrace:                          # recomputed daily shocks, population references, the Eq. 5 chain
     ...                                             # for every asset, ladder, capture shares, path and KKT tables,
-    def checks_frame(step=None) -> pd.DataFrame     # step tables, checks, findings, meta (settings, shapes, timings)
+                                                    # step tables, sigma_table (Sigma_z by history), topic_table
+                                                    # (per topic: truth, links, selection, entry lambda), checks,
+                                                    # findings ({step, severity, origin, title, text}), meta
+    def checks_frame(step=None) -> pd.DataFrame     # (settings, shapes, timings)
     def status_frame() -> pd.DataFrame              # one row per step: checks ok, key number, reading
 def build_trace(panel: BKSPanel, fit: BKSFit, result: BKSLabResult, sim: SimData, shocks: ObservedShocks,
                 truth: SimTruth, window: WindowConfig, bks_cfg: BKSLabConfig, implied: DirectFit,
                 *, path_trace: bool | None = None) -> BKSTrace   # path_trace None: on up to 60 topics
 def population_moments(sim, truth) -> dict          # var_z, sd_z, S_z, Cov(z, r), C (the truth's internals)
+def null_sharpe_quantiles(K, T, probs=(0.05, 0.5, 0.95), annualization=None) -> np.ndarray
+                                                    # in-sample Sharpe of K factors with no priced signal (Hotelling)
 def window_truth(sim, shocks, truth) -> pd.DataFrame    # the population value on the training window's own signal
 # per-selection detail (not cached; one asset, topic or week)
 def asset_days(trace, panel, sim, asset) / topic_days(trace, panel, sim, shocks, topic) -> pd.DataFrame
@@ -1988,6 +2019,7 @@ def first_shock_day(shock_window) -> date / shock_days(train_start, train_end, s
 def earliest_train_end(shock_window, min_days=None) -> date        # the cut-off control's minimum (D87)
 def bks_training_check(train_start, train_end, bks_cfg=None, lead_days=0,
                        shock_window=5) -> dict                  # weeks, n_weeks, can_run, reason (both histories)
+def bks_runtime_warning(n_topics) -> str                         # the warning above 100 topics, else "" (G.9)
 def plural(n, word, words=None) -> str
 def settings_in_use(values, asset_classes=None, asset_names=None) -> pd.DataFrame   # Group, Setting, Value (G.14)
 def comparison_table(summary, notes=None) -> pd.DataFrame        # the Compare methods table, shares in percent
@@ -2409,24 +2441,41 @@ sidebar's.
 covariance history (D88), the run the BKS tab shows. The trace needs a fit
 this browser session requested (D80); the page has its own Run BKS button,
 the sidebar's works too, and a run on either page updates both. The
-Compare methods tab links to the trace of the variant it inspects.
+Compare methods tab links to the trace of the variant it inspects. A refused
+run (Run BKS on this page, in the sidebar, in the BKS tab or in the Compare
+methods tab; stored under the `bks` key, and under the fit key while no fit
+exists) shows its reason and nothing else: a refused fit never joins the
+browser session's fit keys, and the note that the fit is no longer cached
+appears only for a fit of this browser session that has left the two-entry
+fit cache. Only `session.BKSNotCached` reads as such an eviction; any other
+error while tracing is logged and shown. Above 100 topics a run-time warning
+sits above the page's Run BKS button, as in the BKS tab.
 
-**Steps.** A radio chooses the step; only that step is computed and drawn.
-An asset (shared with the BKS tab's per-topic split), a topic (default: the
-asset's topic with the largest true sensitivity) and, where a step needs one,
-a week are chosen above the steps.
+**Steps.** The page opens with a one-line run summary (history, `K`,
+lambda and its rule, the selected topics, the training and forecast weeks,
+the Eq. 5 instrument week, the assets, `w` and the lead) and the six tiles of
+the BKS tab, their caption (`HOW_TRACE_TILES`, which points to step 6) in a
+collapsed expander right under them (G.9). A radio chooses the step; only
+that step is computed and drawn. One row under it holds an asset (shared
+with the BKS tab's per-topic split), a topic (default: the asset's topic
+with the largest true sensitivity, followed until the user picks one) and,
+in steps 4 and 5, the return week (default the last training week, whose
+rows Eq. 5 uses) or, in step 7, the forecast week (default the first). Each
+step opens with a "What happens here" caption (inputs, computation with its
+formula and every symbol in words, outputs, the package function) and ends
+with its checks and a "Next:" line saying what feeds the next step.
 
 | Step | What it shows | Reference ("what it should be") |
 |---|---|---|
 | Summary | a row per step (checks ok, key number, reading), the reference ladder, the findings, all checks | the ladder's upper rows |
 | 1 Inputs | the settings in effect, the shapes, the topic's attention and the asset's return, the asset's set and true sensitivities | the population truth recomputed from the simulation's moments |
 | 2 Alignment and scaling | the asset's divisor (trailing volatility, or training standard deviation) and scaled return; per-asset unit conversion | scaled return x divisor = raw return; the attention lag; the exact kernel-weighted conversion |
-| 3 Attention shocks | the BKS shock against the direct estimator's shock, and its split into signal, news noise and slow component | the explicit formula; the direct shock shifted by the lead; the population attenuation and standard deviation |
-| 4 Instruments | the kernel covariance of the asset and topic over every week, the kernel weights behind one week, the week's instrument row, all instruments against the population covariance | a brute-force kernel covariance; the population covariance in panel units |
+| 3 Attention shocks | the BKS shock against the direct estimator's shock, its split into the designed signal and the noise (news noise plus the slow drift), and a table of the shocks per topic | the explicit formula; the direct shock shifted by the lead (the one-sided days as expected from the data); the population attenuation and standard deviation |
+| 4 Instruments | the kernel covariance of the asset and topic over every week, the kernel weights behind one week, the week's instrument row, all instruments against the population covariance | a brute-force kernel covariance; the population covariance in panel units, divided by the asset's full-sample volatility under the full history and by its training standard deviation under the training history (the scatter's axis names the divisor; validity limit 2) |
 | 5 Weekly panel | the pairing of each return week with the previous week's instruments, the design matrix of a week, how much the instruments move over the training weeks | the weekly sum of scaled returns; the training `sigma_c`; the training weeks from `training_weeks` |
-| 6 Fit and lambda | the lambda path (criterion, standard error, tolerance floor, the null band of a Sharpe ratio with no priced signal), `Gamma` row norms along the path, the standardised `Gamma`, the KKT ratio per instrument, the in-sample factors | the objective, the factor step, KKT and scale balance, the canonical form, `lambda_max` and the band rule recomputed |
-| 7 Forecast weeks | each forecast week's pooled R2 against the shuffled-instrument reference, fitted against realised returns of a week, the weekly factors | the closed-form factor and its first-order condition; the pooled R2 in panel and in exact return units |
-| 8 Implied sensitivities | the Eq. 5 chain of the asset per topic (instrument, projection, constant, divisor, `Sigma_z`, standardisation), the captured share per instrument direction, implied against true sensitivities, `Sigma_z` over three samples | the step-by-step recomputation (identity) and the ladder variants |
+| 6 Fit and lambda | the lambda path (criterion, standard error, tolerance floor, the null band of a Sharpe ratio with no priced signal), `Gamma` row norms along the path, the standardised `Gamma`, which topics should matter (each topic's share of the true sensitivities against its share of the standardised `Gamma` row norms, and a table with its links, the selection and the largest grid lambda at which it is selected, `BKSTrace.topic_table`), the KKT ratio per instrument, the in-sample factors, the path table | the objective, the factor step, KKT and scale balance (on a polished copy of the fit), the canonical form, `lambda_max` and the band rule recomputed; the chosen fit against `Gamma = 0`; the true sensitivities per topic for the selection |
+| 7 Forecast weeks | each forecast week's R2 against the shuffled-instrument reference, fitted against realised returns of a week, the weekly factors, a table per asset | the closed-form factor and its first-order condition; the pooled R2 in panel and in exact return units; the shuffled reference measures the instruments' cross-sectional structure, not topic signal (with every set sensitivity at 0 the defaults' run still reads 25.0% against 7.7%, against 27.8% and 9.1% with them) |
+| 8 Implied sensitivities | the Eq. 5 chain of the asset per topic (instrument, projection, constant, divisor, `Sigma_z`, standardisation), the captured share per instrument direction, implied against true sensitivities, `Sigma_z` over three samples | the step-by-step recomputation and an independent rebuild of Eq. 5 with numpy and pandas (identities), and the ladder variants |
 
 **The reference ladder.** Each row is a topics x assets sensitivity matrix in
 the direct estimator's standardised units, scored as the Compare methods tab
@@ -2445,9 +2494,12 @@ next is the loss of that step:
 4. The instruments alone with `Sigma_z` over the training days (the
    production `Sigma_z`, G.15.1 row 6).
 5. The best `K` directions of the instruments.
-6. The fit's `K` betas inverted by a cross-sectional least-squares
-   reconstruction instead of Eq. 5 (it equals Eq. 5 when the instruments lie
-   exactly in the span of `Gamma_tilde`).
+6. The topic part of the fit's `K` betas inverted by a cross-sectional
+   least-squares reconstruction instead of Eq. 5 (it equals Eq. 5 when the
+   instruments lie exactly in the span of `Gamma_tilde`). Like rows 5 and 7
+   it leaves out the constant's part, so each step of the chain changes one
+   thing (on the defaults the constant's row of `Gamma` is 0, so this
+   changes no number).
 7. The fit's directions without the constant's term.
 8. BKS-implied, the production figure (the step-by-step recomputation equals
    it to 1e-12).
@@ -2464,31 +2516,83 @@ Spearman 0.19 give 0.68 through the least-squares inversion, which keeps 89%
 of the instruments' squared norm against Eq. 5's 38%: the topic information
 is in the betas, and the Eq. 5 inversion (an orthogonal projection onto the
 span of `Gamma_tilde`, which IPCA tilts towards the instruments' weak
-directions) loses it. This refines G.15.1 point 1.
+directions) loses it. This refines G.15.1 point 1. The ladder's median OOS
+R2 over four forecast weeks is noisy: two rows score above the true
+sensitivities on it (25.8% and 25.1% against 23.2%), while Spearman is the
+steadier guide (the true row is its ceiling, 1 by construction).
 
 **Checks.** Identity checks must hold whatever the settings; an identity
-check that is off points to a defect in the code. Diagnostic checks compare a
-result with a reference that holds only under assumptions (the population
-covariance, a live factor, instruments that track their population value);
-when one is off, the run departs from the reference, which is a finding, not
-a defect. Info checks report a number without a pass mark. Tolerances are
-relative unless stated and set well above the numerical error of the stage
-(for example 1e-12 for the unit identity, 5e-3 for the KKT ratio, whose
-residual reflects the stopping rule of the alternating fit).
+check that is off points to a defect in the code. Most recompute a result
+from the inputs independently of the package code; a few, named
+"(consistency)", compare two of the trace's own results. Step 8 rebuilds Eq.
+5 with numpy and pandas alone (the projection by numpy's pseudo-inverse, its
+orthogonality and rank, `Sigma_z` as numpy's covariance and its
+Moore-Penrose inverse, the return scales and divisors by pandas, and the
+implied sensitivities from these pieces against production), so a wrong
+projection or `Sigma_z` inverse is caught, not only a chain that disagrees
+with itself. Diagnostic checks compare a result with a reference that holds
+only under assumptions (the population covariance, a live factor,
+instruments that track their population value, a chosen fit below the
+all-zero objective); when one is off, the run departs from the reference,
+which is a finding, not a defect. Info checks report a number without a pass
+mark. The "Should hold" column states each rule: most observed values are
+differences that must be at most the tolerance; the instruments' correlation
+with their population value and the live-factor ratio must be at least the
+threshold in the Tolerance column, and the kept share at most the best `K`
+share (its Reference). Tolerances are relative unless stated and set well
+above the numerical error of the stage (for example 1e-12 for the unit
+identity; the objective and factor recomputes scale with the condition
+number of the weekly factor systems). The stationarity checks (the KKT ratio
+and the penalty-ridge balance, tolerance 5e-3) are graded on a polished copy
+of the fit: warm-started from the stored `Gamma` and run to a relative
+objective change of 1e-12, after an identity check that the stored fit is at
+its own stopping point (one more sweep changes the objective by less than
+ten times the larger of its stopping tolerance, 1e-8, and its last recorded
+change). The stored fit's residual, which
+grows like 1 / lambda (8.2e-4 on the defaults, 8.3e-6 polished), is reported
+as info, and the page's KKT chart shows the polished ratios. With every row
+of `Gamma` dropped the balance is info (both sides are 0). The Summary says
+that the identity checks agree "to rounding or to the solver's stopping
+tolerance, or satisfy the stated inequality" (42 graded identity checks on
+the defaults).
 
-**Findings.** Computed from the run, in plain words, departures first:
-the share of the instruments the fit's directions keep against the best `K`;
-the moment windows of the full history (kernel weight before the training
-start against the training days of `Sigma_z`, with the instruments' Spearman
-under both); a lambda criterion within noise (its range against its standard
-error, and against the 5%–95% band of the in-sample Sharpe ratio of `K`
-factors with no priced signal over the training weeks); an absolute
-tolerance band below a Sharpe ratio of 1; a dead factor; a path point worse
-than the all-zero solution (D22); instruments that do not track their
-population value; an approximate unit conversion; the week of the
-instruments Eq. 5 uses. On the dashboard defaults the first trace found no
-identity check off. The departures are the Eq. 5 projection, the moment
-windows and the lambda choice (D90).
+**Findings.** Computed from the run, in plain words. Each has a severity,
+defect, departure or note (`trace.SEVERITIES`), listed in that order, and an
+origin (`trace.ORIGINS`): the method (BKS itself), an implementation choice
+of this lab (its step or ladder row shows the alternative), the data of the
+run, or a defect. A defect is an identity check that is off ("Check off:
+<name>", with its numbers); the Summary's answer box names defects only in
+its warning and groups the departures by origin, none of them a coding
+error. The findings: the share of the instruments the fit's directions keep
+against the best `K` (departure, method); the moment windows of the full
+history, kernel weight before the training start against the training days
+of `Sigma_z`, with the instruments' Spearman and median OOS R2 under both
+(implementation; a departure only when the ladder shows a material effect,
+a Spearman gap of at least 0.05 or an R2 gap of at least 2 points, else a
+note); implied sensitivities further from the truth than all zeros, their
+RMSE above the zero row's (departure, method); a lambda criterion within
+noise, against the 5%–95% band of the in-sample Sharpe ratio of `K` factors
+with no priced signal over the training weeks or against its standard error
+(departure, method); a chosen or best lambda at the edge of the grid
+(departure, implementation); a fit stopped at its sweep cap (departure,
+implementation); a chosen fit worse than the all-zero solution (departure,
+method, D22); a dead factor (departure, method); an absolute tolerance band
+below a Sharpe ratio of 1 and the tuner's and the relative reading of the
+band choosing differently (notes, implementation); path points above the
+all-zero objective (note, method); fewer than half of the topics with the
+largest true sensitivities selected (note, method); instruments far from
+their population value (data; a departure only under the full history with
+at least 1,000 effective kernel days); an approximate unit conversion
+(note, implementation); what the forecast R2 measures, the shuffled
+reference being one for the instruments' cross-sectional structure, not
+for topic signal (note, method); the week of the instruments Eq. 5 uses
+(note, implementation); and a defect per identity check that is off. On the
+dashboard defaults no identity check is off and there are four departures:
+the Eq. 5 projection, the lambda choice (the whole path inside the
+no-signal band) and an RMSE above the all-zero matrix (0.091 against 0.078),
+all of the method, and the window of `Sigma_z`, a choice of this
+implementation (Spearman 0.91 with `Sigma_z` over the instruments' own
+history against 0.71) (D90).
 
 **Validity limits of the references.**
 
@@ -2515,4 +2619,6 @@ the captions are `HOW_TRACE_*` in `dashboard/_ui.py`. Tests:
 `tests/test_lab_trace.py` (every identity check holds on generic and default
 configurations, both histories, both leads, fixed lambda 0 and tuned; the
 chain equals production; the helpers agree with the panel) and the trace
-tests in `tests/test_lab_dashboard.py`.
+tests in `tests/test_lab_dashboard.py` (every step with its captions, a
+refused run and an evicted fit, defects kept apart from departures, the
+defaults' answer).

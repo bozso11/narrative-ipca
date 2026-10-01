@@ -37,8 +37,10 @@ panel key also holds the training window.
 BKS trace (G.16, D90). :meth:`LabSession.bks_trace` traces the cached BKS run
 of a configuration step by step (:func:`.trace.build_trace`, under a second
 at 20 topics). Like ``bks_implied`` it never starts a BKS fit: it raises
-``LookupError`` (:data:`BKS_NOT_RUN`) when the panel or the fit is not
-cached. Its key is that of the ``bks`` stage (every setting the trace depends
+:class:`BKSNotCached` (a ``LookupError``, message :data:`BKS_NOT_RUN`) when
+the panel or the fit is not cached. Callers catch :class:`BKSNotCached`, not
+``LookupError``: a ``KeyError`` or ``IndexError`` raised inside the trace is a
+defect and must not read as a cache miss. Its key is that of the ``bks`` stage (every setting the trace depends
 on: the simulation, the windows, the shock window and the BKS settings) and
 it keeps at most ``bks_max_entries`` results.
 
@@ -50,7 +52,7 @@ changes); ``bks_implied`` and ``bks_implied_train`` come from the
 ``bks_implied`` stage of :func:`.compare.method_config` (the configuration
 with the full or the training-window history), which uses the cached BKS
 panel and fit of that configuration and never starts a BKS fit
-(``LookupError`` when they are not cached). :meth:`LabSession.comparison`
+(:class:`BKSNotCached` when they are not cached). :meth:`LabSession.comparison`
 scores the methods; its key holds the evaluation key, the methods and one
 BKS token per BKS-implied method: that method's ``bks_implied`` key when its
 fit was used, ``nobks`` or ``off`` otherwise, so running BKS later gives a
@@ -100,6 +102,7 @@ __all__ = [
     "BKS_MAX_ENTRIES",
     "RUN_LAB_KEYS",
     "BKS_NOT_RUN",
+    "BKSNotCached",
     "BKS_OFF",
     "BKS_REFUSED",
     "LabSession",
@@ -114,6 +117,18 @@ SESSION_STAGES: tuple[str, ...] = (
 
 #: Reason shown for a BKS-implied method when no BKS fit of its configuration is cached.
 BKS_NOT_RUN = "BKS has not been run for these settings. Run BKS first; the comparison does not start a BKS fit."
+
+
+class BKSNotCached(LookupError):
+    """The BKS panel or fit of a configuration is not cached (message :data:`BKS_NOT_RUN`; G.10, D80).
+
+    Raised by :meth:`LabSession.bks_implied` and :meth:`LabSession.bks_trace`,
+    which never start a BKS fit. A subclass of ``LookupError`` so that
+    callers written for ``LookupError`` keep working; new callers catch this
+    class so that a ``KeyError`` or ``IndexError`` from inside a stage is not
+    mistaken for a cache miss.
+    """
+
 
 #: Reason shown for a BKS-implied method when the caller leaves it out (``use_bks``).
 BKS_OFF = "BKS has not been run in this browser session. Run BKS first."
@@ -440,16 +455,16 @@ class LabSession:
 
         Raises
         ------
-        LookupError
+        BKSNotCached
             When the BKS panel or fit of ``cfg`` is not cached
-            (:data:`BKS_NOT_RUN`).
+            (:data:`BKS_NOT_RUN`; a ``LookupError``).
         """
         from .bks import implied_exposures
 
         def compute() -> DirectFit:
             panel, fit = self.peek("bks_panel", cfg), self.peek("bks_fit", cfg)
             if panel is None or fit is None:
-                raise LookupError(BKS_NOT_RUN)
+                raise BKSNotCached(BKS_NOT_RUN)
             return implied_exposures(
                 panel, fit, self.simulation(cfg), self.shocks(cfg), select_tau=float(cfg.direct.select_tau)
             )
@@ -466,9 +481,11 @@ class LabSession:
 
         Raises
         ------
-        LookupError
+        BKSNotCached
             When the BKS panel or fit of ``cfg`` is not cached
-            (:data:`BKS_NOT_RUN`).
+            (:data:`BKS_NOT_RUN`; a ``LookupError``). Any other exception of
+            the trace (a ``KeyError`` or ``IndexError`` included) propagates
+            as it is.
         """
         from .bks import evaluate_bks
         from .trace import build_trace
@@ -476,7 +493,7 @@ class LabSession:
         def compute() -> BKSTrace:
             panel, fit = self.peek("bks_panel", cfg), self.peek("bks_fit", cfg)
             if panel is None or fit is None:
-                raise LookupError(BKS_NOT_RUN)
+                raise BKSNotCached(BKS_NOT_RUN)
             # the peeked objects, not self.bks(cfg): an eviction in between must not start a fit
             result = self._get("bks", cfg, lambda: evaluate_bks(panel, fit, cfg.window))
             implied = self.bks_implied(cfg)
@@ -499,9 +516,9 @@ class LabSession:
         ValueError
             For an unknown method, or when the fit refuses (OLS with
             ``L >= n_train / 2``).
-        LookupError
+        BKSNotCached
             For a BKS-implied method when BKS has not been run for its
-            configuration.
+            configuration (a ``LookupError``).
         """
         from .compare import BKS_METHODS, method_config
 
@@ -539,7 +556,7 @@ class LabSession:
             of :data:`BKS_NOT_RUN`. :meth:`run` passes it.
 
         A method whose fit refuses (``ValueError``, OLS with too many topics)
-        or whose BKS fit is not cached (``LookupError``) is listed as
+        or whose BKS fit is not cached (:class:`BKSNotCached`) is listed as
         unavailable with the reason. The BKS-implied fits are resolved before
         the key is formed, so the key always matches what was scored.
         """
@@ -561,7 +578,7 @@ class LabSession:
             try:
                 bks_fits[m] = self.bks_implied(mcfg)
                 tokens[m] = self.stage_key("bks_implied", mcfg)
-            except LookupError as exc:
+            except BKSNotCached as exc:
                 if m in errors:  # the caller's fit of this variant refused: give its reason (D88)
                     bks_reasons[m] = f"{BKS_REFUSED}{errors[m]}"
                     tokens[m] = f"refused-{self.stage_key('bks_fit', mcfg)}"
@@ -584,7 +601,7 @@ class LabSession:
                 else:
                     try:
                         fit = self.method_fit(cfg, m)
-                    except (ValueError, LookupError) as exc:
+                    except (ValueError, BKSNotCached) as exc:
                         unavailable[m] = str(exc)
                         continue
                 fits[m] = fit

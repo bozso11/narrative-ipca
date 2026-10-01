@@ -8,8 +8,10 @@
 * ``dashboard/app.py``: driven headless with ``streamlit.testing.v1.AppTest``
   on the default config, after widget changes, with invalid dates, with a
   BKS run on a small generic universe, in the Compare methods tab before and
-  after a BKS run (G.15), and on the Real data page with the shared sidebar;
-  a "How to read" caption with examples next to every chart (G.9).
+  after a BKS run (G.15), on the Real data page with the shared sidebar and on
+  the BKS trace page (G.16, D90: every step, a refused run, an evicted fit,
+  defects kept apart from departures); a "How to read" caption with examples
+  next to every chart (G.9).
 * ``scripts/run_lab.py``: files written for a small generic config.
 
 The default page needs ``data/market`` and ``data/reference``; those tests are
@@ -868,6 +870,7 @@ HOW_TO_READ_LEADS: dict[str, str] = {
     "fig_tr_path": "How to read the lambda path and its noise:",
     "fig_tr_coef_path": "How to read the Gamma path:",
     "fig_tr_gamma": "How to read the Gamma heatmap:",
+    "fig_tr_topics": "How to read the topic chart:",
     "fig_tr_kkt": "How to read the optimum check:",
     "fig_tr_factors": "How to read the factor chart:",
     "fig_tr_week_r2": "How to read the weekly R² chart:",
@@ -1475,7 +1478,7 @@ TRACE_STEP_CHARTS: dict[str, set[str]] = {
     "shocks": {"fig_tr_shocks"},
     "instruments": {"fig_tr_instrument", "fig_tr_kernel", "fig_tr_instr_truth"},
     "panel": {"fig_tr_design", "fig_tr_stability"},
-    "fit": {"fig_tr_path", "fig_tr_coef_path", "fig_tr_gamma", "fig_tr_kkt", "fig_tr_factors"},
+    "fit": {"fig_tr_path", "fig_tr_coef_path", "fig_tr_gamma", "fig_tr_topics", "fig_tr_kkt", "fig_tr_factors"},
     "forecast": {"fig_tr_week_r2", "fig_tr_week_scatter", "fig_tr_oos_factors"},
     "implied": {"fig_tr_chain", "fig_tr_capture", "fig_tr_implied_scatter", "fig_tr_sigma"},
 }
@@ -1490,8 +1493,8 @@ TRACE_STEP_CAPTIONS: dict[str, tuple[str, ...]] = {
     "instruments": ("HOW_TRACE_INSTRUMENT", "HOW_TRACE_KERNEL", "HOW_TRACE_INSTR_TRUTH", "HOW_TRACE_INSTR_ROW",
                     "HOW_TRACE_CHECKS"),
     "panel": ("HOW_TRACE_PAIRING", "HOW_TRACE_DESIGN", "HOW_TRACE_STABILITY", "HOW_TRACE_CHECKS"),
-    "fit": ("HOW_TRACE_PATH", "HOW_TRACE_COEF_PATH", "HOW_TRACE_GAMMA", "HOW_TRACE_KKT", "HOW_TRACE_FACTORS",
-            "HOW_TRACE_PATH_TABLE", "HOW_TRACE_CHECKS"),
+    "fit": ("HOW_TRACE_PATH", "HOW_TRACE_COEF_PATH", "HOW_TRACE_GAMMA", "HOW_TRACE_TOPICS", "HOW_TRACE_TOPIC_TABLE",
+            "HOW_TRACE_KKT", "HOW_TRACE_FACTORS", "HOW_TRACE_PATH_TABLE", "HOW_TRACE_CHECKS"),
     "forecast": ("HOW_TRACE_WEEK_R2", "HOW_TRACE_WEEK_SCATTER", "HOW_TRACE_OOS_FACTORS", "HOW_TRACE_WEEK_TABLE",
                  "HOW_TRACE_CHECKS"),
     "implied": ("HOW_TRACE_CHAIN", "HOW_TRACE_SHARES", "HOW_TRACE_CAPTURE", "HOW_TRACE_IMPLIED_SCATTER",
@@ -1513,9 +1516,13 @@ def _step(at, step: str) -> None:
 
 
 def test_trace_step_captions_cover_every_trace_caption():
-    """Every HOW_TRACE_* caption of _ui belongs to a step of the trace page (and nothing else is listed)."""
+    """Every HOW_TRACE_* caption of _ui belongs to a step of the trace page, or is the tiles' caption above the
+    steps (and nothing else is listed); the tiles' caption points to step 6, not to charts "below"."""
     listed = {n for names in TRACE_STEP_CAPTIONS.values() for n in names}
-    assert listed == {n for n in dir(_ui) if n.startswith("HOW_TRACE_")}
+    assert listed | {"HOW_TRACE_TILES"} == {n for n in dir(_ui) if n.startswith("HOW_TRACE_")}
+    tiles = _ui.how_to_read(*_ui.HOW_TRACE_TILES)
+    assert "path below" not in tiles and "per-topic split" not in tiles and tiles.count("step 6") == 2
+    assert [t for t, _ in _ui.HOW_TRACE_TILES[1]][1:] == [t for t, _ in _ui.HOW_BKS_TILES[1]][1:]
     assert set(TRACE_STEP_CHARTS) == set(TRACE_STEPS) == set(TRACE_STEP_CAPTIONS)
     assert {k for keys in TRACE_STEP_CHARTS.values() for k in keys} == {
         k for k in HOW_TO_READ_LEADS if k.startswith("fig_tr_")}
@@ -1551,7 +1558,8 @@ def test_app_trace_page_traces_the_run_step_by_step():
     _assert_clean(at)
     assert "bks_requested" not in at.session_state  # the trace page handled the request itself
     assert "Chosen lambda" in [m.label for m in at.metric]
-    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) in [c.value for c in at.caption]
+    assert _ui.how_to_read(*_ui.HOW_TRACE_TILES) in [c.value for c in at.caption]
+    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) not in [c.value for c in at.caption]
     assert at.radio(key="tr_step").value == "summary"
     assert list(at.radio(key="tr_step").options) == list(TRACE_STEPS.values())
     assert any(m.value.startswith("**Full history before the cut-off** · K = 3 · lambda") for m in at.markdown)
@@ -1590,10 +1598,9 @@ def test_app_trace_page_traces_the_run_step_by_step():
     _step(at, "inputs")
     asset = at.selectbox(key="bks_asset").value
     assert at.selectbox(key="tr_topic").value == str(B[asset].abs().idxmax())
-    other = [a for a in at.selectbox(key="bks_asset").options if a != at.selectbox(key="bks_asset").format_func(asset)]
     at.selectbox(key="bks_asset").set_value(str(B.columns[-1])).run()
     _assert_clean(at)
-    assert at.selectbox(key="tr_topic").value == str(B[str(B.columns[-1])].abs().idxmax()) and other
+    assert at.selectbox(key="tr_topic").value == str(B[str(B.columns[-1])].abs().idxmax())
     picked = str(B.index[-1])
     at.selectbox(key="tr_topic").set_value(picked).run()
     at.selectbox(key="bks_asset").set_value(asset).run()
@@ -1672,6 +1679,147 @@ def test_app_compare_tab_links_to_the_trace():
     assert at.radio(key="tr_step").value == "summary"
 
 
+def test_app_compare_tab_says_when_the_traced_fit_left_the_cache():
+    """D80, D90 (review 2026-09-30): the Compare tab keeps offering the trace of a BKS-implied variant whose fit
+    has left the two-entry fit cache (the comparison still holds its scores), and says under it that the trace
+    page will ask for a refit; the trace page then says the fit left the cache."""
+    note = "The BKS fit of this variant is no longer in the cache"
+    at = _app().run()
+    _generic_sidebar(at)
+    at.button(key="cm_run_bks").click().run()
+    at.selectbox(key="cm_inspect").set_value("bks_implied").run()
+    _assert_clean(at)
+    assert not [c for c in at.tabs[3].caption if c.value.startswith(note)]
+    at.slider(key="sb_bks_K").set_value(4).run()
+    at.button(key="cm_run_bks").click().run()  # two more fits push both K = 3 fits out of the cache
+    at.slider(key="sb_bks_K").set_value(3).run()
+    _assert_clean(at)
+    assert ("Trace the BKS-implied sensitivities step by step", "bks-trace") in _page_links(at.tabs[3])
+    assert [c for c in at.tabs[3].caption if c.value.startswith(note)]
+    _trace_page(at)
+    _assert_clean(at)
+    assert any("is no longer in the cache" in i.value for i in at.info)
+
+
+def test_app_trace_page_shows_a_refusal_not_an_eviction():
+    """D80, D90 (review 2026-09-30): when BKS refuses the settings (K = 3 factors on 3 assets), the trace page shows
+    the reason, whether the refusal came from its own Run BKS or from the Compare tab's, and never the note that a
+    cached fit left the cache; a refused fit does not join this browser session's fit keys."""
+    reason = "factors need more than 3 assets"
+
+    def assert_refusal(at) -> None:
+        assert not at.exception, [e.value for e in at.exception]
+        assert at.error and all(reason in e.value for e in at.error), [e.value for e in at.error]
+        assert not [i.value for i in at.info if "no longer in the cache" in i.value]
+        assert "Chosen lambda" not in [m.label for m in at.metric] and "tr_step" not in [r.key for r in at.radio]
+
+    at = _app().run()
+    _generic_sidebar(at)
+    at.slider(key="sb_n_generic_assets").set_value(3).run()
+    _trace_page(at)
+    for _ in range(2):  # pressing Run BKS again gives the same reason, not the eviction note
+        at.button(key="tr_run_bks").click().run()
+        assert_refusal(at)
+    assert not at.session_state["bks_fit_keys"]
+    at.slider(key="sb_forecast_weeks").set_value(3).run()  # a new bks key, the same fit key: still the reason
+    assert_refusal(at)
+
+    at = _app().run()  # the Compare tab's Run BKS refuses both variants; the trace page shows why
+    _generic_sidebar(at)
+    at.slider(key="sb_n_generic_assets").set_value(3).run()
+    at.button(key="cm_run_bks").click().run()
+    assert not at.exception
+    assert _fit_errors(at) and not at.session_state["bks_fit_keys"]
+    _trace_page(at)
+    assert_refusal(at)
+
+
+def _fit_errors(at) -> dict[str, str]:
+    """The refusals stored per BKS fit key (``bks_fit_errors``)."""
+    return dict(at.session_state["bks_fit_errors"]) if "bks_fit_errors" in at.session_state else {}
+
+
+def _answer_script(trace, dashboard: str) -> None:
+    """AppTest script: the trace page's answer box and findings list for ``trace``."""
+    import sys
+
+    if dashboard not in sys.path:
+        sys.path.insert(0, dashboard)
+    import trace_page
+
+    trace_page._answer(trace)
+    trace_page._findings(trace)
+
+
+def test_trace_answer_keeps_defects_apart_from_departures():
+    """G.16, D90 (review 2026-09-30): an identity check that is off is a defect. The answer box names it in its
+    warning only, never among the departures, which it groups by origin (none is a coding error); the findings
+    list labels it "Defect" and puts it first, and shows each departure's and note's origin. Without a defect
+    the box says the checks agree to rounding or to the solver's stopping tolerance."""
+    from streamlit.testing.v1 import AppTest
+
+    import trace_page
+    from narrative_ipca.exposure_lab import trace as lab_trace
+
+    cfg = _generic_cfg(train_start="2021-01-01", train_end="2022-12-30", forecast_start="2023-01-02")
+    s = LabSession()
+    s.bks_fit(cfg)
+    implied = s.bks_implied(cfg)
+    args = (s.bks_panel(cfg), s.bks_fit(cfg), s.bks(cfg), s.simulation(cfg), s.shocks(cfg), s.truth(cfg), cfg.window,
+            cfg.bks)
+    good = lab_trace.build_trace(*args, implied, path_trace=False)
+    # a production result that disagrees with its formula: the chain's identity check goes off
+    bad = lab_trace.build_trace(*args, dataclasses.replace(implied, B_hat=implied.B_hat + 1e-6), path_trace=False)
+    off = [c.name for c in bad.checks if c.kind == lab_trace.IDENTITY and c.status == lab_trace.OFF]
+    assert off and not [c for c in good.checks if c.kind == lab_trace.IDENTITY and c.status == lab_trace.OFF]
+    assert {f["severity"] for f in bad.findings if f["origin"] == "defect"} == {"defect"}
+    assert len([f for f in bad.findings if f["severity"] == "defect"]) == len(off)
+
+    dashboard = str(ROOT / "dashboard")
+    for trace in (good, bad):
+        at = AppTest.from_function(_answer_script, default_timeout=60, args=(trace, dashboard)).run()
+        assert not at.exception, [e.value for e in at.exception]
+        md = [m.value for m in at.markdown]
+        box = next((m for m in md if m.startswith("**Where BKS departs")), "")
+        findings = md[-1]
+        defects = [f for f in trace.findings if f["severity"] == "defect"]
+        departures = [f for f in trace.findings if f["severity"] == "departure"]
+        if defects:
+            assert len(at.warning) == 1 and all(name in at.warning[0].value for name in off)
+            assert not any(m.startswith("**The code does what the formulas say.**") for m in md)
+            assert findings.startswith("- **Defect, ")
+        else:
+            assert not at.warning
+            assert md[0].startswith("**The code does what the formulas say.**")
+            assert "to rounding or to the solver's stopping tolerance" in md[0]
+            assert "**Defect, " not in findings
+        assert "Check off" not in box and not any(f["title"] in box for f in defects)
+        assert "properties of the method, not coding errors" not in "\n".join(md)
+        if departures:
+            assert box.startswith("**Where BKS departs from what it should be.** None of these is a coding error.")
+            for f in departures:
+                assert f"{f['title']}." in box
+                assert f"**Departure ({trace_page.ORIGIN_WORDS[f['origin']]}), " in findings
+                assert trace_page.ORIGIN_GROUPS[f["origin"]] in box
+        else:
+            assert any(m.startswith("**No departure found:**") for m in md)
+        for f in trace.findings:
+            if f["severity"] == "note":
+                assert f"**Note ({trace_page.ORIGIN_WORDS[f['origin']]}), " in findings
+
+
+def test_bks_runtime_warning():
+    """G.9: the run-time warning above 100 topics (the BKS tab and the trace page show it before Run BKS)."""
+    assert _ui.bks_runtime_warning(20) == _ui.bks_runtime_warning(100) == ""
+    text = _ui.bks_runtime_warning(150)
+    assert text.startswith("150 topics: a BKS run takes") and "Keep the grid coarse." in text
+    src = APP.read_text(encoding="utf-8")
+    body = src[src.index("def bks_trace_page"):]
+    assert body.index("_bks_runtime_warning(") < body.index('key="tr_run_bks"')
+    tab = src[src.index("def bks_tab"):src.index("def lists_tab")]
+    assert tab.index("_bks_runtime_warning(") < tab.index('key="bks_run_tab"')
+
+
 @needs_market
 def test_app_trace_page_on_the_defaults():
     """D90, G.15.1: on the dashboard defaults the summary answers where BKS departs: every identity check holds;
@@ -1690,11 +1838,26 @@ def test_app_trace_page_on_the_defaults():
     assert float(ladder.loc["Direct method: Elastic net (benchmark)", "Spearman"]) > 0.5
     assert list(ladder.index).index("Direct method: Elastic net (benchmark)") > list(ladder.index).index(
         "BKS-implied (production)")
-    assert any(m.value.startswith("**The code does what the formulas say.** All ") for m in at.main.markdown)
+    assert any(m.value.startswith("**The code does what the formulas say.** All 42 ") for m in at.main.markdown)
+    # the answer box groups the four departures by origin: three of the method, the Sigma_z window of this
+    # implementation; none is called a coding error, and no defect is listed
+    box = next(m.value for m in at.main.markdown if m.value.startswith("**Where BKS departs"))
+    method, _, impl = box.partition("Choices of this implementation")
+    assert "None of these is a coding error." in box and "Check off" not in box and "Defect" not in box
+    assert "Properties of the method (BKS itself):" in method and impl
+    for title in ("6 Fit and lambda: The lambda choice follows noise.",
+                  "8 Implied sensitivities: The fit's directions keep little of the instruments.",
+                  "8 Implied sensitivities: The implied sensitivities are further from the truth than zero."):
+        assert title in method, title
+    assert "8 Implied sensitivities: Instruments and the shocks' covariance cover different days." in impl
     findings = "\n".join(m.value for m in at.main.markdown)
-    assert "**Departure, 8 Implied sensitivities: The fit's directions keep little of the instruments.**" in findings
-    assert "Departure, 6 Fit and lambda" in findings and "Note, 8 Implied sensitivities" in findings
-    assert findings.index("Departure, ") < findings.index("Note, ")
+    assert ("**Departure (method), 8 Implied sensitivities: The fit's directions keep little of the instruments.**"
+            in findings)
+    assert ("**Departure (implementation choice), 8 Implied sensitivities: Instruments and the shocks' covariance "
+            "cover different days.**" in findings)
+    assert "Departure (method), 6 Fit and lambda" in findings and "Note (implementation choice), 8 Implied" in findings
+    assert "**Defect, " not in findings
+    assert findings.index("**Departure (") < findings.index("**Note (")
     status = at.main.dataframe[0].value.set_index("Step")
     assert status.loc["8 Implied sensitivities", "Reading"] == "departs"
     assert status.loc["5 Weekly panel", "Reading"] == "as expected"
@@ -1702,4 +1865,12 @@ def test_app_trace_page_on_the_defaults():
     for step in ("instruments", "fit", "implied"):
         _step(at, step)
         assert _assert_how_to_read(at.main) == TRACE_STEP_CHARTS[step], step
+        if step == "instruments":  # the reference's divisor is named per history
+            spec = next(el.proto.spec for el in at.main.get("plotly_chart")
+                        if str(el.proto.id).endswith("fig_tr_instr_truth"))
+            assert "full-sample volatility (panel units)" in spec  # Plotly's JSON escapes the slash
+        if step == "fit":  # which topics should matter: A5 kept, A4 and S2 (ranks 2 and 3) never selected
+            topics = next(d.value for d in at.main.dataframe if "Rank" in d.value.columns)
+            assert list(topics["Rank"])[:3] == [1, 2, 3] and list(topics["Selected"])[:3] == ["yes", "no", "no"]
+            assert topics["Enters at lambda"].iloc[1:3].isna().all()
     assert at.selectbox(key="bks_asset").value == _ui.DEFAULT_CONTRIB_ASSET

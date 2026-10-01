@@ -58,7 +58,8 @@ is in ``st.session_state["_effective"]``. Sidebar keys start with ``sb_``.
 
 Every chart, results or reference table and row of tiles has a "How to read"
 caption whose bullets end with a static example (owner request 2026-09-30,
-G.9): under it, or directly above the link map's editor. Diagnostics (stage
+G.9): under it, or directly above the link map's editor (the BKS trace page's
+tiles: in a collapsed expander right under them). Diagnostics (stage
 timings) and input editors (the long/short view, the session's link edits)
 have none. The texts are in ``_ui`` (``how_to_read`` and the ``HOW_*``
 constants).
@@ -104,7 +105,7 @@ from narrative_ipca.exposure_lab.config import (  # noqa: E402
     LabConfig,
 )
 from narrative_ipca.exposure_lab.dgp import attenuation  # noqa: E402
-from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, LabSession  # noqa: E402
+from narrative_ipca.exposure_lab.session import BKS_NOT_RUN, BKS_OFF, BKSNotCached, LabSession  # noqa: E402
 
 logger = logging.getLogger("dashboard.app")
 
@@ -846,8 +847,10 @@ def _inspect_control(options: list[str], default: str, format_func: Any) -> str:
 def _switch_to_trace(history: str) -> None:
     """Compare tab: trace a BKS-implied variant whose covariance history the sidebar does not show (D88, D90).
 
-    Sets the sidebar's "Covariance history" to ``history`` and opens the BKS trace page; the variant's fit is
-    already in this browser session's fit keys (the Compare tab ran it), so the trace needs no refit.
+    Sets the sidebar's "Covariance history" to ``history`` and opens the BKS trace page. The variant's fit key is
+    already in this browser session's fit keys (the Compare tab ran it), so the trace uses the cached fit; if the
+    fit has been evicted since (two fits are kept), the trace page says so and its Run BKS fits it again. The
+    Compare tab says so under the button when the fit is no longer cached.
     """
     st.session_state[_VALUES]["sb_bks_history"] = history
     st.switch_page(PAGES["trace"])
@@ -1026,6 +1029,11 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                 help="Opens the BKS trace page with the sidebar's covariance history set to "
                 f"{_ui.BKS_HISTORY_LABELS[inspect_history].lower()}.",
             )
+        mcfg = lab_compare.method_config(cfg, inspect)
+        if "trace" in PAGES and not (session.has("bks_panel", mcfg) and session.has("bks_fit", mcfg)):
+            # the comparison still holds this variant's scores, but its fit left the two-entry fit cache
+            st.caption("The BKS fit of this variant is no longer in the cache (it keeps the two most recent fits), "
+                       "so the trace page will ask for Run BKS, which fits it again.")
     skipped = [a_labels.get(a, a) for a in fit.meta.get("skipped_assets", [])]
     if skipped:
         st.caption(f"{len(skipped)} asset(s) with too few training days get zero sensitivities: "
@@ -1051,11 +1059,20 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         st.caption(_ui.how_r2_bars(name, overview=False))
 
 
-def bks_tiles(res: Any, caption_expander: bool = False) -> None:
+def _bks_runtime_warning(n_topics: int) -> None:
+    """The run-time warning above 100 topics, before the Run BKS buttons of the BKS tab and the BKS trace page."""
+    text = _ui.bks_runtime_warning(n_topics)
+    if text:
+        st.warning(text)
+
+
+def bks_tiles(res: Any, caption_expander: bool = False, caption: tuple[str, Any] = _ui.HOW_BKS_TILES) -> None:
     """The six tiles of a BKS run and their "How to read" caption (BKS tab and BKS trace page).
 
     ``caption_expander``: the caption goes in a collapsed "How to read the tiles" expander right under the tiles
-    (the trace page, where the tiles sit above the step selector on every step).
+    (the trace page, where the tiles sit above the step selector on every step; G.9's exception). ``caption``: the
+    ``(lead, bullets)`` of the caption; the trace page passes ``_ui.HOW_TRACE_TILES``, whose pointers name its
+    step 6.
     """
     m = st.columns(6)
     m[0].metric("Chosen lambda", f"{res.lam:.4g}", border=True)
@@ -1070,9 +1087,9 @@ def bks_tiles(res: Any, caption_expander: bool = False) -> None:
                 "gap to the pooled OOS R² is what the instruments add beyond K freely fitted weekly factors.")
     if caption_expander:
         with st.expander("How to read the tiles"):
-            st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
+            st.caption(_ui.how_to_read(*caption))
     else:
-        st.caption(_ui.how_to_read(*_ui.HOW_BKS_TILES))
+        st.caption(_ui.how_to_read(*caption))
 
 
 def bks_tab(ctx: dict[str, Any]) -> None:
@@ -1112,11 +1129,7 @@ def bks_tab(ctx: dict[str, Any]) -> None:
                                    cfg.window.shock_window)
     if not check["can_run"]:
         st.warning(f"{check['reason']} The direct estimator runs on windows down to one month.")
-    if L > 100:
-        st.warning(
-            f"{L} topics: a BKS run takes from about half a minute to several minutes (measured on 55 assets: "
-            "1.5 s at 100 topics, 36 s at 500 topics with 12 grid points). Keep the grid coarse."
-        )
+    _bks_runtime_warning(L)
     st.button("Run BKS", key="bks_run_tab", type="primary", on_click=_request_bks, disabled=not check["can_run"],
               help=None if check["can_run"] else "Change the training window first.")
     trace_link("Trace this BKS run step by step")
@@ -1388,22 +1401,33 @@ def _run_bks(session: LabSession, cfg: LabConfig, ctx: dict[str, Any]) -> None:
     computation, so a widget change cannot interrupt the fit (a rerun then
     finds the fit in the cache). The request flag is cleared when the run
     ends, not before.
+
+    The fit key joins this browser session's fit keys (D80) once the fit
+    exists, so a refused fit never reads as a cached one that was evicted. A
+    refusal is stored under the ``bks`` key (``bks_error``) and, when no fit
+    exists, under the fit key as well (``bks_fit_errors``, which the Compare
+    tab's Run BKS also writes), so every page finds it.
     """
     key = ctx["bks_key"]
-    st.session_state["bks_fit_keys"].add(session.stage_key("bks_fit", cfg))
+    fit_key = session.stage_key("bks_fit", cfg)
+    fit_errors = st.session_state.setdefault("bks_fit_errors", {})
     t0 = time.perf_counter()
     try:
         with st.spinner("Running BKS Sparse IPCA ...", show_time=True):
             session.bks_panel(cfg)
             session.bks_fit(cfg)
+            st.session_state["bks_fit_keys"].add(fit_key)
+            fit_errors.pop(fit_key, None)
             res = session.bks(cfg)
-    except ValueError as exc:
-        st.session_state["bks_error"] = (key, str(exc))
-        st.session_state.pop("bks_requested", None)
-        return
-    except Exception as exc:  # numerical failures: show the reason, keep the page
-        logger.exception("BKS run failed")
-        st.session_state["bks_error"] = (key, f"{type(exc).__name__}: {exc}")
+    except Exception as exc:  # ValueError: the settings; others: numerical failures. Show the reason, keep the page
+        if isinstance(exc, ValueError):
+            reason = str(exc)
+        else:
+            logger.exception("BKS run failed")
+            reason = f"{type(exc).__name__}: {exc}"
+        st.session_state["bks_error"] = (key, reason)
+        if not session.has("bks_fit", cfg):
+            fit_errors[fit_key] = reason
         st.session_state.pop("bks_requested", None)
         return
     _store_bks(res, ctx, time.perf_counter() - t0, session.peek("bks_fit", cfg))
@@ -1414,12 +1438,12 @@ def _run_bks_variants(session: LabSession, cfg: LabConfig, methods: tuple[str, .
     """The Compare tab's Run BKS: panel and fit of each requested BKS-implied variant (D88).
 
     A variant whose fit is cached already (by any browser session) costs
-    nothing; each variant's fit key joins this browser session's keys, so the
-    comparison reuses it (D80). As in :func:`_run_bks`, only the spinner is
-    drawn while the fits compute; errors are stored per fit key.
+    nothing; each fitted variant's fit key joins this browser session's keys,
+    so the comparison reuses it (D80). As in :func:`_run_bks`, only the spinner
+    is drawn while the fits compute; errors are stored per fit key
+    (``bks_fit_errors``), and a refused variant's key does not join.
     """
     keys = {m: session.stage_key("bks_fit", lab_compare.method_config(cfg, m)) for m in methods}
-    st.session_state["bks_fit_keys"].update(keys.values())
     errors: dict[str, str] = {}
     with st.spinner("Running BKS Sparse IPCA ...", show_time=True):
         for m in methods:
@@ -1432,6 +1456,7 @@ def _run_bks_variants(session: LabSession, cfg: LabConfig, methods: tuple[str, .
             except Exception as exc:  # numerical failures: show the reason, keep the page
                 logger.exception("BKS run failed (%s)", m)
                 errors[keys[m]] = f"{type(exc).__name__}: {exc}"
+    st.session_state["bks_fit_keys"].update(k for k in keys.values() if k not in errors)
     stored = st.session_state.setdefault("bks_fit_errors", {})
     for k in keys.values():
         stored.pop(k, None)
@@ -1469,7 +1494,6 @@ def _store_bks(res: Any, ctx: dict[str, Any], seconds: float, fit: Any = None) -
     st.session_state["bks_store"] = {
         "lam_max": lam_max,
         "key": ctx["bks_key"],
-        "cfg": ctx["cfg"],
         "result": res,
         "seconds": float(seconds),
         "t_labels": dict(ctx["t_labels"]),
@@ -1479,7 +1503,7 @@ def _store_bks(res: Any, ctx: dict[str, Any], seconds: float, fit: Any = None) -
 
 
 def shared_settings(on_simulation: bool) -> dict[str, Any]:
-    """Draw the shared sidebar and turn its values into a lab config (both pages).
+    """Draw the shared sidebar and turn its values into a lab config (every page).
 
     Returns the sidebar's values in effect, ``cfg`` (``None`` when the values
     are invalid), ``errors`` and ``notes`` of :func:`_ui.config_from_values`,
@@ -1632,13 +1656,27 @@ TRACE_LEAD = (
 )
 
 
+def _bks_refusal(bks_key: str, fit_key: str, cached: bool) -> str | None:
+    """The reason BKS refused the current settings, if it did: the error of a run under this ``bks`` key (Run BKS
+    on any page), else, while no fit is cached, the refusal stored under the fit key (``_run_bks`` or the Compare
+    tab's Run BKS)."""
+    err = st.session_state.get("bks_error")
+    if err and err[0] == bks_key:
+        return str(err[1])
+    if not cached:
+        return st.session_state.get("bks_fit_errors", {}).get(fit_key)
+    return None
+
+
 def bks_trace_page() -> None:
     """The BKS trace page (D90): the current settings' BKS run, step by step, with references.
 
     Runs the cheap lab stages (cached after the Simulation lab page), handles the Run BKS requests of this page
     and the sidebar (:func:`_bks_sync`), and traces only a fit this browser session requested for the current
-    settings (D80): it never starts a fit by itself. The trace itself (:meth:`LabSession.bks_trace`) is one
-    pure call inside one spinner; the steps are drawn by :func:`trace_page.render`.
+    settings (D80): it never starts a fit by itself. A refused run shows its reason (:func:`_bks_refusal`) and
+    nothing else; the eviction note is only for a fit of this browser session that left the cache. The trace
+    itself (:meth:`LabSession.bks_trace`) is one pure call inside one spinner; only ``BKSNotCached`` reads as
+    an eviction, any other error is logged and shown. The steps are drawn by :func:`trace_page.render`.
     """
     run = _RUN
     values = run["values"]
@@ -1683,17 +1721,21 @@ def bks_trace_page() -> None:
     check = _ui.bks_training_check(w.train_start, w.train_end, cfg.bks, cfg.exposure.lead_days, w.shock_window)
     if not check["can_run"]:
         st.warning(f"{check['reason']} The direct estimator runs on windows down to one month.")
+    _bks_runtime_warning(len(sim.topics.table))
     st.button("Run BKS", key="tr_run_bks", type="primary", on_click=_request_bks, disabled=not check["can_run"],
               help=None if check["can_run"] else "Change the training window first.")
-    err = st.session_state.get("bks_error")
-    if err and err[0] == ctx["bks_key"]:
-        st.error(f"BKS could not run with these settings: {err[1]}")
-    mine = session.stage_key("bks_fit", cfg) in st.session_state["bks_fit_keys"]
-    if not (mine and session.has("bks_panel", cfg) and session.has("bks_fit", cfg)):
+    fit_key = session.stage_key("bks_fit", cfg)
+    cached = session.has("bks_panel", cfg) and session.has("bks_fit", cfg)
+    reason = _bks_refusal(ctx["bks_key"], fit_key, cached)
+    if reason:  # a refused run (this page, the sidebar, the BKS tab or the Compare tab): its reason, no trace
+        st.error(f"BKS could not run with these settings: {reason}")
+        return
+    mine = fit_key in st.session_state["bks_fit_keys"]
+    if not (mine and cached):
         if mine:
             st.info("The BKS fit for these settings is no longer in the cache (it keeps the two most recent fits). "
                     "Press Run BKS to fit it again; the trace then shows each step.")
-        else:
+        elif check["can_run"]:
             st.info("Press Run BKS (here or in the sidebar) to fit BKS on the current settings; the trace then shows "
                     "each step. The default settings take about a second.")
         return
@@ -1706,8 +1748,8 @@ def bks_trace_page() -> None:
         if res is None and store is not None and store["key"] == ctx["bks_key"]:
             res = store["result"]
         if res is None:
-            raise LookupError("the evaluated BKS run is no longer cached")
-    except LookupError:
+            raise BKSNotCached("the evaluated BKS run is no longer cached")
+    except BKSNotCached:  # evicted between the check above and the trace; any other error is a defect, logged below
         st.info("The BKS fit for these settings is no longer in the cache. Press Run BKS to fit it again.")
         return
     except Exception as exc:  # show the reason, keep the page

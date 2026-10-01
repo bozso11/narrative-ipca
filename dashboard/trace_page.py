@@ -9,22 +9,21 @@ traced (:meth:`narrative_ipca.exposure_lab.session.LabSession.bks_trace`). This 
 fit), ``ev`` (its evaluation), ``a_labels``, ``t_labels``, ``bks_key``, ``trace`` (``BKSTrace``), ``res``
 (``BKSLabResult``), ``panel`` (``BKSPanel``) and ``bks_fit`` (``BKSFit``).
 
-Layout: a run summary line, the BKS tiles, the step selector and the focus controls (asset, topic and, in the
-steps that use one, a week), then the selected step only. Steps are lazy: only the selected step calls its
-per-selection helpers of :mod:`narrative_ipca.exposure_lab.trace`; the summary reads the cached trace only.
-Each step has a "What happens here" caption (inputs, computation with its formula, outputs, the package
-function), its charts and tables each followed by a "How to read" caption (``_ui.HOW_TRACE_*``), its checks,
-and a line saying what feeds the next step. The page text says "topic sensitivity", never "exposure".
+Layout: a run summary line, the BKS tiles (their caption, ``_ui.HOW_TRACE_TILES``, in a collapsed expander
+right under them, G.9), the step selector and the focus controls (asset, topic and, in the steps that use one, a
+week), then the selected step only. Steps are lazy: only the selected step calls its per-selection helpers of
+:mod:`narrative_ipca.exposure_lab.trace`; the summary reads the cached trace only. Each step has a "What happens
+here" caption (inputs, computation with its formula, outputs, the package function), its charts and tables each
+followed by a "How to read" caption (``_ui.HOW_TRACE_*``), its checks, and a line saying what feeds the next
+step. The page text says "topic sensitivity", never "exposure".
 
-Optional trace fields (added with the suspect hunts; SPEC addendum): the ladder rows ``bks_ls`` and ``zero``,
-the path's null band and band floors, ``units.conversion_exact`` / ``kernel_divisor``, ``capture.ls_share`` /
-``per_asset_share``, ``BKSTrace.sigma_table`` and the panel-day counts in ``meta``. The page uses each when
-present and leaves it out otherwise.
+The Summary's answer box keeps defects (identity checks that are off, findings of severity ``"defect"``) apart
+from departures, and words the departures by their origin (``"method"``, ``"implementation"`` or ``"data"``,
+DESIGN.md G.16 "Findings").
 """
 
 from __future__ import annotations
 
-import inspect
 import math
 from typing import Any
 
@@ -38,8 +37,9 @@ from narrative_ipca.exposure_lab import trace as T
 from narrative_ipca.exposure_lab.evaluate import median_finite
 
 #: Help text of the status table's "Reading" column.
-READING_HELP = ("as expected: every check holds and nothing departs; departs: the method departs from its "
-                "reference; off: an identity check failed (a code defect).")
+READING_HELP = ("as expected: every check holds and nothing departs; departs: the run departs from its "
+                "reference (through the method, an implementation choice or the data); off: an identity check "
+                "failed (a code defect).")
 
 #: Steps whose charts use the focus week (``tr_week``) and the forecast week (``tr_fweek``).
 WEEK_STEPS = ("instruments", "panel")
@@ -155,14 +155,6 @@ def _pct(s: Any) -> Any:
     return s * 100.0
 
 
-def _accepts(func: Any, name: str) -> bool:
-    """Whether ``func`` takes a keyword argument ``name`` (optional chart features)."""
-    try:
-        return name in inspect.signature(func).parameters
-    except (TypeError, ValueError):  # pragma: no cover - builtins
-        return False
-
-
 def _week_label(trace: T.BKSTrace, week: str) -> str:
     ts = pd.Timestamp(week)
     if ts == trace.row_week:
@@ -201,7 +193,7 @@ def _default_topic(ctx: dict[str, Any], asset: str, topics: list[str]) -> str:
 # ---------------------------------------------------------------------------
 # Top of the page
 # ---------------------------------------------------------------------------
-def run_summary(trace: T.BKSTrace, res: Any, cfg: Any) -> str:
+def run_summary(trace: T.BKSTrace, res: Any) -> str:
     """One markdown line naming the traced run: history, K, lambda, topics, weeks, the Eq. 5 week, w, lead."""
     rule = {"tolerance": "tolerance rule", "argmax": "argmax rule", "fixed": "fixed"}.get(trace.lambda_rule,
                                                                                        trace.lambda_rule)
@@ -209,7 +201,7 @@ def run_summary(trace: T.BKSTrace, res: Any, cfg: Any) -> str:
     train = f"{len(tp)} training weeks ({_day(tp.min())} to {_day(tp.max())})" if len(tp) else "no training weeks"
     fc = f"{len(fp)} forecast weeks ({_day(fp.min())} to {_day(fp.max())})" if len(fp) else "no forecast weeks"
     history = _ui.BKS_HISTORY_LABELS.get(trace.history, trace.history)
-    n_sel = len(trace.meta.get("selected_topics", res.selected_topics))
+    n_sel = len(res.selected_topics)
     return (
         f"**{history}** · K = {trace.K} · lambda {trace.lam:.4g} ({rule}) · **{n_sel} of {len(trace.topics)} topics** "
         f"selected · {train} · {fc} · implied sensitivities from the instruments of the week ending "
@@ -221,8 +213,8 @@ def run_summary(trace: T.BKSTrace, res: Any, cfg: Any) -> str:
 def render(ctx: dict[str, Any], ui: dict[str, Any]) -> None:
     """Draw the trace page below the Run BKS button (see the module docstring)."""
     trace: T.BKSTrace = ctx["trace"]
-    st.markdown(run_summary(trace, ctx["res"], ctx["cfg"]))
-    ui["bks_tiles"](ctx["res"], caption_expander=True)
+    st.markdown(run_summary(trace, ctx["res"]))
+    ui["bks_tiles"](ctx["res"], caption_expander=True, caption=_ui.HOW_TRACE_TILES)
 
     step = ui["control"]("radio", "Step", "tr_step", options=list(T.STEPS), horizontal=True,
                          format_func=lambda s: T.STEPS.get(s, s))
@@ -280,7 +272,7 @@ def _checks_table(frame: pd.DataFrame, with_step: bool) -> None:
              "reference": "Reference", "tolerance": "Tolerance", "relation": "Should hold", "note": "Note"}
     out = frame[cols].rename(columns=names)
     config = {
-        "Step": _txt("Step", width=170), "Check": _txt("Check", width=300), "Status": _txt("Status", width=60),
+        "Step": _txt("Step", width=170), "Check": _txt("Check", width=380), "Status": _txt("Status", width=60),
         "Kind": _txt("Kind", width=85), "Observed": _num("Observed"), "Reference": _num("Reference"),
         "Tolerance": _num("Tolerance"), "Should hold": _txt("Should hold", width=320),
         "Note": _txt("Note", width=640),
@@ -300,7 +292,7 @@ def ladder_with_direct(trace: T.BKSTrace, ctx: dict[str, Any]) -> pd.DataFrame:
     lad = trace.ladder.copy()
     cfg, ev = ctx["cfg"], ctx["ev"]
     method = _ui.method_option_label(cfg.direct.method, cfg.direct)
-    rec = getattr(ev, "recovery", {}) or {}
+    rec = ev.recovery
     row = pd.DataFrame(
         {"label": [f"Direct method: {method} (benchmark)"], "spearman": [float(rec.get("spearman", np.nan))],
          "rmse": [float(rec.get("rmse", np.nan))], "median_r2": [float(median_finite(ev.r2))],
@@ -379,8 +371,22 @@ def _summary(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> 
     _next("summary")
 
 
+#: Where a departure comes from (a finding's ``origin``, DESIGN.md G.16 "Findings"): the heading of its group in
+#: the answer box, and the word the findings list shows after "Departure" or "Note".
+ORIGIN_GROUPS: dict[str, str] = {
+    "method": "Properties of the method (BKS itself)",
+    "implementation": "Choices of this implementation (the step, or its row of the ladder, shows the alternative)",
+    "data": "From the data (the sample of this run)",
+}
+ORIGIN_WORDS: dict[str, str] = {"method": "method", "implementation": "implementation choice", "data": "data"}
+
+
 def _answer(trace: T.BKSTrace) -> None:
-    """The lead answer: do the identity checks hold, and where does BKS depart from what it should be."""
+    """The lead answer: do the identity checks hold, and where does BKS depart from what it should be.
+
+    Defects (identity checks that are off; findings of severity ``"defect"``) are named in the warning only; the
+    departures are grouped by their origin, none of which is a coding error.
+    """
     ident = [c for c in trace.checks if c.kind == T.IDENTITY and c.status != T.INFO]
     off = [c for c in ident if c.status == T.OFF]
     departures = [f for f in trace.findings if f["severity"] == "departure"]
@@ -388,38 +394,50 @@ def _answer(trace: T.BKSTrace) -> None:
         if off:
             names = "; ".join(f"{T.STEPS.get(c.step, c.step)}: {c.name}" for c in off)
             st.warning(f"{len(off)} of {len(ident)} identity checks are off: {names}. An identity check recomputes "
-                       "a result by its formula; off points to a defect in the code or in the trace.")
+                       "a result by its formula; off points to a defect in the code or in the trace. The findings "
+                       "below list each one as a defect.")
         else:
             st.markdown(
                 f"**The code does what the formulas say.** All {len(ident)} identity checks hold: each recomputes a "
-                "result of the run independently (or tests an identity the method must satisfy) and finds the same "
-                "value to rounding."
+                "result of the run independently (or tests an identity the method must satisfy), and the two agree "
+                "to rounding or to the solver's stopping tolerance, or satisfy the stated inequality."
             )
         if departures:
-            steps = []
-            for f in departures:
-                label = T.STEPS.get(f["step"], f["step"])
-                steps.append(f"- {label}: {f['title']}.")
-            st.markdown("**Where BKS departs from what it should be:**\n\n" + "\n".join(steps))
-            st.markdown(
-                "These departures are properties of the method, not coding errors: each is shown with its "
-                "reference (what it should be) in the ladder below and in its step."
-            )
+            blocks = []
+            origins = list(ORIGIN_GROUPS) + sorted({f["origin"] for f in departures} - set(ORIGIN_GROUPS))
+            for origin in origins:
+                items = [f"- {T.STEPS.get(f['step'], f['step'])}: {f['title']}." for f in departures
+                         if f["origin"] == origin]
+                if items:
+                    blocks.append(f"{ORIGIN_GROUPS.get(origin, origin.capitalize())}:\n\n" + "\n".join(items))
+            st.markdown("**Where BKS departs from what it should be.** None of these is a coding error.\n\n"
+                        + "\n\n".join(blocks))
+            st.markdown("Each is shown with its reference (what it should be) in the ladder below and in its step.")
         else:
             st.markdown("**No departure found:** every step matches its reference within the thresholds of the "
                         "findings.")
 
 
+#: Order of the findings list: defects, then departures, then notes.
+SEVERITY_ORDER: dict[str, int] = {"defect": 0, "departure": 1, "note": 2}
+
+
+def _finding_kind(f: dict[str, str]) -> str:
+    """The label of a finding: "Defect", or "Departure" / "Note" with its origin."""
+    if f["severity"] == "defect":
+        return "Defect"
+    kind = "Departure" if f["severity"] == "departure" else "Note"
+    return f"{kind} ({ORIGIN_WORDS.get(f['origin'], f['origin'])})"
+
+
 def _findings(trace: T.BKSTrace) -> None:
-    """Findings as bullets: departures first, then notes, each with its step."""
-    items = sorted(trace.findings, key=lambda f: f["severity"] != "departure")
+    """Findings as bullets: defects first, then departures, then notes, each with its origin and step."""
+    items = sorted(trace.findings, key=lambda f: SEVERITY_ORDER.get(f["severity"], len(SEVERITY_ORDER)))
     if not items:
         st.markdown("No finding for this run.")
         return
-    lines = []
-    for f in items:
-        kind = "Departure" if f["severity"] == "departure" else "Note"
-        lines.append(f"- **{kind}, {T.STEPS.get(f['step'], f['step'])}: {f['title']}.** {f['text']}")
+    lines = [f"- **{_finding_kind(f)}, {T.STEPS.get(f['step'], f['step'])}: {f['title']}.** {f['text']}"
+             for f in items]
     st.markdown("\n".join(lines))
 
 
@@ -509,7 +527,7 @@ def _align(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> No
     trace: T.BKSTrace = ctx["trace"]
     a_labels = ctx["a_labels"]
     asset = focus["asset"]
-    weighting = trace.meta.get("asset_weighting", "inverse_vol")
+    weighting = trace.meta["asset_weighting"]
     days = trace.z.index
     if weighting == "none":
         divisor = "1 (no asset weighting: the panel works in return units)"
@@ -521,9 +539,10 @@ def _align(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> No
     _what([
         ("Inputs", "the daily attention and returns of step 1."),
         ("Computation", f"the return of day tau is paired with the attention of day tau - {trace.lead_days} (the "
-                        f"lead); each return is divided by its divisor d: {divisor}. The implied sensitivities "
-                        "later multiply back by one number per asset, the mean divisor over its training return "
-                        "days, so the kernel's mix of divisors makes that conversion approximate (u below)."),
+                        f"lead); each return is divided by its daily divisor d: {divisor}. The implied "
+                        "sensitivities later multiply back by one number per asset, its mean training divisor (the "
+                        "mean of d over its training return days), so the kernel's mix of divisors makes that "
+                        "conversion approximate (u below)."),
         ("Outputs", f"aligned attention and scaled returns r / d on the panel's days ({_day(days[0])} to "
                     f"{_day(days[-1])}, {len(days):,} days); the unit table."),
         ("Code", "narrative_ipca.data.align_inputs, called by build_bks_panel of the lab's bks module."),
@@ -554,19 +573,18 @@ def _align(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> No
     order = [asset] + [a for a in units.index if a != asset] if asset in units.index else list(units.index)
     units = units.loc[order]
     table = pd.DataFrame({"Asset": [a_labels.get(a, a) for a in units.index]})
-    cols = [("divisor", "Mean divisor d", "%.4f"), ("ret_scale", "Training return scale", "%.4f"),
-            ("asset_vol", "Full-sample volatility", "%.4f"), ("divisor_over_ret_scale", "d / training scale", "%.3f"),
+    cols = [("divisor", "Mean training divisor", "%.4f"), ("ret_scale", "Training return scale", "%.4f"),
+            ("asset_vol", "Full-sample volatility", "%.4f"),
+            ("divisor_over_ret_scale", "Mean training divisor / training scale", "%.3f"),
             ("conversion", "Conversion u (1 = exact)", "%.3f"),
             ("conversion_exact", "Exact-unit ratio (1 = exact)", "%.3f"),
             ("kernel_divisor", "Kernel mean divisor", "%.4f"),
             ("conversion_kernel", "Exact-unit ratio with the kernel divisor", "%.3f")]
     config: dict[str, Any] = {"Asset": _txt("Asset", width="medium")}
     for col, name, fmt in cols:
-        if col in units.columns:
-            table[name] = units[col].to_numpy(dtype=float)
-            config[name] = _num(name, fmt)
-    if "skipped" in units.columns:
-        table["Zero (no training row)"] = np.where(units["skipped"].to_numpy(dtype=bool), "yes", "no")
+        table[name] = units[col].to_numpy(dtype=float)
+        config[name] = _num(name, fmt)
+    table["Zero (no training row)"] = np.where(units["skipped"].to_numpy(dtype=bool), "yes", "no")
     _table(table, config)
     _how("HOW_TRACE_UNITS")
     _checks(trace, "align")
@@ -644,6 +662,22 @@ def _shocks(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> N
 # ---------------------------------------------------------------------------
 # 4 Instruments
 # ---------------------------------------------------------------------------
+def _reference_divisor(trace: T.BKSTrace) -> tuple[str, str]:
+    """The population instrument reference's divisor (DESIGN.md G.16, validity limit 2): the scatter's x-axis
+    title, and the words for step 4's outputs. It is the full-sample volatility under the full history (the panel
+    divides by a trailing one, so the match is approximate) and the training standard deviation under the
+    training history (exact); without asset weighting there is none."""
+    if trace.meta["asset_weighting"] == "none":
+        return ("Population reference Cov(z, r) (return units)",
+                "in return units (no asset weighting, so it is exact)")
+    if trace.history == "training":
+        return ("Population reference Cov(z, r) / training standard deviation (panel units)",
+                "divided by the asset's training standard deviation, the panel's own divisor (exact)")
+    return ("Population reference Cov(z, r) / full-sample volatility (panel units)",
+            "divided by the asset's full-sample volatility, where the panel divides by a trailing volatility "
+            "(approximate)")
+
+
 def _instruments(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> None:
     trace: T.BKSTrace = ctx["trace"]
     panel = ctx["panel"]
@@ -659,11 +693,11 @@ def _instruments(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any])
                         f"day(s); day weights k_tau proportional to xi^(j - week of tau), xi = {m['xi']:.6f} a week "
                         f"(half-life {hl:g} months), normalised over the days with a return and every shock; no "
                         f"value with fewer than {m['min_days']} such days"
-                        + (f" or in the first {m['burn_in_weeks']} weeks (burn-in)" if m.get("burn_in_weeks")
+                        + (f" or in the first {m['burn_in_weeks']} weeks (burn-in)" if m["burn_in_weeks"]
                            else "") + "."),
         ("Outputs", f"one instrument per asset, topic and week ({len(trace.week_ends):,} weeks), in panel units "
                     "(scaled return x raw shock); the reference is the simulation's population covariance "
-                    "Cov(z, r) divided by the asset's divisor."),
+                    f"Cov(z, r) {_reference_divisor(trace)[1]}."),
         ("Code", "narrative_ipca.covariances.build_covariance_panel."),
     ])
     a_name, t_name = a_labels.get(asset, asset), t_labels.get(topic, topic)
@@ -728,7 +762,7 @@ def _instruments(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any])
     ui["show_chart"](
         charts.identity_scatter(
             x, y, labels={**a_labels, **t_labels}, highlight=asset, highlight_label=a_name,
-            point_label="Other assets", x_title="Population reference Cov(z, r) / d (panel units)",
+            point_label="Other assets", x_title=_reference_divisor(trace)[0],
             y_title="Instrument (panel units)",
             title="Instruments against their population value",
             subtitle=f"Every asset and topic, instrument week ending {_day(trace.instrument_week)}"),
@@ -766,35 +800,27 @@ def _panel(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> No
     panel = ctx["panel"]
     a_labels, t_labels = ctx["a_labels"], ctx["t_labels"]
     asset, week = focus["asset"], focus["week"] or trace.row_week
-    sizes = trace.meta.get("sizes", {})
-    data_cfg = getattr(getattr(panel, "pipeline_cfg", None), "data", None)
-    min_assets = int(getattr(data_cfg, "min_assets_per_period", 0) or 0)
+    m = trace.meta
+    min_assets = int(panel.pipeline_cfg.data.min_assets_per_period)
     st.subheader(T.STEPS["panel"])
     _what([
         ("Inputs", "the weekly instruments (step 4) and the scaled daily returns (step 2)."),
         ("Computation", "the row of asset i in return week t is c_(i,t-1) = [1, the instruments of week t-1], "
-                        "and y_(i,t) = the sum of week t's scaled daily returns; a week enters with enough "
-                        "assets"
-                        + (f" (at least {min_assets})" if min_assets else "")
-                        + ". The fit uses the training weeks only and divides each instrument by its standard "
-                          "deviation over the training rows (sigma^c, the penalty's scale)."),
-        ("Outputs", f"{len(trace.train_periods)} training weeks with {sizes.get('n_obs_train', 'n/a')} rows; the "
+                        "and y_(i,t) = the sum of week t's scaled daily returns; a week enters with enough assets "
+                        f"(at least {min_assets}). The fit uses the training weeks only and divides each instrument "
+                        "by its standard deviation over the training rows (sigma^c, the penalty's scale)."),
+        ("Outputs", f"{len(trace.train_periods)} training weeks with {m['sizes']['n_obs_train']:,} rows; the "
                     "forecast weeks' rows for step 7."),
         ("Code", "narrative_ipca.panel.build_panel; IPCAPanel.subset_periods for the training weeks."),
     ])
-    m = trace.meta
-    extra = [(k, v) for k, v in (("bks_train_days", "BKS training return days"),
-                                 ("days_before_train_start", "Days before the training start inside the first "
-                                                             "training week"),
-                                 ("direct_days_not_in_bks", "Direct training days in no BKS training week"))
-             if k in m]
-    if extra:
-        dates = m.get("direct_days_not_in_bks_dates") or []
-        st.caption("Training days of the two routes: " + "; ".join(
-            f"{label} {_count(m[k])}" for k, label in extra)
-            + (f" ({', '.join(str(d) for d in dates[:5])}{', ...' if len(dates) > 5 else ''})" if dates else "")
-            + f". The direct estimator uses {m.get('n_pairs')} training return days; BKS uses the days of its "
-            "training weeks, which start on the Monday of the first week.")
+    counts = (("bks_train_days", "BKS training return days"),
+              ("days_before_train_start", "Days before the training start inside the first training week"),
+              ("direct_days_not_in_bks", "Direct training days in no BKS training week"))
+    dates = m["direct_days_not_in_bks_dates"]
+    st.caption("Training days of the two routes: " + "; ".join(f"{label} {int(m[k]):,}" for k, label in counts)
+               + (f" ({', '.join(str(d) for d in dates[:5])}{', ...' if len(dates) > 5 else ''})" if dates else "")
+               + f". The direct estimator uses {m['n_pairs']} training return days; BKS uses the days of its "
+               "training weeks, which start on the Monday of the first week.")
 
     _heading(f"Which instruments each return week uses: {a_labels.get(asset, asset)}")
     pairs = T.pairing_table(trace, panel, ctx["sim"], asset)
@@ -844,17 +870,6 @@ def _panel(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> No
     _next("panel")
 
 
-def _count(x: Any) -> str:
-    """A count, or a list of dates, as short text."""
-    if isinstance(x, (list, tuple, pd.Index, np.ndarray)):
-        items = [(_day(v) if isinstance(v, (pd.Timestamp, np.datetime64)) else str(v)) for v in x]
-        return f"{len(items)}" + (f" ({', '.join(items[:5])}{', ...' if len(items) > 5 else ''})" if items else "")
-    try:
-        return f"{int(x):,}"
-    except (TypeError, ValueError):
-        return str(x)
-
-
 # ---------------------------------------------------------------------------
 # 6 Fit and lambda
 # ---------------------------------------------------------------------------
@@ -871,21 +886,24 @@ def _fit(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> None
         ("Inputs", "the training rows of step 5 (instruments c and weekly returns y)."),
         ("Computation", "Sparse IPCA (BKS Eq. 8): minimise 0.5 sum (y - c Gamma f_t)^2 + lambda N_S sum_l "
                         "sigma^c_l ||Gamma_l|| + sum_t ||f_t||^2 over Gamma (instruments x K) and the weekly "
-                        "factors f_t, alternating a factor step and a group-lasso step; a topic whose Gamma row is "
-                        f"zero is dropped. lambda comes from a {int(b.n_lambdas)}-point grid by {rule}, scored by the "
-                        "annualised in-sample Sharpe ratio of the factors' best mix."),
+                        f"factors f_t, where N_S is the number of training rows (asset-weeks, "
+                        f"{trace.meta['sizes']['n_obs_train']:,} here), sigma^c_l instrument l's standard deviation "
+                        "over those rows and Gamma_l its row of Gamma. The fit alternates a factor step and a "
+                        "group-lasso step; a topic whose Gamma row is zero is dropped. lambda comes from a "
+                        f"{int(b.n_lambdas)}-point grid by {rule}, scored by the annualised in-sample Sharpe ratio "
+                        "of the factors' best mix."),
         ("Outputs", f"Gamma, the {len(trace.factors_in_sample)} training factors, the selected topics and the "
                     "lambda path."),
         ("Code", "narrative_ipca.tuning.tune and narrative_ipca.sparse_ipca.fit_sparse_ipca (via "
                  "fit_bks of the lab's bks module)."),
     ])
     path = trace.path
-    selected = list(trace.meta.get("selected_topics", []))
+    selected = list(trace.meta["selected_topics"])
     if path is None:
         st.caption(f"Fixed lambda ({trace.lam:g}): there is no lambda path to show; the charts below describe the "
                    "one fit.")
     else:
-        _path_chart(trace, ui, b)
+        _path_chart(trace, ui)
         norms = trace.gamma_path
         if norms is not None:
             ui["show_chart"](
@@ -906,10 +924,11 @@ def _fit(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> None
         "fig_tr_gamma",
     )
     _how("HOW_TRACE_GAMMA")
+    _topics_should_matter(trace, ui, t_labels)
 
     kkt = trace.kkt
-    ratio = kkt["ratio"].astype(float)
-    nxt = trace.meta.get("next_to_enter")
+    ratio = kkt["ratio_polished"].astype(float)  # the polished copy of the fit that the KKT check grades
+    nxt = trace.meta["next_to_enter"]
     if np.isfinite(ratio.to_numpy()).any():
         active = kkt["active"].to_numpy(dtype=bool)
         frame = pd.DataFrame({"kept": np.where(active, ratio, np.nan), "dropped": np.where(~active, ratio, np.nan)},
@@ -920,9 +939,9 @@ def _fit(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> None
                 top_n=MAX_BARS if len(frame) > MAX_BARS else None,
                 series_labels={"kept": "Kept (should be 1)", "dropped": "Dropped (should be at most 1)"},
                 axis_title="Gradient / penalty", title="Is the fit at its optimum? The group-lasso condition",
-                subtitle="Per instrument: the length of the fit's gradient over the penalty"
+                subtitle="Per instrument, on the polished fit the check grades"
                          + (f"; next to enter: {_topic_label(t_labels).get(nxt, nxt)} "
-                            f"({_f(trace.meta.get('next_to_enter_ratio'), '.3f')})" if nxt else "")),
+                            f"({_f(trace.meta['next_to_enter_ratio'], '.3f')})" if nxt else "")),
             "fig_tr_kkt",
         )
         _how("HOW_TRACE_KKT")
@@ -952,31 +971,65 @@ def _fit(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> None
     _next("fit")
 
 
-def _band_floors(trace: T.BKSTrace, tolerance: float) -> tuple[float | None, float | None]:
-    """The tuner's band floor and the relative-rule floor (addendum), from the path table or recomputed."""
-    path = trace.path
-    if path is None or trace.lambda_rule != "tolerance":
-        return None, None
-    crit = path["criterion"].to_numpy(dtype=float)
-    if not np.isfinite(crit).any():
-        return None, None
-    best = float(np.nanmax(crit))
-    code = (float(path["band_floor_code"].iloc[0]) if "band_floor_code" in path.columns
-            else best - max(1e-9, tolerance) * max(1.0, abs(best)))
-    rel = float(path["band_floor_relative"].iloc[0]) if "band_floor_relative" in path.columns else None
-    return code, rel
+def _topics_should_matter(trace: T.BKSTrace, ui: dict[str, Any], t_labels: dict[str, str]) -> None:
+    """Step 6's reference for the selection (DESIGN.md G.16): each topic's share of the true sensitivities next to
+    its share of the standardised Gamma row norms, and ``trace.topic_table`` (truth, links, selection, entry)."""
+    tt = trace.topic_table
+    truth = tt["sum_abs_B_true"].astype(float)
+    gamma = tt["gamma_norm"].astype(float)
+    shares = pd.DataFrame({"truth": truth / truth.sum(), "gamma": gamma / gamma.sum()}, index=tt.index)  # 0/0: NaN
+    ui["show_chart"](
+        charts.grouped_bars(
+            shares, labels=t_labels, percent=True, sort_by="truth", top_n=MAX_BARS if len(shares) > MAX_BARS else None,
+            series_labels={"truth": "Share of the true sensitivities", "gamma": "Share of the Gamma row norms"},
+            axis_title="Share over all topics", title="Which topics should matter, and which the fit keeps",
+            subtitle="Shares over all topics: absolute true sensitivities summed over assets; standardised Gamma "
+                     "row norms"),
+        "fig_tr_topics",
+    )
+    _how("HOW_TRACE_TOPICS")
+    _heading("Which topics should matter")
+    order = tt.sort_values("truth_rank").index
+    t = tt.loc[order]
+    table = pd.DataFrame({
+        "Topic": [t_labels.get(str(k), str(k)) for k in t.index],
+        "Sum of |true sensitivity|": t["sum_abs_B_true"].to_numpy(dtype=float),
+        "Rank": t["truth_rank"].to_numpy(dtype=np.int64),
+        "Links": t["n_links"].to_numpy(dtype=np.int64),
+        "Selected": np.where(t["selected"].to_numpy(dtype=bool), "yes", "no"),
+        "Gamma row norm": t["gamma_norm"].to_numpy(dtype=float),
+        "Enters at lambda": t["enter_lambda"].to_numpy(dtype=float),
+    })
+    _table(table, {"Topic": _txt("Topic", width=260),
+                   "Sum of |true sensitivity|": _num("Sum of |true sensitivity|", "%.2f",
+                                                     help="Over all assets, standardised units."),
+                   "Rank": _num("Rank", "%d", help="1 = the largest sum of absolute true sensitivities."),
+                   "Links": _num("Links", "%d", help="Links of the topic in the link map (set sensitivities)."),
+                   "Selected": _txt("Selected", width=75),
+                   "Gamma row norm": _num("Gamma row norm", "%.3f",
+                                          help="Standardised: the length of the topic's row of Gamma times its "
+                                               "instrument's training standard deviation, at the chosen lambda."),
+                   "Enters at lambda": _num("Enters at lambda", "%.3f",
+                                            help="The largest grid lambda at which the topic is selected; empty "
+                                                 "when it never is (or without a lambda path).")},
+           height=_rows_height(len(table), cap=420))
+    _how("HOW_TRACE_TOPIC_TABLE")
 
 
-def _path_chart(trace: T.BKSTrace, ui: dict[str, Any], b: Any) -> None:
+def _band_floors(trace: T.BKSTrace) -> tuple[float | None, float | None]:
+    """The tuner's band floor and the relative reading's floor (DESIGN.md G.16 "Findings"), from the path table;
+    ``None`` unless the tolerance rule chose lambda on a path with a finite criterion."""
     path = trace.path
-    code, rel = _band_floors(trace, float(b.tolerance))
-    kw: dict[str, Any] = {}
-    if all(c in path.columns for c in ("null_q05", "null_q50", "null_q95")) and _accepts(charts.lambda_trace_chart,
-                                                                                         "null_band"):
-        kw["null_band"] = tuple(float(path[c].iloc[0]) for c in ("null_q05", "null_q50", "null_q95"))
-    if rel is not None and code is not None and not np.isclose(rel, code) and _accepts(charts.lambda_trace_chart,
-                                                                                       "band_floor_alt"):
-        kw["band_floor_alt"] = rel
+    if path is None or trace.lambda_rule != "tolerance" or not np.isfinite(path["criterion"].to_numpy(float)).any():
+        return None, None
+    return float(path["band_floor_code"].iloc[0]), float(path["band_floor_relative"].iloc[0])
+
+
+def _path_chart(trace: T.BKSTrace, ui: dict[str, Any]) -> None:
+    path = trace.path
+    code, rel = _band_floors(trace)
+    null_band = tuple(float(path[c].iloc[0]) for c in ("null_q05", "null_q50", "null_q95"))
+    alt = rel if code is not None and rel is not None and np.isfinite(rel) and not np.isclose(rel, code) else None
     extra = None
     labels = {"spearman": "Spearman with true sensitivities", "kept_share": "Share of the instruments kept",
               "median_r2": "Median OOS R² of the implied sensitivities"}
@@ -987,15 +1040,13 @@ def _path_chart(trace: T.BKSTrace, ui: dict[str, Any], b: Any) -> None:
             path, lam_star=trace.lam, band_floor=code, extra=extra, extra_labels=labels if extra is not None else None,
             extra_title="The implied sensitivities refitted at each lambda",
             title="The lambda path and its noise",
-            subtitle="Sharpe ratio with one standard error"
-                     + (" and the no-signal band" if "null_band" in kw else "")
-                     + "; topics selected"
+            subtitle="Sharpe ratio with one standard error and the no-signal band; topics selected"
                      + ("; the implied sensitivities refitted at each lambda" if extra is not None else ""),
-            **kw),
+            null_band=null_band, band_floor_alt=alt),
         "fig_tr_path",
     )
     _how("HOW_TRACE_PATH")
-    note = trace.meta.get("path_trace_note")
+    note = trace.meta["path_trace_note"]
     if extra is None and note:
         st.caption(f"The recovery panel is not shown: {note}.")
 
@@ -1011,18 +1062,15 @@ def _path_table(trace: T.BKSTrace) -> None:
     flags = [("chosen", "Chosen"), ("best", "Best"), ("in_band", "In band"), ("edge", "Grid edge"),
              ("above_zero", "Above Gamma = 0"), ("converged", "Converged"), ("sigma_ff_truncated", "Rank cut")]
     for col, name, fmt in cols:
-        if col in p.columns:
-            vals = p[col].to_numpy(dtype=float)
-            table[name] = vals * 100.0 if col == "total_r2" else vals
-            config[name] = _num(name, fmt)
+        vals = p[col].to_numpy(dtype=float)
+        table[name] = vals * 100.0 if col == "total_r2" else vals
+        config[name] = _num(name, fmt)
     for col, name in flags:
-        if col in p.columns:
-            table[name] = np.where(p[col].to_numpy(dtype=bool), "yes", "")
-            config[name] = _txt(name, width="small")
+        table[name] = np.where(p[col].to_numpy(dtype=bool), "yes", "")
+        config[name] = _txt(name, width="small")
     for col, name in (("null_q05", "Null 5%"), ("null_q50", "Null median"), ("null_q95", "Null 95%")):
-        if col in p.columns:
-            table[name] = p[col].to_numpy(dtype=float)
-            config[name] = _num(name, "%.2f")
+        table[name] = p[col].to_numpy(dtype=float)
+        config[name] = _num(name, "%.2f")
     if trace.path_trace is not None and len(trace.path_trace):
         pt = trace.path_trace.set_index("lam")
         for col, name, scale, fmt in (("kept_share", "Kept share (%)", 100.0, "%.1f"),
@@ -1030,10 +1078,8 @@ def _path_table(trace: T.BKSTrace) -> None:
                                       ("median_r2", "Median OOS R² (implied, %)", 100.0, "%.1f"),
                                       ("gamma_rank", "Gamma rank", 1.0, "%d"),
                                       ("gamma_sv_min", "Gamma's smallest singular value", 1.0, "%.3g")):
-            if col in pt.columns:
-                vals = pt[col].reindex(p["lam"].to_numpy(dtype=float)).to_numpy(dtype=float) * scale
-                table[name] = vals
-                config[name] = _num(name, fmt)
+            table[name] = pt[col].reindex(p["lam"].to_numpy(dtype=float)).to_numpy(dtype=float) * scale
+            config[name] = _num(name, fmt)
     _table(table, config, height=_rows_height(len(table)))
 
 
@@ -1044,7 +1090,7 @@ def _forecast(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) ->
     trace: T.BKSTrace = ctx["trace"]
     a_labels = ctx["a_labels"]
     asset, fweek = focus["asset"], focus["fweek"]
-    ridge = trace.meta.get("oos_ridge", np.nan)
+    ridge = trace.meta["oos_ridge"]
     st.subheader(T.STEPS["forecast"])
     _what([
         ("Inputs", "the frozen training Gamma (step 6) and the forecast weeks' rows (step 5)."),
@@ -1052,7 +1098,9 @@ def _forecast(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) ->
                         f"factor f_t = (B'B + {_f(ridge, 'g')} I)^-1 B'y_t fitted to that week's own returns "
                         "(ridge 2; 0 at lambda = 0); fitted = B f_t; the pooled R² is 1 - sum (y - fitted)^2 / "
                         "sum y^2 over all forecast asset-weeks. The reference shuffles the topic instruments "
-                        "across assets within each week."),
+                        "across assets within each week: a reference for the instruments' cross-sectional "
+                        "structure, not for topic signal (the gap appears without any; step 8 and the Summary's "
+                        "ladder score the topics)."),
         ("Outputs", "the tiles' pooled OOS R² and its shuffled reference, per week and per asset."),
         ("Code", "evaluate_bks of the lab's bks module, with narrative_ipca.oos.oos_factor."),
     ])
@@ -1062,21 +1110,19 @@ def _forecast(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) ->
         _checks(trace, "forecast")
         _next("forecast")
         return
-    r2_cols = [c for c in ("r2", "r2_shuffled", "r2_exact") if c in weeks.columns]
     ui["show_chart"](
         charts.grouped_bars(
-            weeks[r2_cols], orientation="v", percent=True,
-            series_labels={"r2": "OOS R² (panel units)", "r2_shuffled": "Instruments shuffled (reference)",
+            weeks[["r2", "r2_shuffled", "r2_exact"]], orientation="v", percent=True,
+            series_labels={"r2": "OOS R² (panel units)", "r2_shuffled": "Instruments shuffled across assets",
                            "r2_exact": "OOS R² in exact return units"},
             axis_title="R² of the week", title="R² per forecast week",
             subtitle="All assets of each week; factors fitted to the week's own returns"),
         "fig_tr_week_r2",
     )
     _how("HOW_TRACE_WEEK_R2")
-    pooled = trace.meta.get("r2_pooled_panel"), trace.meta.get("r2_pooled_exact")
-    if pooled[1] is not None:
-        st.caption(f"Pooled over the {len(weeks)} forecast weeks: {_ui.fmt_pct(pooled[0])} in panel units (the "
-                   f"tiles' number), {_ui.fmt_pct(pooled[1])} in exact return units.")
+    st.caption(f"Pooled over the {len(weeks)} forecast weeks: {_ui.fmt_pct(trace.meta['r2_pooled_panel'])} in "
+               f"panel units (the tiles' number), {_ui.fmt_pct(trace.meta['r2_pooled_exact'])} in exact return "
+               "units.")
     fw = fweek if fweek is not None else pd.Timestamp(trace.forecast_periods[0])
     try:
         frame, stats = T.forecast_week(trace, ctx["panel"], ctx["bks_fit"], ctx["res"], fw)
@@ -1135,7 +1181,7 @@ def _implied(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> 
     a_labels, t_labels = ctx["a_labels"], ctx["t_labels"]
     asset = focus["asset"]
     a_name = a_labels.get(asset, asset)
-    n_pairs = trace.meta.get("n_pairs")
+    n_pairs = trace.meta["n_pairs"]
     st.subheader(T.STEPS["implied"])
     _what([
         ("Inputs", f"the fit's Gamma (step 6) and each asset's instrument row c_i = [1, v_i] of the week ending "
@@ -1152,13 +1198,10 @@ def _implied(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> 
         ("Code", "the Eq. 5 step of the lab's bks module: implied_topic_covariance for m_i, then the conversion "
                  "to sensitivities."),
     ])
-    chain = T.asset_chain(trace, asset, direct=ctx.get("fit"))
-    if "bks_ls" in trace.variants and asset in trace.variants["bks_ls"].columns:
-        chain["bks_ls"] = trace.variants["bks_ls"][asset].reindex(chain.index).to_numpy(dtype=float)
-    m_ls = trace.chain.get("m_ls")
-    if isinstance(m_ls, pd.DataFrame) and asset in m_ls.index:
-        chain.insert(list(chain.columns).index("m") + 1, "m_ls",
-                     m_ls.loc[asset].reindex(chain.index).to_numpy(dtype=float))
+    chain = T.asset_chain(trace, asset, direct=ctx["fit"])
+    chain["bks_ls"] = trace.variants["bks_ls"][asset].reindex(chain.index).to_numpy(dtype=float)
+    chain.insert(list(chain.columns).index("m") + 1, "m_ls",
+                 trace.chain["m_ls"].loc[asset].reindex(chain.index).to_numpy(dtype=float))
     method = _ui.method_option_label(ctx["cfg"].direct.method, ctx["cfg"].direct)
     series = {"B_true": "True sensitivity", "instruments_kernel": "Instruments alone, same-history Sigma_z",
               "bks_ls": "Same betas, least-squares inversion", "B_hat": "BKS-implied",
@@ -1205,29 +1248,27 @@ def _implied(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> 
     )
     _how("HOW_TRACE_IMPLIED_SCATTER")
 
-    sig = _sigma_ratios(trace)
+    sig = trace.sigma_table
     ui["show_chart"](
         charts.grouped_bars(
-            sig[["train", "kernel"]], labels=t_labels, reference=(1.0, "Population"),
+            sig[["train_over_population", "kernel_over_population"]], labels=t_labels, reference=(1.0, "Population"),
             top_n=MAX_BARS if len(sig) > MAX_BARS else None,
-            series_labels={"train": "Training days / population", "kernel": "Instruments' kernel days / population"},
+            series_labels={"train_over_population": "Training days / population",
+                           "kernel_over_population": "Instruments' kernel days / population"},
             axis_title="Variance ratio", title="The shocks' variance behind Sigma_z",
             subtitle="Per topic: the shock variance over the training days and over the instruments' kernel "
                      "days, each over the population variance"),
         "fig_tr_sigma",
     )
     _how("HOW_TRACE_SIGMA")
-    table = getattr(trace, "sigma_table", None)
-    if isinstance(table, pd.DataFrame) and not table.empty:
-        _heading("Sigma_z by history")
-        out = table.copy()
-        out.insert(0, "Topic", [t_labels.get(str(t), str(t)) for t in out.index])
-        config: dict[str, Any] = {"Topic": _txt("Topic", width="medium")}
-        for c in out.columns[1:]:
-            if pd.api.types.is_numeric_dtype(out[c]):
-                config[c] = _num(_sigma_col(c), "%.3f")
-        _table(out, config)
-        _how("HOW_TRACE_SIGMA_TABLE")
+    _heading("Sigma_z by history")
+    out = sig.copy()
+    out.insert(0, "Topic", [t_labels.get(str(t), str(t)) for t in out.index])
+    config: dict[str, Any] = {"Topic": _txt("Topic", width="medium")}
+    for c in out.columns[1:]:
+        config[c] = _num(_sigma_col(c), "%.3f")
+    _table(out, config)
+    _how("HOW_TRACE_SIGMA_TABLE")
 
     _heading(f"The Eq. 5 chain for {a_name}")
     names = {"instrument": "Instrument v", "projected": "Projected P v", "constant_part": "Constant part",
@@ -1237,8 +1278,7 @@ def _implied(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) -> 
              "instruments_train": "Instruments alone", "instruments_kernel": "Instruments, same-history Sigma_z",
              "direct": f"Direct: {method}"}
     order = [c for c in chain.columns if c != "bks_ls"]
-    if "bks_ls" in chain.columns:
-        order.insert(order.index("B_hat") + 1, "bks_ls")
+    order.insert(order.index("B_hat") + 1, "bks_ls")
     out = chain[order].rename(columns=names)
     out.insert(0, "Topic", [t_labels.get(t, t) for t in chain.index])
     config = {"Topic": _txt("Topic", width="medium")}
@@ -1256,30 +1296,16 @@ def _sigma_col(name: str) -> str:
             "max_corr_diff": "Largest correlation difference, training vs kernel"}.get(name, name.replace("_", " "))
 
 
-def _sigma_ratios(trace: T.BKSTrace) -> pd.DataFrame:
-    """Diagonal of Sigma_z (training, kernel) over the population variance, per topic."""
-    sz = trace.chain["sigma_z"]
-    pop = np.diag(sz["population"].to_numpy(dtype=float))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return pd.DataFrame({"train": np.diag(sz["train"].to_numpy(dtype=float)) / pop,
-                             "kernel": np.diag(sz["kernel"].to_numpy(dtype=float)) / pop},
-                            index=pd.Index(trace.topics))
-
-
 def _shares_table(trace: T.BKSTrace, asset: str, a_name: str) -> None:
     """Shares of the instruments' squared norm kept: the fit's K directions, the best K, least squares, random."""
     cap = trace.capture
     K = trace.K
-    rows = [("The fit's K directions (BKS Eq. 5, orthogonal projection)", cap.get("kept_share")),
-            (f"The best {K} directions of the instruments (the most any {K} can keep)", cap.get("best_share"))]
-    if "ls_share" in cap:
-        rows.append(("Least-squares reconstruction from the same K loadings", cap.get("ls_share")))
-    rows.append((f"{K} random directions (on average)", cap.get("random_share")))
-    per = cap.get("per_asset_share")
-    if isinstance(per, pd.Series) and asset in per.index:
-        rows.append((f"{a_name}: the fit's K directions", per.get(asset)))
-    table = pd.DataFrame({"Directions": [r[0] for r in rows],
-                          "Share kept (%)": [100.0 * float(r[1]) if r[1] is not None else np.nan for r in rows]})
+    rows = [("The fit's K directions (BKS Eq. 5, orthogonal projection)", cap["kept_share"]),
+            (f"The best {K} directions of the instruments (the most any {K} can keep)", cap["best_share"]),
+            ("Least-squares reconstruction from the same K loadings", cap["ls_share"]),
+            (f"{K} random directions (on average)", cap["random_share"]),
+            (f"{a_name}: the fit's K directions", cap["per_asset_share"][asset])]
+    table = pd.DataFrame({"Directions": [r[0] for r in rows], "Share kept (%)": [100.0 * float(r[1]) for r in rows]})
     _table(table, {"Directions": _txt("Directions", width=330), "Share kept (%)": _num("Share kept (%)", "%.1f")},
            height=_rows_height(len(table)))
 
