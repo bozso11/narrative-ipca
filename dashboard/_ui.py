@@ -1323,11 +1323,17 @@ def timings_frame(timings: dict[str, dict[str, Any]]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # One caption under each chart, table or row of tiles: a lead line, then one bullet per item, and each bullet
 # ends with one example sentence. The examples use static, illustrative numbers, one consistent set for the
-# whole dashboard: Energy Global v World EQ with a training volatility of about 1.1% a day, its strong Energy
-# link set at 0.35 with a true sensitivity of 0.35 and an estimate of 0.32 standardised, shocks summing to +2.0
-# (a +0.70 pp contribution), a realised move of +1.20 pp, 20 return days in the 4-week default window, 55
-# assets and 20 topics (1,100 pairs). They were checked against the code on the dashboard defaults (DESIGN.md
-# G.9); an example is never computed from the current run.
+# whole dashboard that holds on the dashboard defaults: Energy Global v World EQ (the Topic contributions tab's
+# default asset) with a training volatility of about 1.1% a day (1.14%); its strong S1 Energy link set at 0.35,
+# with a true sensitivity of 0.35 that the elastic net estimates at only 0.03 standardised; S1 shocks summing
+# to about +1.8 over the window, so its bar is +0.06 pp (1.1% x 0.03 x 1.8) next to a diamond at +0.72 pp; the
+# other two selected topics, S5 and S10, at -0.15 and -0.03 pp; a realised move of +1.19 pp, of which -0.13 pp
+# is explained and +1.31 pp is not, with true contributions of +0.69 pp (examples that add or subtract these
+# use one decimal: +1.2, -0.1, +1.3 and +0.7 pp); variance shares of +1.40% (S1), +1.04% (S10) and -1.01% (S5),
+# summing to 1.43% (1.4% on the tile) against a true share of 29.21%, and an OOS R² of 2.0% (2 x 1.43% - 0.87%)
+# against 34.0% for the true sensitivities; 20 return days in the 4-week default window; 55 assets and 20
+# topics (1,100 pairs). They were checked against the code on the dashboard defaults (DESIGN.md G.9, and
+# test_how_to_read_examples_hold_on_defaults); an example is never computed from the current run.
 Bullets = Sequence[tuple[str, str]]
 
 
@@ -1476,8 +1482,8 @@ CELL_METRIC_BULLETS: dict[str, tuple[str, str]] = {
         "expected return response to a one-standard-deviation shock in the topic, with the other topics' shocks "
         "held fixed. In standardised units it is counted in the asset's training standard deviations of daily "
         "return.",
-        "0.32 standardised means a one-sd shock in the topic comes with a return 0.32 training standard "
-        "deviations higher, the other topics unchanged."),
+        "on the defaults, the elastic net's 0.03 for S1 Energy on Energy Global v World EQ means a one-sd Energy "
+        "shock comes with a return 0.03 training standard deviations higher, the other topics unchanged."),
     "True sensitivity": (
         "True sensitivity: the population value the simulation produces on the observed shocks. It includes "
         "spillovers through correlated assets, so most pairs without a link are not zero.",
@@ -1493,8 +1499,8 @@ CELL_METRIC_BULLETS: dict[str, tuple[str, str]] = {
         "OOS contribution (% points): the frozen training sensitivity times the sum of the topic's shocks over "
         "the window's return days, times the asset's training volatility, in percentage points of return. Over "
         "all topics, these plus the part not explained add up to the realised move (Topic contributions tab).",
-        "a sensitivity of 0.32, a training volatility of 1.1% and shocks summing to +2.0 over 20 days give "
-        "0.32 × 1.1% × 2.0 = +0.70 pp."),
+        "a sensitivity of 0.03, a training volatility of 1.1% and shocks summing to +1.8 over 20 days give "
+        "0.03 × 1.1% × 1.8 = +0.06 pp, the S1 Energy cell of Energy Global v World EQ on the defaults."),
 }
 
 #: The unit bullet of the three sensitivity metrics.
@@ -1502,7 +1508,8 @@ UNIT_BULLET: tuple[str, str] = (
     "% per 1 sd shock: the standardised value times the asset's daily return volatility over the training "
     "window, times 100. Estimated, true and set sensitivity all use this same volatility, so the three compare "
     "like with like; the unit choice applies to these three metrics only.",
-    "0.32 standardised on an asset with 1.1% training volatility shows as 0.32 × 1.1 = 0.35% per 1 sd shock.")
+    "with a training volatility of 1.14%, Energy Global v World EQ's true S1 Energy sensitivity of 0.35 "
+    "standardised shows as 0.35 × 1.14 = 0.40% per 1 sd shock.")
 
 
 def how_cell_metric(metric: str) -> str:
@@ -1553,9 +1560,9 @@ HOW_TWO_VIEWS: tuple[str, Bullets] = ("How to read the two views:", (
     ("Return attribution: each topic's sensitivity, estimated on the training window and frozen, times the sum "
      "of its standardised shocks over the window, times the asset's training volatility. The contributions and "
      "the residual add up exactly to the realised move.",
-     "with a training volatility of 1.1% a day, a sensitivity of 0.32 and shocks summing to +2.0, a topic "
-     "contributes 1.1% × 0.32 × 2.0 = +0.70 pp; if all topics together contribute +0.54 pp to a +1.20 pp move, "
-     "the residual is +0.66 pp."),
+     "with a training volatility of 1.1% a day, a sensitivity of 0.03 and shocks summing to +1.8, a topic "
+     "contributes 1.1% × 0.03 × 1.8 = +0.06 pp; if all topics together contribute -0.1 pp to a +1.2 pp move, "
+     "the residual is +1.3 pp."),
     ("Summed shocks largely cancel over a window: each shock is attention minus its trailing mean, so their sum "
      "depends mostly on the attention level at the window's edges. The return attribution therefore understates "
      "the topics' role, and the explained line in the cumulative chart drifts back towards zero.",
@@ -1563,8 +1570,9 @@ HOW_TWO_VIEWS: tuple[str, Bullets] = ("How to read the two views:", (
      "0.20 on its last five days has shocks summing to zero, so its contribution is 0.00 pp however much its "
      "attention moved in between."),
     ("Diamonds use the true sensitivities of the simulation.",
-     "with the same shocks and training volatility, a bar at +0.70 pp next to a diamond at +0.77 pp (1.1% × "
-     "0.35 × 2.0) means the estimated sensitivity is about 0.9 times the true one (0.32 against 0.35)."),
+     "on the defaults, S1 Energy's bar for Energy Global v World EQ sits at +0.06 pp next to a diamond at "
+     "+0.72 pp: with the same shocks and training volatility, the elastic net's estimate is less than a tenth "
+     "of the true sensitivity (0.03 against 0.35)."),
 ))
 
 _HOW_TILE_R2: tuple[str, str] = (
@@ -1581,27 +1589,29 @@ HOW_TILES_ATTRIBUTION: tuple[str, Bullets] = ("How to read the tiles:", (
      "two days of +1.00% show as +2.00 pp, not the compounded +2.01%."),
     ("Explained by topics: the sum of all topic contributions. It is where the blue line of the cumulative chart "
      "ends.",
-     "contributions of +0.70, -0.15 and -0.01 pp give +0.54 pp."),
+     "on the defaults, Energy Global v World EQ's contributions of about +0.06, -0.15 and -0.03 pp give "
+     "-0.13 pp."),
     ("Not explained by topics: the realised move minus the explained move.",
-     "+1.20 pp realised and +0.54 pp explained leave +0.66 pp."),
+     "+1.2 pp realised and -0.1 pp explained leave +1.3 pp."),
     _HOW_TILE_R2,
 ))
 
 HOW_TILES_SHARE: tuple[str, Bullets] = ("How to read the tiles:", (
     ("Share explained by topics: the sum of the topic shares, which is the sum of all bars including Other "
      "topics. The 'Not explained by topics' bar is 100% minus it.",
-     "shares of +6%, +3% and -1% sum to 8%, and the 'Not explained by topics' bar shows 92%."),
+     "on the defaults, Energy Global v World EQ's bars of +1.40%, +1.04% and -1.01% sum to 1.43% (1.4% on the "
+     "tile), and the 'Not explained by topics' bar shows 98.57%."),
     ("True share (simulation): the same sum with the true sensitivities. The diamonds sum to it.",
-     "a true share of 30% against 8% estimated means the true sensitivities, applied to the same shocks, would "
-     "co-move with 30% of the window's variation."),
+     "on the defaults, Energy Global v World EQ's true share of 29.2% against 1.4% estimated means the true "
+     "sensitivities, applied to the same shocks, would co-move with 29.2% of the window's variation."),
     ("Largest topic: the topic with the largest share in absolute value, shown with its sign; 'none' when every "
      "share is zero. The tooltip gives its name.",
-     "with S1 at +6%, S10 at +3% and S5 at -1% the tile shows 'S1 · 6.0%'; had S5 been at -7%, it would show "
-     "'S5 · -7.0%'."),
+     "on the defaults, with S1 at +1.40%, S10 at +1.04% and S5 at -1.01%, the tile shows 'S1 · 1.4%'; had S5 "
+     "been at -2%, it would show 'S5 · -2.0%'."),
     ("The share explained is not the OOS R². The R² also subtracts the size of the explained returns: R² = 2 × "
      "share explained - (sum of squared explained returns / sum of squared returns).",
-     "a share explained of 8% with squared explained returns worth 4% of the squared returns gives an R² of "
-     "2 × 8% - 4% = 12%."),
+     "on the defaults, Energy Global v World EQ's share explained of 1.43% with squared explained returns worth "
+     "0.87% of the squared returns gives an R² of 2 × 1.43% - 0.87% ≈ 2.0%, as on the R² tile."),
     _HOW_TILE_R2,
 ))
 
@@ -1613,15 +1623,15 @@ HOW_CONTRIB_BARS: tuple[str, Bullets] = ("How to read the bar chart:", (
     ("The lower panel has its own scale. The grey bar is the part not explained by topics. The black bar is the "
      "realised move (Return attribution) or the total variation of 100% (Variance share). The topic bars, "
      "Other topics and the grey bar add up to the black bar.",
-     "topic bars summing to +0.54 pp and a grey bar of +0.66 pp add up to the black bar of +1.20 pp; in the "
-     "Variance share view, 8% and 92% add up to 100%."),
+     "topic bars summing to -0.1 pp and a grey bar of +1.3 pp add up to the black bar of +1.2 pp; in the "
+     "Variance share view, 1.43% and 98.57% add up to 100%."),
     ("Blue bars are positive and red bars negative. A red bar in Return attribution pulled the move down. In "
      "Variance share, a red bar means the topic's explained return moved against the asset's daily returns.",
      "a sensitivity of 0.07 with shocks summing to -2.0 gives 1.1% × 0.07 × (-2.0) = -0.15 pp, a red bar."),
     ("The diamond on the grey row is the realised move minus the sum of the true contributions (Variance share: "
      "100% minus the true share).",
-     "true contributions summing to +0.90 pp on a +1.20 pp move put that diamond at +0.30 pp; in Variance share, "
-     "a true share of 30% puts it at 70%."),
+     "true contributions summing to +0.7 pp on a +1.2 pp move put that diamond at +0.5 pp; in Variance share, "
+     "a true share of 29.21% puts it at 70.79%."),
 ))
 
 HOW_CUMULATIVE: tuple[str, Bullets] = ("How to read the cumulative chart:", (
@@ -1631,8 +1641,8 @@ HOW_CUMULATIVE: tuple[str, Bullets] = ("How to read the cumulative chart:", (
      "Orange is the same with the true sensitivities. The black line ends at the Realised move tile and the blue "
      "line at Explained by topics. The orange line ends at the sum of the true contributions, the diamonds in "
      "Return attribution.",
-     "with a realised move of +1.20 pp, +0.54 pp explained and true contributions of +0.90 pp, the lines end at "
-     "+1.20%, +0.54% and +0.90%."),
+     "on the defaults, Energy Global v World EQ's black, blue and orange lines end at +1.19%, -0.13% and "
+     "+0.69%."),
     ("The explained lines follow the summed shocks: a topic's part of a line returns to zero once its attention "
      "has been back at its level from before the window for w days.",
      "with w = 5 and the same-day lead, attention at 0.20, raised to 0.24 on days 5 to 9 of the window and back "
@@ -1643,8 +1653,9 @@ HOW_CUMULATIVE: tuple[str, Bullets] = ("How to read the cumulative chart:", (
 HOW_ATTENTION: tuple[str, Bullets] = ("How to read the attention chart:", (
     ("The chart shows up to three topics with the largest contributions to the move in absolute value (Return "
      "attribution), whichever view is chosen. Topics with a zero contribution are left out.",
-     "with contributions of +0.70, -0.15 and -0.01 pp and zero for all other topics, it shows those three, even "
-     "if the Variance share view ranks them differently."),
+     "on the defaults, Energy Global v World EQ has three non-zero contributions, S5 at -0.15 pp, S1 Energy at "
+     "+0.06 pp and S10 at -0.03 pp, and the chart shows those three although the Variance share view ranks "
+     "them S1, S10, S5."),
     ("Top panel: the simulated attention level, averaged per week (weeks ending Friday). Base levels are drawn "
      "between 0.15 and 0.35 and only changes feed the shocks, so the level itself says nothing about how much a "
      "topic matters.",
@@ -1656,8 +1667,8 @@ HOW_ATTENTION: tuple[str, Bullets] = ("How to read the attention chart:", (
     ("The sum of a topic's shocks over the shaded forecast window (with the next-day lead, the shocks of the "
      "weekday before each shaded day), times its sensitivity and the training volatility, is its bar in Return "
      "attribution.",
-     "with the same-day lead, shocks summing to +2.0 over the shaded days, a sensitivity of 0.32 and a training "
-     "volatility of 1.1% give the +0.70 pp bar."),
+     "on the defaults, S1 Energy's shocks sum to +1.8 over the shaded days, and with a sensitivity of 0.03 and "
+     "a training volatility of 1.1% they give its +0.06 pp bar for Energy Global v World EQ."),
     ("The shaded band is the forecast window and the vertical line the training end. The chart runs from 26 "
      "weeks before the window to 8 weeks after it.",
      "for the window 2025-07-01 to 2025-07-28 the chart covers 2024-12-31 to 2025-09-22."),
@@ -1666,11 +1677,11 @@ HOW_ATTENTION: tuple[str, Bullets] = ("How to read the attention chart:", (
 HOW_ROLLUP: tuple[str, Bullets] = ("How to read the roll-up:", (
     ("With 'Roll up by topic group' ticked, each bar is the sum of one group's topics: Sector (S1-S11), Macro "
      "(A1-A6), Micro (B1-B3) and Generic (G001, ...). Only groups in the run appear.",
-     "Sector topics at +0.70 and -0.15 pp and a Macro topic at -0.01 pp give a Sector bar of +0.55 pp and a "
-     "Macro bar of -0.01 pp."),
+     "on the defaults, Energy Global v World EQ's S1, S5 and S10 at about +0.06, -0.15 and -0.03 pp give a "
+     "Sector bar of -0.13 pp, and its Macro and Micro bars are 0.00 pp."),
     ("The diamonds are summed the same way. The grey and black bars and the tiles do not change.",
-     "a +1.20 pp realised move with +0.66 pp not explained shows the same two bars with or without the "
-     "roll-up."),
+     "on the defaults, Energy Global v World EQ's +1.19 pp realised move and +1.31 pp not explained show as the "
+     "same two bars with or without the roll-up."),
     ("Topics of opposite sign offset each other inside a group, so a small group bar can hide large topic bars.",
      "Macro topics at +0.30 and -0.28 pp give a Macro bar of +0.02 pp."),
 ))
@@ -1820,8 +1831,8 @@ HOW_COMPARE_SCATTER: tuple[str, Bullets] = ("How to read this chart:", (
     ("Each point is one topic-asset pair: across, its true sensitivity; up, the method's estimate from the "
      "training window. Both are in standardised units: return standard deviations per 1 standard deviation of "
      "the topic shock.",
-     "a point at (0.35, 0.32) is a pair with a true sensitivity of 0.35 that the method puts at 0.32; on an "
-     "asset with a training volatility of 1.1%, that is 0.35% of return per 1 sd shock instead of about 0.39%."),
+     "on the defaults, the elastic net puts S2 Materials on Materials Global v World EQ at (0.35, 0.32), near "
+     "the diagonal, and S1 Energy on Energy Global v World EQ at (0.35, 0.03), shrunk almost to zero."),
     ("The diagonal marks estimate = truth. Points between the diagonal and the horizontal zero line are shrunk "
      "towards zero; points on the zero line are pairs the method set to zero.",
      "an elastic net that keeps 200 of the 1,100 pairs puts the other 900 on the zero line."),

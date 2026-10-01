@@ -1456,15 +1456,29 @@ contributions tab's "How to read the two views" block is the model: its
 bullets keep the owner's wording and only gain the example. Rules:
 
 1. The examples use static, illustrative numbers, never figures computed from
-   the current run. They form one consistent set for the whole dashboard:
-   Energy Global v World EQ with a training volatility of about 1.1% a day;
-   its strong Energy link set at 0.35, with a true sensitivity of 0.35 and an
-   estimate of 0.32 standardised; shocks summing to +2.0 over the window
-   (1.1% x 0.32 x 2.0 = +0.70 pp; +0.77 pp with the true sensitivity); a
-   realised move of +1.20 pp; 20 return days in the four-week default window;
-   and 55 assets x 20 topics = 1,100 pairs. Figures quoted from the default
-   run (for example medians of 17% and 23%) were checked on the dashboard
-   defaults. Examples that count days assume the same-day lead.
+   the current run. They form one consistent set for the whole dashboard,
+   and the set holds on the dashboard defaults (revised 2026-10-01; the
+   earlier estimate of 0.32 did not): Energy Global v World EQ (the Topic
+   contributions tab's default asset) with a training volatility of about
+   1.1% a day (1.14%); its strong S1 Energy link set at 0.35, with a true
+   sensitivity of 0.35 that the elastic net estimates at only 0.03
+   standardised; S1 shocks summing to about +1.8 over the window (1.1% x
+   0.03 x 1.8 = +0.06 pp, next to a diamond at +0.72 pp with the true
+   sensitivity); the other two selected topics, S5 and S10, at -0.15 and
+   -0.03 pp; a realised move of +1.19 pp, of which -0.13 pp is explained and
+   +1.31 pp is not, with true contributions of +0.69 pp; variance shares of
+   +1.40% (S1), +1.04% (S10) and -1.01% (S5), summing to 1.43% (1.4% on the
+   tile) against a true share of 29.21%; an OOS R² of 2.0% (2 x 1.43% -
+   0.87%) against 34.0% for the true sensitivities; 20 return days in the
+   four-week default window; and 55 assets x 20 topics = 1,100 pairs. The
+   two-decimal figures are rounded separately and do not add up exactly, so
+   examples that add or subtract them use one decimal (+1.2, -0.1, +1.3 and
+   +0.7 pp). The Compare methods scatter adds S2 Materials on Materials Global
+   v World EQ, which the elastic net puts at 0.32 against a true 0.35. Figures
+   quoted from the default run (for example medians of 17% and 23%) were
+   checked on the dashboard defaults, and
+   `test_how_to_read_examples_hold_on_defaults` checks this set. Examples
+   that count days assume the same-day lead.
 2. Every example follows the code. The owner's sample wording ("a variance
    share of 10% for a topic means it explains a 3% change") does not: the
    variance share is a share of the window's uncentered squared-return

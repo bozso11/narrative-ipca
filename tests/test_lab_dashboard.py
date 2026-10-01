@@ -457,6 +457,44 @@ def test_how_to_read_captions():
     assert "% per 1 sd shock:" not in _ui.how_cell_metric("OOS correlation")
 
 
+@needs_market
+def test_how_to_read_examples_hold_on_defaults():
+    """DESIGN.md G.9 "How to read" rule 1: the shared example set holds on the dashboard defaults."""
+    cfg, _, _ = _ui.config_from_values(_ui.default_values(), (), reference.load_assets()["asset_class"])
+    s = LabSession()
+    truth, fit, ev = s.truth(cfg), s.direct(cfg), s.evaluation(cfg)
+    a, k = _ui.DEFAULT_CONTRIB_ASSET, "S1"
+
+    def pp(x: float) -> float:
+        return round(float(x) * 100, 2)
+
+    assert s.simulation(cfg).lead_days == 0 and ev.n_days == 20
+    assert round(float(fit.ret_scale[a]) * 100, 2) == 1.14
+    assert truth.W_unscaled.loc[k, a] == 0.35 and round(float(truth.B_true.loc[k, a]), 2) == 0.35
+    assert round(float(fit.B_hat.loc[k, a]), 2) == 0.03
+    assert round(float(s.shocks(cfg).s_hat.loc[ev.return_days, k].sum()), 1) == 1.8
+    assert pp(ev.contrib_true.loc[a, k]) == 0.72
+    assert {t: pp(v) for t, v in ev.contrib.loc[a].items() if v != 0} == {"S1": 0.06, "S5": -0.15, "S10": -0.03}
+    assert [pp(x[a]) for x in (ev.realized, ev.explained, ev.residual, ev.explained_true)] == [1.19, -0.13, 1.31, 0.69]
+    assert pp(ev.fitted[a].sum()) == -0.13 and pp(ev.fitted_oracle[a].sum()) == 0.69  # the cumulative lines' ends
+    rolled = _ui.rollup_by_group(ev.contrib.loc[a], s.simulation(cfg).topics.table)
+    assert {g: pp(v) for g, v in rolled.items()} == {"Sector": -0.13, "Macro": 0.0, "Micro": 0.0}
+    shares = ev.var_share.loc[a]
+    assert {t: pp(v) for t, v in shares.items() if v != 0} == {"S1": 1.40, "S5": -1.01, "S10": 1.04}
+    assert list(shares[["S1", "S5", "S10"]].abs().sort_values(ascending=False).index) == ["S1", "S10", "S5"]
+    assert (pp(shares.sum()), pp(1 - shares.sum()), _ui.fmt_pct(shares.sum())) == (1.43, 98.57, "1.4%")
+    true_share = ev.var_share_true.loc[a].sum()
+    assert (pp(true_share), pp(1 - true_share), _ui.fmt_pct(true_share)) == (29.21, 70.79, "29.2%")
+    explained_sq = float((ev.fitted[a] ** 2).sum() / (ev.realized_daily[a] ** 2).sum())
+    assert pp(explained_sq) == 0.87 and (_ui.fmt_pct(ev.r2[a]), _ui.fmt_pct(ev.r2_oracle[a])) == ("2.0%", "34.0%")
+    m = "MATERIALS_v_WEQ"  # the Compare methods scatter's well-estimated pair
+    assert (round(float(truth.B_true.loc["S2", m]), 2), round(float(fit.B_hat.loc["S2", m]), 2)) == (0.35, 0.32)
+    # the captions quote these figures
+    assert "+0.06 pp next to a diamond at +0.72 pp" in _ui.how_to_read(*_ui.HOW_TWO_VIEWS)
+    assert "(0.35, 0.03)" in _ui.how_to_read(*_ui.HOW_COMPARE_SCATTER)
+    assert "0.03 × 1.1% × 1.8 = +0.06 pp" in _ui.how_cell_metric("OOS contribution (% points)")
+
+
 def test_feasibility_summary_and_linked_asset_note():
     s = LabSession()
     cfg = dataclasses.replace(_generic_cfg(), exposure=ExposureConfig(n_betas=1, beta_1=0.9, seed=0))
