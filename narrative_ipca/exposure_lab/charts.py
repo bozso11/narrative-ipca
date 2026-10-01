@@ -3158,7 +3158,6 @@ def lambda_trace_chart(
     title: str | None = None,
     subtitle: str | None = None,
     null_band: tuple[float, float, float] | Sequence[float] | None = None,
-    band_floor_alt: float | None = None,
 ) -> go.Figure:
     """The lambda path with its noise band: criterion, topics selected and, optionally, recovery (G.16; D51, D70).
 
@@ -3167,8 +3166,8 @@ def lambda_trace_chart(
     horizontal line, the best point (ink ring) and the chosen point (orange
     diamond); points inside the tolerance band are filled, the others open.
     Optionally, beneath it, the range the criterion takes with no priced
-    signal (a light grey band with a dashed median line) and a second
-    tolerance threshold. Panel 2: the number of selected topics (steps).
+    signal (a light grey band with a dashed median line). Panel 2: the
+    number of selected topics (steps).
     Panel 3 (with ``extra``): recovery measures of the fit at each lambda. A
     dashed vertical line marks the chosen lambda in every panel.
 
@@ -3207,11 +3206,6 @@ def lambda_trace_chart(
         entry, then "No priced signal: 5-95%", filled to it) and a dashed
         line at ``q50`` ("No priced signal: median"). ``None`` or non-finite
         quantiles draw nothing.
-    band_floor_alt:
-        A second tolerance threshold (the trace's ``band_floor_relative``),
-        drawn as a dotted line labelled "Relative band floor" only when it
-        differs from ``band_floor``; the higher line gets its label above
-        it, the lower one below.
 
     Returns
     -------
@@ -3368,20 +3362,13 @@ def lambda_trace_chart(
     if n_panels == 3:
         fig.update_yaxes(title={"text": "Value"}, **_ZERO_LINE, row=3, col=1)
 
-    bf = _to_float(band_floor) if band_floor is not None else float("nan")
-    alt = _to_float(band_floor_alt) if band_floor_alt is not None else float("nan")
-    if np.isfinite(alt) and np.isfinite(bf) and math.isclose(alt, bf, rel_tol=1e-9, abs_tol=1e-12):
-        alt = float("nan")  # the same threshold: one line
-    floors = [(v, f"{label} {v:.3g}", dash, color) for v, label, dash, color in (
-        (bf, "Tolerance band floor", "dash", INK_SECONDARY), (alt, "Relative band floor", "dot", INK_MUTED))
-        if np.isfinite(v)]
-    top = max(v for v, *_ in floors) if len(floors) == 2 else None
-    for v, text, dash, color in floors:
-        fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=v, y1=v,
-                      line={"color": color, "width": 1, "dash": dash})
-        below = top is not None and v < top  # two lines: the lower one gets its label underneath
-        fig.add_annotation(x=1.0, xref="x domain", y=v, yref="y", text=text, showarrow=False, xanchor="right",
-                           yanchor="top" if below else "bottom", xshift=-4, font=_NOTE_FONT, bgcolor=_NOTE_BG)
+    if band_floor is not None and np.isfinite(_to_float(band_floor)):
+        bf = _to_float(band_floor)
+        fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=bf, y1=bf,
+                      line={"color": INK_SECONDARY, "width": 1, "dash": "dash"})
+        fig.add_annotation(x=1.0, xref="x domain", y=bf, yref="y", text=f"Tolerance band floor {bf:.3g}",
+                           showarrow=False, xanchor="right", yanchor="bottom", xshift=-4, font=_NOTE_FONT,
+                           bgcolor=_NOTE_BG)
     if lam_star is not None and np.isfinite(_to_float(lam_star)) and _to_float(lam_star) > 0:
         _vertical_lines(fig, _to_float(lam_star), n_panels)
         _top_note(fig, _to_float(lam_star), f"λ* = {_to_float(lam_star):.3g}", log_axis=True)

@@ -25,10 +25,12 @@ Conventions
 * The criterion is recomputed from the returned fits, so the annualisation
   and the pseudo-inverse cut-off come from the evaluation config, not from the
   path tracer; ``LambdaPathPoint.mve_sharpe`` is overwritten accordingly.
-* Ties (criteria equal up to a relative tolerance of :data:`TIE_REL_TOL`) are
-  broken toward the sparser solution by default (D27): larger ``lambda``,
-  then fewer selected narratives, then smaller ``K``; ``tie_break="denser"``
-  reverses every preference.
+* Ties are broken toward the sparser solution by default (D27): larger
+  ``lambda``, then fewer selected narratives, then smaller ``K``;
+  ``tie_break="denser"`` reverses every preference. Points count as tied
+  when their criterion is within :func:`tie_band` of the maximum: the
+  relative ``TuningConfig.tolerance`` (D51) or, at the least, the numerical
+  tie tolerance :data:`TIE_REL_TOL`.
 * A non-finite criterion (for instance a degenerate LOOCV series) never wins;
   when every criterion is non-finite the tie-break alone decides and a
   warning is logged.
@@ -57,6 +59,7 @@ __all__ = [
     "loocv_sharpe",
     "loocv_folds",
     "select_best_point",
+    "tie_band",
     "path_point_from_fit",
     "TIE_REL_TOL",
 ]
@@ -65,7 +68,7 @@ ProgressFn = Callable[[int, int, str], None]
 """``progress(done, total, message)`` callback of the tuning loops (D44)."""
 
 TIE_REL_TOL: float = 1e-9
-"""Two criterion values within this relative distance of the maximum count as tied (D27)."""
+"""Numerical tie tolerance: criteria within ``TIE_REL_TOL * max(1, |best|)`` of the maximum count as tied (D27)."""
 
 
 # ---------------------------------------------------------------------------
@@ -197,14 +200,37 @@ def path_point_from_fit(fit: SparseIPCAResult, annualization: float, rcond: floa
     )
 
 
-def select_best_point(points: list[LambdaPathPoint], tie_break: str = "sparser", rel_tol: float = TIE_REL_TOL) -> int:
+def tie_band(best: float, tolerance: float = 0.0, rel_tol: float = TIE_REL_TOL) -> float:
+    """Width of the tie band below the largest criterion ``best`` (D27, D51).
+
+    ``max(tolerance * |best|, rel_tol * max(1, |best|))``. The user
+    ``tolerance`` (``TuningConfig.tolerance``) is relative to the best value
+    at any level of the criterion: ``0.02`` admits every point within 2% of
+    the best Sharpe ratio, whether that is 0.4 or 3. Only the numerical tie
+    tolerance ``rel_tol`` keeps the ``max(1, |best|)`` floor, so that float
+    ties still count when ``best`` is near 0. For ``|best| >= 1`` the width
+    is ``max(tolerance, rel_tol) * |best|``.
+    """
+    b = abs(float(best))
+    return max(float(tolerance) * b, float(rel_tol) * max(1.0, b))
+
+
+def select_best_point(
+    points: list[LambdaPathPoint],
+    tie_break: str = "sparser",
+    rel_tol: float = TIE_REL_TOL,
+    tolerance: float = 0.0,
+) -> int:
     """Index of the path point with the largest criterion, ties broken per D27.
 
-    Points whose criterion is within ``rel_tol * max(1, |best|)`` of the
-    maximum are tied. ``"sparser"`` prefers, in order, larger ``lam``, fewer
-    selected narratives, smaller ``K``; ``"denser"`` prefers the opposite.
-    Non-finite criteria never win unless every criterion is non-finite, in
-    which case the tie-break alone decides (with a warning).
+    Points whose criterion is within :func:`tie_band` of the maximum
+    ``best`` are tied: ``tolerance * |best|`` (the relative tolerance of
+    ``TuningConfig.tolerance``, D51) or the numerical tie band
+    ``rel_tol * max(1, |best|)``, whichever is wider. ``"sparser"`` prefers,
+    in order, larger ``lam``, fewer selected narratives, smaller ``K``;
+    ``"denser"`` prefers the opposite. Non-finite criteria never win unless
+    every criterion is non-finite, in which case the tie-break alone decides
+    (with a warning).
     """
     if not points:
         raise ValueError("no path points to choose from")
@@ -214,8 +240,7 @@ def select_best_point(points: list[LambdaPathPoint], tie_break: str = "sparser",
     finite = np.isfinite(crit)
     if finite.any():
         best = float(np.max(crit[finite]))
-        tol = float(rel_tol) * max(1.0, abs(best))
-        candidates = np.flatnonzero(finite & (crit >= best - tol))
+        candidates = np.flatnonzero(finite & (crit >= best - tie_band(best, tolerance, rel_tol)))
     else:
         logger.warning("select_best_point: every criterion is non-finite; the tie-break rule decides alone")
         candidates = np.arange(len(points))
@@ -254,14 +279,16 @@ def tune(
 
     The point with the largest criterion wins (:func:`select_best_point`,
     ties toward the sparser solution unless ``tie_break="denser"``; with
-    ``tune_cfg.tolerance > 0`` every point within that relative distance of
-    the maximum counts as tied, so the sparsest such point wins); its fit
+    ``tune_cfg.tolerance > 0`` every point whose criterion is at least
+    ``best - tolerance * |best|`` counts as tied, a relative distance at any
+    level of the criterion, so the sparsest such point wins, D51); its fit
     is returned canonicalised (D24). ``path`` lists every point of every
     ``K`` (with ``criterion`` filled and ``mve_sharpe`` at
     ``eval_cfg.annualization``); ``lam_max`` is that of the chosen ``K``;
-    ``meta`` records the grids, ``lam_max`` per ``K``, the chosen index and
-    the criterion settings. ``progress(done, total, message)`` is called after
-    every fitted point.
+    ``meta`` records the grids, ``lam_max`` per ``K``, the chosen index, the
+    criterion settings and ``tie_band``, the width of the band below the
+    best criterion (:func:`tie_band`). ``progress(done, total, message)`` is
+    called after every fitted point.
 
     Raises ``ValueError`` on an empty panel or an ill-formed ``K`` grid; a
     log-spaced grid that cannot be formed (``lam_max`` not positive) also
@@ -317,10 +344,14 @@ def tune(
             if progress is not None:
                 progress(done, total, f"K={K} lam={fit.lam:.4g} selected={fit.n_selected} {criterion}={value:.4f}")
 
-    # TuningConfig.tolerance widens the tie band (0 = BKS exact argmax); the
-    # numerical TIE_REL_TOL is the floor so that exact float ties still count.
-    rel_tol = max(TIE_REL_TOL, float(getattr(tune_cfg, "tolerance", 0.0)))
-    best = select_best_point(points, tune_cfg.tie_break, rel_tol=rel_tol)
+    # TuningConfig.tolerance widens the tie band relative to the best criterion
+    # (0 = BKS exact argmax); the numerical TIE_REL_TOL band is the floor so that
+    # exact float ties still count (tie_band).
+    tolerance = float(getattr(tune_cfg, "tolerance", 0.0))
+    best = select_best_point(points, tune_cfg.tie_break, tolerance=tolerance)
+    crit = np.array([np.nan if p.criterion is None else float(p.criterion) for p in points], dtype=float)
+    finite = np.isfinite(crit)
+    band = tie_band(float(np.max(crit[finite])), tolerance) if finite.any() else float("nan")
     chosen = canonicalize(fits[best])
     n_tied = int(np.sum(_tied_mask(points, best)))
     # Section 2: SR(lambda; S) = sqrt(mu' Sigma^-1 mu). With the pseudo-inverse of
@@ -344,7 +375,8 @@ def tune(
         "annualization": ann,
         "rcond": rcond,
         "tie_break": str(tune_cfg.tie_break),
-        "tie_rel_tol": rel_tol,
+        "tie_rel_tol": max(TIE_REL_TOL, tolerance),
+        "tie_band": band,
         "fixed_lam": bool(fixed),
         "K_grid": list(Ks),
         "lam_grid": {int(K): list(g) for K, g in grids.items()},
@@ -374,4 +406,4 @@ def _tied_mask(points: list[LambdaPathPoint], best: int, rel_tol: float = TIE_RE
     b = crit[best]
     if not np.isfinite(b):
         return ~np.isfinite(crit)
-    return np.isfinite(crit) & (crit >= b - rel_tol * max(1.0, abs(b)))
+    return np.isfinite(crit) & (crit >= b - tie_band(b, 0.0, rel_tol))

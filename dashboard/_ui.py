@@ -2444,10 +2444,10 @@ HOW_TRACE_STABILITY: tuple[str, Bullets] = ("How to read the stability chart:", 
 HOW_TRACE_PATH: tuple[str, Bullets] = ("How to read the lambda path and its noise:", (
     ("Top panel: the in-sample Sharpe ratio at each grid lambda, with a band of one standard error. Filled points "
      "are inside the tolerance band; the ring marks the best point, the diamond the chosen one, and the dashed "
-     "horizontal line the lowest Sharpe ratio inside the band. A dotted line marks the band's relative reading "
-     "(the tolerance times the best value) when it differs; the two differ below a best Sharpe ratio of 1.",
-     "on the defaults the Sharpe ratio runs from 2.35 to 2.97 with a standard error of about 1.47; both readings "
-     "put the band floor at 2.91, and the chosen lambda 0.277 keeps 10 topics."),
+     "horizontal line the lowest Sharpe ratio inside the band: the best value less the tolerance times the best "
+     "value.",
+     "on the defaults the Sharpe ratio runs from 2.35 to 2.97 with a standard error of about 1.47; the band floor "
+     "is 2.91 (2.97 less 2%), and the chosen lambda 0.277 keeps 10 topics."),
     ("Grey band 'No priced signal' with its dashed median: the 5% to 95% range of the in-sample Sharpe ratio that "
      "K factors reach over the training weeks when no factor is priced. A path inside it cannot tell the lambdas "
      "apart.",

@@ -788,8 +788,9 @@ def fit_bks(
     ``lambda`` by ``cfg.lambda_rule``:
 
     * ``"tolerance"`` (default): :func:`narrative_ipca.tuning.tune` with the
-      in-sample Sharpe criterion and the sparsest grid point within
-      ``cfg.tolerance`` of the best Sharpe ratio (D51);
+      in-sample Sharpe criterion and the sparsest grid point within a
+      relative distance ``cfg.tolerance`` of the best Sharpe ratio (Sharpe
+      at least ``best - cfg.tolerance * |best|``, D51);
     * ``"argmax"``: the same with tolerance 0 (BKS exact argmax);
     * ``"fixed"``: one :func:`narrative_ipca.sparse_ipca.fit_sparse_ipca` at
       ``cfg.lam``, canonicalised (D24); ``tuning`` is ``None``.

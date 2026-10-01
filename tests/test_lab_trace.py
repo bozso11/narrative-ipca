@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from narrative_ipca import tuning
 from narrative_ipca.covariances import brute_force_covariance, kernel_weights, window_bounds
 from narrative_ipca.data import period_end_index
 from narrative_ipca.exposure_lab import bks, reference
@@ -277,7 +278,7 @@ def test_tables_and_frames(tr):
     assert tr.path is not None and list(tr.path.columns) == [
         "lam", "criterion", "se", "in_band", "best", "chosen", "n_selected", "total_r2", "objective", "zero_objective",
         "above_zero", "converged", "n_iter", "sigma_ff_truncated", "null_q05", "null_q50", "null_q95",
-        "band_floor_code", "band_floor_relative", "edge"]
+        "band_floor", "edge"]
     assert tr.path["chosen"].sum() == 1 and tr.path["best"].sum() == 1
     assert tr.path.loc[tr.path["chosen"], "lam"].item() == pytest.approx(tr.lam)
     assert tr.path.loc[tr.path["chosen"], "in_band"].item()
@@ -375,14 +376,18 @@ def test_null_sharpe_quantiles_closed_form_and_simulation():
     np.testing.assert_allclose(np.quantile(sr, [0.05, 0.5, 0.95]), T.null_sharpe_quantiles(K, Tw), rtol=0.03)
 
 
-def test_path_band_floors_edge_and_null_columns(cfg, tr):
+def test_path_band_floor_edge_and_null_columns(cfg, tr):
     path = tr.path
     crit = path["criterion"].to_numpy()
     best = float(np.nanmax(crit))
     tol = cfg.bks.tolerance
-    assert (path["band_floor_code"] == best - max(1e-9, tol) * max(1.0, abs(best))).all()
-    assert (path["band_floor_relative"] == best - tol * abs(best)).all()
-    np.testing.assert_array_equal(path["in_band"].to_numpy(), crit >= path["band_floor_code"].to_numpy())
+    # D51: relative to the best at any level (the generic config's best Sharpe ratio is below 1); only the
+    # numerical tie tolerance keeps the max(1, |best|) floor; the tuner's tie_band gives the same width
+    band = max(tol * abs(best), 1e-9 * max(1.0, abs(best)))
+    assert band == tuning.tie_band(best, tol)
+    assert (path["band_floor"] == best - band).all()
+    np.testing.assert_array_equal(path["in_band"].to_numpy(), crit >= path["band_floor"].to_numpy())
+    assert _checks(tr)["Chosen lambda follows the band rule"].status == T.OK
     np.testing.assert_allclose(path[["null_q05", "null_q50", "null_q95"]].iloc[0].to_numpy(),
                                T.null_sharpe_quantiles(tr.K, len(tr.train_periods)))
     assert path[["null_q05", "null_q50", "null_q95"]].nunique().eq(1).all()
@@ -390,37 +395,35 @@ def test_path_band_floors_edge_and_null_columns(cfg, tr):
     expected = [(i in ends) and bool(path["chosen"].iloc[i] or path["best"].iloc[i]) for i in range(len(path))]
     assert path["edge"].tolist() == expected
     assert tr.meta["null_sharpe_quantiles"] == tuple(path[["null_q05", "null_q50", "null_q95"]].iloc[0])
-    assert tr.meta["band_floor_code"] == path["band_floor_code"].iloc[0]
+    assert tr.meta["band_floor"] == path["band_floor"].iloc[0]
     # gamma_sv_min: the smallest singular value of the standardised Gamma_tilde; zero exactly when a direction died
     pt = tr.path_trace
     assert (pt["gamma_sv_min"] >= 0.0).all()
     assert ((pt["gamma_sv_min"] > 1e-8) | (pt["gamma_rank"] < tr.K)).all()
 
 
-def _findings_with_path(tr: T.BKSTrace, path: pd.DataFrame | None, *, rule: str = "tolerance",
-                        tolerance: float = 0.02, null_q=(0.5, 1.0, 2.0), floor_code: float, floor_rel: float,
+def _findings_with_path(tr: T.BKSTrace, path: pd.DataFrame | None, *, null_q=(0.5, 1.0, 2.0),
                         cap: dict | None = None, ladder: pd.DataFrame | None = None, history: str | None = None,
                         share: float = 0.0, eff_days: float = 1.0, ref_corr: float = 1.0,
                         **extra: object) -> list[dict[str, str]]:
     return T._findings(
         [], cap=tr.capture if cap is None else cap, K=tr.K, history=tr.history if history is None else history,
         share=share, eff_days=eff_days, n_pairs=10, ladder=tr.ladder if ladder is None else ladder,
-        path=path, rule=rule, tolerance=tolerance, dead=False, dead_ratio=1.0, k_eff=tr.K, ref_corr=ref_corr,
+        path=path, dead=False, dead_ratio=1.0, k_eff=tr.K, ref_corr=ref_corr,
         ref_slope=1.0, instrument_week=tr.instrument_week, window_end=tr.instrument_window_end,
         train_end=tr.meta["train_end"], cal=pd.DatetimeIndex([]), conversion_exact=np.ones(3),
         conversion_kernel=np.ones(3), scaled=True, zero_obj=1e9, null_q=np.asarray(null_q), T_train=20,
-        floor_code=floor_code, floor_rel=floor_rel, n_topics=len(tr.topics), **extra)
+        n_topics=len(tr.topics), **extra)
 
 
-def test_findings_null_band_grid_edge_and_band_rules(tr):
+def test_findings_null_band_and_grid_edge(tr):
     lam = np.logspace(-2, 0, 5)
     crit = np.array([0.80, 0.79, 0.785, 0.70, 0.60])  # best at the smallest lambda, below 1
-    best, tol = 0.80, 0.02
-    floor_code, floor_rel = best - tol * 1.0, best - tol * best  # 0.78 and 0.784: different picks
-    path = pd.DataFrame({"lam": lam, "criterion": crit, "se": 1.0, "in_band": crit >= floor_code,
+    floor = 0.80 - 0.02 * 0.80  # the 2% band is relative below 1 too (D51): 0.784
+    path = pd.DataFrame({"lam": lam, "criterion": crit, "se": 1.0, "in_band": crit >= floor,
                          "best": [True, False, False, False, False], "chosen": [False, False, True, False, False],
                          "n_selected": [9, 8, 7, 5, 2], "above_zero": False})
-    titles = {f["title"]: f for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_rel)}
+    titles = {f["title"]: f for f in _findings_with_path(tr, path)}
     # (a) every point inside the no-signal 5-95% band replaces "within noise"
     assert "The lambda choice follows noise" in titles and "The lambda choice is within noise" not in titles
     assert "0.50-2.00" in titles["The lambda choice follows noise"]["text"]
@@ -429,29 +432,12 @@ def test_findings_null_band_grid_edge_and_band_rules(tr):
     edge = titles["The choice sits at the edge of the lambda grid"]
     assert edge["severity"] == "departure" and "best in-sample Sharpe ratio is at the smallest lambda" in edge["text"]
     assert "chosen lambda" not in edge["text"]
-    # (c) not here: the tuner's band (floor 0.78) and the relative band (0.784) both pick the third point
-    assert "The two readings of the tolerance band choose differently" not in titles
-    # outside the no-signal band: the standard-error rule applies again; argmax: no band note
-    far = _findings_with_path(tr, path, null_q=(0.9, 1.0, 2.0), floor_code=floor_code, floor_rel=floor_rel,
-                              rule="argmax", tolerance=0.0)
+    # (c) one band rule (D51): no finding about the tolerance band, also with a best Sharpe ratio below 1
+    assert not any("tolerance band" in t for t in titles)
+    # outside the no-signal band: the standard-error rule applies again
+    far = _findings_with_path(tr, path, null_q=(0.9, 1.0, 2.0))
     far_titles = {f["title"] for f in far}
     assert "The lambda choice is within noise" in far_titles and "The lambda choice follows noise" not in far_titles
-    assert "The two readings of the tolerance band choose differently" not in far_titles
-
-
-def test_findings_band_rules_differ_only_when_picks_differ(tr):
-    lam = np.logspace(-2, 0, 4)
-    crit = np.array([0.50, 0.49, 0.482, 0.40])
-    best, tol = 0.50, 0.02
-    floor_code, floor_rel = best - tol, best - tol * best  # 0.48 (picks index 2) and 0.49 (picks index 1)
-    path = pd.DataFrame({"lam": lam, "criterion": crit, "se": 1.0, "in_band": crit >= floor_code,
-                         "best": [True, False, False, False], "chosen": [False, False, True, False],
-                         "n_selected": [9, 8, 7, 5], "above_zero": False})
-    found = {f["title"]: f for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_rel)}
-    band = found["The two readings of the tolerance band choose differently"]
-    assert band["severity"] == "note" and "0.480" in band["text"] and "0.490" in band["text"]
-    same = {f["title"] for f in _findings_with_path(tr, path, floor_code=floor_code, floor_rel=floor_code)}
-    assert "The two readings of the tolerance band choose differently" not in same
 
 
 def _exact_kernel_cov(tr: T.BKSTrace, panel, sim, asset: str) -> tuple[np.ndarray, float]:
@@ -781,7 +767,7 @@ def _by_title(findings: list[dict[str, str]]) -> dict[str, dict[str, str]]:
 
 def _no_path_findings(tr: T.BKSTrace, **kw: object) -> dict[str, dict[str, str]]:
     """:func:`trace._findings` without a lambda path (the fixed rule), by title."""
-    return _by_title(_findings_with_path(tr, None, floor_code=np.nan, floor_rel=np.nan, **kw))
+    return _by_title(_findings_with_path(tr, None, **kw))
 
 
 def _build(session: LabSession, cfg: LabConfig, **kw: object) -> T.BKSTrace:
@@ -947,7 +933,7 @@ def test_chosen_fit_above_the_zero_objective(tr):
     path = pd.DataFrame({"lam": lam, "criterion": [3.0, 2.9, 2.8, 2.7], "se": 0.01, "in_band": True,
                          "best": [True, False, False, False], "chosen": [False, False, False, True],
                          "n_selected": [9, 8, 7, 5], "above_zero": [False, False, True, True]})
-    common = dict(floor_code=2.9, floor_rel=2.9, null_q=(0.1, 0.2, 0.3), rule="argmax")
+    common = dict(null_q=(0.1, 0.2, 0.3))
     above = _by_title(_findings_with_path(tr, path, chosen_above=True, objective=110.0, zero_reference=100.0,
                                           lam=1.0, **common))
     worse = above["The chosen fit is worse than no fit"]
@@ -1053,11 +1039,11 @@ def test_findings_origins_and_forecast_note(tr):
     fake = T.TraceCheck(step="implied", name="X", relation="x = y", value=1.0, reference=0.0, tolerance=0.0,
                         status=T.OFF, note="A note.", kind=T.IDENTITY)
     out = T._findings([fake], cap=tr.capture, K=tr.K, history=tr.history, share=0.0, eff_days=1.0, n_pairs=10,
-                      ladder=tr.ladder, path=None, rule="fixed", tolerance=0.0, dead=False, dead_ratio=1.0,
+                      ladder=tr.ladder, path=None, dead=False, dead_ratio=1.0,
                       k_eff=tr.K, ref_corr=1.0, ref_slope=1.0, instrument_week=tr.instrument_week,
                       window_end=tr.instrument_window_end, train_end=tr.meta["train_end"], cal=pd.DatetimeIndex([]),
                       conversion_exact=np.ones(3), conversion_kernel=np.ones(3), scaled=True, zero_obj=1e9,
-                      null_q=np.asarray([0.5, 1.0, 2.0]), T_train=20, floor_code=np.nan, floor_rel=np.nan)
+                      null_q=np.asarray([0.5, 1.0, 2.0]), T_train=20)
     defect = [f for f in out if f["title"] == "Check off: X"]
     assert len(defect) == 1 and defect[0]["severity"] == "defect" and defect[0]["origin"] == "defect"
     assert out[[f["step"] for f in out].index("implied")]["severity"] == "defect"  # defects first within a step
@@ -1132,8 +1118,6 @@ def test_small_fixes(tr):
     assert T.LADDER_WHAT["oracle"] == ("The simulation's true topic sensitivities: the Spearman ceiling (1 by "
                                        "construction); on a few forecast weeks another row can score a higher OOS R².")
     assert "without the constant's part" in T.LADDER_WHAT["bks_ls"]
-    from narrative_ipca import tuning
-
     assert T.TIE_REL_TOL is tuning.TIE_REL_TOL
     assert "dashboard/trace_page.py" in T.__doc__ and (ROOT / "dashboard" / "trace_page.py").is_file()
     assert "bks_trace_page" not in T.__doc__.split("drawn by")[0]

@@ -303,13 +303,15 @@ class TuningConfig:
     tolerance:
         Relative tolerance below the maximum criterion within which points
         count as tied, so that with ``tie_break="sparser"`` the sparsest
-        point whose criterion is at least ``(1 - tolerance) * max`` wins
-        (``0.02`` = within 2% of the best Sharpe ratio; for ``|max| < 1`` the
-        tolerance is absolute). ``0.0`` is the BKS rule (exact argmax). The
-        option exists because the in-sample Sharpe surface can be flat over a
-        wide range of selected-narrative counts (DESIGN.md D27, study of
-        2026-09-06), in which case the exact argmax admits many noise
-        narratives that add nothing to the criterion.
+        point whose criterion is at least ``max - tolerance * |max|`` wins
+        (``0.02`` = within 2% of the best Sharpe ratio, at any level of the
+        Sharpe ratio; ``tuning.tie_band``, D51). ``0.0`` is the BKS rule
+        (exact argmax, up to the numerical tie tolerance
+        ``tuning.TIE_REL_TOL``). The option exists because the in-sample
+        Sharpe surface can be flat over a wide range of selected-narrative
+        counts (DESIGN.md D27, study of 2026-09-06), in which case the exact
+        argmax admits many noise narratives that add nothing to the
+        criterion.
     loocv_max_folds:
         Subsample at most this many left-out periods for the LOOCV criterion
         (speed). ``None`` uses every period.

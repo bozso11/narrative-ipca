@@ -1016,20 +1016,18 @@ def _topics_should_matter(trace: T.BKSTrace, ui: dict[str, Any], t_labels: dict[
     _how("HOW_TRACE_TOPIC_TABLE")
 
 
-def _band_floors(trace: T.BKSTrace) -> tuple[float | None, float | None]:
-    """The tuner's band floor and the relative reading's floor (DESIGN.md G.16 "Findings"), from the path table;
-    ``None`` unless the tolerance rule chose lambda on a path with a finite criterion."""
+def _band_floor(trace: T.BKSTrace) -> float | None:
+    """The lowest criterion inside the tolerance band (D51), from the path table; ``None`` unless the tolerance
+    rule chose lambda on a path with a finite criterion."""
     path = trace.path
     if path is None or trace.lambda_rule != "tolerance" or not np.isfinite(path["criterion"].to_numpy(float)).any():
-        return None, None
-    return float(path["band_floor_code"].iloc[0]), float(path["band_floor_relative"].iloc[0])
+        return None
+    return float(path["band_floor"].iloc[0])
 
 
 def _path_chart(trace: T.BKSTrace, ui: dict[str, Any]) -> None:
     path = trace.path
-    code, rel = _band_floors(trace)
     null_band = tuple(float(path[c].iloc[0]) for c in ("null_q05", "null_q50", "null_q95"))
-    alt = rel if code is not None and rel is not None and np.isfinite(rel) and not np.isclose(rel, code) else None
     extra = None
     labels = {"spearman": "Spearman with true sensitivities", "kept_share": "Share of the instruments kept",
               "median_r2": "Median OOS R² of the implied sensitivities"}
@@ -1037,12 +1035,13 @@ def _path_chart(trace: T.BKSTrace, ui: dict[str, Any]) -> None:
         extra = trace.path_trace.set_index("lam")
     ui["show_chart"](
         charts.lambda_trace_chart(
-            path, lam_star=trace.lam, band_floor=code, extra=extra, extra_labels=labels if extra is not None else None,
+            path, lam_star=trace.lam, band_floor=_band_floor(trace), extra=extra,
+            extra_labels=labels if extra is not None else None,
             extra_title="The implied sensitivities refitted at each lambda",
             title="The lambda path and its noise",
             subtitle="Sharpe ratio with one standard error and the no-signal band; topics selected"
                      + ("; the implied sensitivities refitted at each lambda" if extra is not None else ""),
-            null_band=null_band, band_floor_alt=alt),
+            null_band=null_band),
         "fig_tr_path",
     )
     _how("HOW_TRACE_PATH")

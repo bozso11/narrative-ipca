@@ -93,9 +93,9 @@ is off).
 tuning criterion (the in-sample annualised Sharpe ratio of the ``K``
 factors' best combination over ``T`` training weeks when every factor mean
 is zero: Hotelling ``T^2 = K (T - 1) / (T - K) F(K, T - K)``, Sharpe
-``sqrt(52 T^2 / T)``), both readings of the tolerance band (the tuner's
-``best - tol max(1, |best|)`` and the relative ``best - tol |best|`` the
-docs describe) and the stationarity of the group lasso. Beside the unit
+``sqrt(52 T^2 / T)``), the tolerance band recomputed from the path
+(``best - max(tol |best|, 1e-9 max(1, |best|))``, relative to the best
+Sharpe ratio, D51) and the stationarity of the group lasso. Beside the unit
 conversion: the exact return-unit kernel covariance of each asset (raw
 returns instead of scaled ones, same kernel), and the forecast R2 in exact
 return units next to the panel-unit value.
@@ -247,8 +247,7 @@ ORIGINS: dict[str, str] = {
                "factor, the chosen fit worse than no fit, the topics the group lasso selects, what the forecast R2 "
                "measures."),
     "implementation": ("A choice of this lab's implementation: the Sigma_z window, the approximate unit conversion, "
-                       "the week of the instruments Eq. 5 uses, the absolute tolerance band below a Sharpe ratio of "
-                       "1, the two readings of the band, the lambda grid."),
+                       "the week of the instruments Eq. 5 uses, the lambda grid."),
     "data": ("A property of the simulated data or of this run, for example instruments that miss their population "
              "value over few effective days."),
     "defect": "An identity check that is off (severity \"defect\").",
@@ -485,11 +484,10 @@ class BKSTrace:
         then constants over the rows: ``null_q05``, ``null_q50``,
         ``null_q95`` (quantiles of the no-signal in-sample Sharpe ratio of
         ``K`` factors over the ``T`` training weeks; ``NaN`` when
-        ``T <= K``), ``band_floor_code`` (``best - max(1e-9, tol) max(1,
-        |best|)``, the tuner's rule) and ``band_floor_relative`` (``best -
-        tol |best|``, the documented relative rule); and ``edge`` (bool:
-        this row is the chosen or the best point and the first or last grid
-        point).
+        ``T <= K``) and ``band_floor`` (``best - max(tol |best|, 1e-9
+        max(1, |best|))``, the lowest criterion inside the tolerance band,
+        D51); and ``edge`` (bool: this row is the chosen or the best point
+        and the first or last grid point).
     gamma_path:
         Lambda (index ``lam``) x instruments: ``sigma^c_l ||Gamma_l||`` per
         path point (``None`` for the fixed rule).
@@ -550,8 +548,8 @@ class BKSTrace:
         ``direct_train_days`` and ``direct_days_not_in_bks`` (the direct
         estimator's training return days, and those in no BKS training
         week; dates in ``direct_days_not_in_bks_dates``),
-        ``null_sharpe_quantiles``, ``band_floor_code``,
-        ``band_floor_relative``, ``inner_all_converged``, ``inner_iters``,
+        ``null_sharpe_quantiles``, ``band_floor``,
+        ``inner_all_converged``, ``inner_iters``,
         ``next_to_enter``, ``next_to_enter_ratio``, ``r2_pooled_panel``,
         ``r2_pooled_exact``, ``realized_max_rel_error``, ``polish`` (the
         polished copy of the fit, :func:`_polish`: ``n_iter``,
@@ -2105,30 +2103,30 @@ def build_trace(
     path = gamma_path = ptrace = None
     zero_obj = 0.5 * syy
     null_q = null_sharpe_quantiles(K, int(sub.T))  # what K factors reach in-sample with no priced signal
-    floor_code = floor_rel = float("nan")
+    band_floor = float("nan")
     if tuning is not None:
         pts = tuning.path
         crit = np.array([np.nan if q.criterion is None else float(q.criterion) for q in pts], dtype=float)
         lams = np.array([float(q.lam) for q in pts])
         n_sel = np.array([int(q.n_selected) for q in pts])
         Ks = np.array([int(q.K) for q in pts])
-        tol_rule = max(TIE_REL_TOL, float(fit.meta.get("tolerance", 0.0) or 0.0))
+        tol_user = float(fit.meta.get("tolerance", 0.0) or 0.0)
         fin = np.isfinite(crit)
         best_i = int(np.nanargmax(crit)) if fin.any() else -1
         best_v = float(crit[best_i]) if best_i >= 0 else float("nan")
-        band = tol_rule * max(1.0, abs(best_v)) if best_i >= 0 else float("nan")
-        in_band = fin & (crit >= best_v - band) if best_i >= 0 else np.zeros(len(pts), dtype=bool)
-        pick = _band_pick(crit, lams, n_sel, Ks, best_v - band)
+        # D51, recomputed here rather than taken from the tuner: the tolerance is relative to the best value; only
+        # the numerical tie tolerance keeps the max(1, |best|) floor
+        band = (max(tol_user * abs(best_v), TIE_REL_TOL * max(1.0, abs(best_v))) if best_i >= 0
+                else float("nan"))
+        band_floor = best_v - band
+        in_band = fin & (crit >= band_floor) if best_i >= 0 else np.zeros(len(pts), dtype=bool)
+        pick = _band_pick(crit, lams, n_sel, Ks, band_floor)
         chosen = int(tuning.meta.get("chosen_index", -1))
-        # both readings of the tolerance band: the tuner's (absolute below |best| = 1) and the documented relative one
-        tol_user = float(fit.meta.get("tolerance", 0.0) or 0.0)
-        floor_code = best_v - band
-        floor_rel = best_v - tol_user * abs(best_v)
         ends_pos = {int(np.argmin(lams)), int(np.argmax(lams))} if len(lams) else set()
         flagged = np.array([(i in ends_pos) and (i == chosen or i == best_i) for i in range(len(pts))], dtype=bool)
         checks.add(
             "fit", "Chosen lambda follows the band rule",
-            "the largest lambda with criterion >= best - tol x max(1, |best|)",
+            "the largest lambda with criterion >= best - max(tol x |best|, 1e-9 x max(1, |best|))",
             0.0 if (pick == chosen and np.isclose(lams[chosen], lam, rtol=0, atol=0)) else 1.0,
             reference=0.0, tolerance=0.0,
             note=(f"Re-picked from the path: index {pick} (lambda {lams[pick] if pick >= 0 else float('nan'):.4g}) "
@@ -2148,7 +2146,7 @@ def build_trace(
             "above_zero": above, "converged": [bool(q.converged) for q in pts], "n_iter": [int(q.n_iter) for q in pts],
             "sigma_ff_truncated": [bool(x) for x in trunc],
             "null_q05": float(null_q[0]), "null_q50": float(null_q[1]), "null_q95": float(null_q[2]),
-            "band_floor_code": floor_code, "band_floor_relative": floor_rel, "edge": flagged,
+            "band_floor": band_floor, "edge": flagged,
         })
         norms = np.vstack([np.asarray(q.gamma_norms, dtype=float) for q in pts]) * np.asarray(sub.sigma_c)[None, :]
         gamma_path = pd.DataFrame(norms, index=pd.Index(lams, name="lam"),
@@ -2668,11 +2666,11 @@ def build_trace(
                                np.linalg.norm(g_std.to_numpy(dtype=float), axis=1), gamma_path)
     findings = _findings(
         checks.items, cap=cap, K=K, history=history, share=share_all, eff_days=eff_days, n_pairs=chain.n_pairs,
-        ladder=ladder, path=path, rule=rule, tolerance=float(fit.meta.get("tolerance", 0.0) or 0.0), dead=dead,
+        ladder=ladder, path=path, dead=dead,
         dead_ratio=dead_ratio, k_eff=k_eff, ref_corr=ref_corr, ref_slope=ref_slope, instrument_week=instrument_week,
         window_end=window_end, train_end=te, cal=sim.market.calendar, conversion_exact=conv_exact[live],
         conversion_kernel=conv_kernel[live], scaled=scaled, zero_obj=zero_obj, null_q=null_q, T_train=int(sub.T),
-        floor_code=floor_code, floor_rel=floor_rel, gamma_rank=int(chain.gamma_rank), n_topics=L,
+        gamma_rank=int(chain.gamma_rank), n_topics=L,
         chosen_above=chosen_above, objective=obj_chosen, zero_reference=zero_ref, lam=lam,
         r2_pooled=float(result.r2_pooled), r2_shuffled=float(result.meta.get("shuffled_r2_pooled", np.nan)),
         topic_table=topic_table, polish=polish_meta, stop_tol=float(est.tol),
@@ -2775,8 +2773,7 @@ def build_trace(
         "direct_days_not_in_bks": int(len(missing_days)),
         "direct_days_not_in_bks_dates": [_fmt_day(d) for d in missing_days],
         "null_sharpe_quantiles": tuple(float(v) for v in null_q),
-        "band_floor_code": float(floor_code),
-        "band_floor_relative": float(floor_rel),
+        "band_floor": float(band_floor),
         "inner_all_converged": None if inner_ok is None else bool(inner_ok),
         "inner_iters": None if inner_iters is None else int(inner_iters),
         "next_to_enter": next_name,
@@ -2979,12 +2976,12 @@ def lambda_path_trace(panel: BKSPanel, fit: BKSFit, sim: SimData, shocks: Observ
 
 
 def _findings(checks: list[TraceCheck], *, cap: dict[str, Any], K: int, history: str, share: float,
-              eff_days: float, n_pairs: int, ladder: pd.DataFrame, path: pd.DataFrame | None, rule: str,
-              tolerance: float, dead: bool, dead_ratio: float, k_eff: int, ref_corr: float, ref_slope: float,
+              eff_days: float, n_pairs: int, ladder: pd.DataFrame, path: pd.DataFrame | None,
+              dead: bool, dead_ratio: float, k_eff: int, ref_corr: float, ref_slope: float,
               instrument_week: pd.Timestamp, window_end: pd.Timestamp, train_end: pd.Timestamp,
               cal: pd.DatetimeIndex, conversion_exact: np.ndarray, conversion_kernel: np.ndarray, scaled: bool,
-              zero_obj: float, null_q: np.ndarray, T_train: int, floor_code: float,
-              floor_rel: float, gamma_rank: int | None = None, n_topics: int | None = None,
+              zero_obj: float, null_q: np.ndarray, T_train: int,
+              gamma_rank: int | None = None, n_topics: int | None = None,
               chosen_above: bool = False, objective: float = float("nan"), zero_reference: float = float("nan"),
               lam: float = float("nan"), r2_pooled: float = float("nan"), r2_shuffled: float = float("nan"),
               topic_table: pd.DataFrame | None = None, polish: dict[str, Any] | None = None,
@@ -3090,14 +3087,6 @@ def _findings(checks: list[TraceCheck], *, cap: dict[str, Any], K: int, history:
             add("fit", "departure", "method", "The lambda choice is within noise",
                 f"The lambda criterion varies by {rng_c:.2f} over the grid against a standard error of about "
                 f"{se_med:.2f}: the lambda choice and the selected topics are within noise.")
-        best_v = float(np.nanmax(crit)) if fin.any() else float("nan")
-        if rule == "tolerance" and np.isfinite(best_v) and abs(best_v) < 1.0:
-            band = max(TIE_REL_TOL, tolerance) * max(1.0, abs(best_v))
-            add("fit", "note", "implementation", "The tolerance band is absolute here",
-                f"The tolerance band is absolute below a Sharpe ratio of 1: the best in-sample Sharpe ratio is "
-                f"{best_v:.2f}, so every point within {band:.3g} of it counts as tied"
-                + (f" ({band / abs(best_v):.0%} of it, not {tolerance:.0%})" if best_v != 0.0 else "")
-                + ", and the sparsest of them wins.")
         lams = path["lam"].to_numpy(dtype=float)
         n_sel = path["n_selected"].to_numpy()
         lo_i, hi_i = int(np.argmin(lams)), int(np.argmax(lams))
@@ -3114,16 +3103,6 @@ def _findings(checks: list[TraceCheck], *, cap: dict[str, Any], K: int, history:
             add("fit", "departure", "implementation", "The choice sits at the edge of the lambda grid",
                 f"{text[0].upper()}{text[1:]}. The grid ends there, so it does not show whether the criterion keeps "
                 "rising beyond it; a wider grid could choose another lambda and other topics.")
-        if rule == "tolerance" and np.isfinite(floor_code) and np.isfinite(floor_rel):
-            Ks = np.full(len(lams), int(K))
-            i_code = _band_pick(crit, lams, n_sel, Ks, floor_code)
-            i_rel = _band_pick(crit, lams, n_sel, Ks, floor_rel)
-            if i_code >= 0 and i_rel >= 0 and i_code != i_rel:
-                add("fit", "note", "implementation", "The two readings of the tolerance band choose differently",
-                    f"The tuner counts every point within {tolerance:g} x max(1, |best|) of the best as tied (floor "
-                    f"{floor_code:.3f}) while the documented rule is relative, {tolerance:g} x |best| (floor "
-                    f"{floor_rel:.3f}): they choose lambda {lams[i_code]:.4g} ({int(n_sel[i_code])} topics) and "
-                    f"{lams[i_rel]:.4g} ({int(n_sel[i_rel])} topics) respectively.")
         above = path["above_zero"].to_numpy(dtype=bool)
         is_chosen = path["chosen"].to_numpy(dtype=bool) if "chosen" in path else np.zeros(len(path), dtype=bool)
         others = above & ~is_chosen

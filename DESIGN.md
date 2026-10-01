@@ -268,8 +268,9 @@ Each entry: the decision, why, and the config field or code location to change i
 - **D27 Criterion = in-sample annualised MVE Sharpe** (BKS main text, footnote
   8). Ties break toward the sparser solution. `TuningConfig.tolerance`
   (default 0 = the BKS exact argmax) widens the tie band to every point
-  within a relative distance of the maximum, so the sparsest point within,
-  say, 2% of the best Sharpe wins. Reason (full-size study, 2026-09-06): on
+  within a relative distance of the maximum (criterion at least
+  `best - tolerance * |best|`, D51), so the sparsest point within, say, 2%
+  of the best Sharpe wins. Reason (full-size study, 2026-09-06): on
   the simulated panel the in-sample Sharpe surface is flat (1.053-1.057) from
   91 down to 10 selected narratives, so the exact argmax admits dozens of
   noise narratives that do not move the criterion. The study reports the
@@ -430,7 +431,26 @@ Each entry: the decision, why, and the config field or code location to change i
   `retune_lambda = False` (cold refits) and not for the warm-started path.
 - **D51 Tolerance rule for lambda** (see D27): `TuningConfig.tolerance`,
   default 0 (BKS exact argmax); the study reports the argmax, the 2%
-  tolerance rule and LOOCV side by side.
+  tolerance rule and LOOCV side by side. The band is relative at any level
+  of the criterion: every grid point with criterion at least
+  `best - max(tolerance * |best|, 1e-9 * max(1, |best|))` counts as tied
+  (`tuning.tie_band`). The second term is the numerical tie tolerance
+  `TIE_REL_TOL`, the only part with a `max(1, |best|)` floor, so float ties
+  still count when `best` is near 0.
+  **Fix of 2026-10-01:** until then the `max(1, |best|)` floor applied to
+  the user tolerance too, so below a best Sharpe ratio of 1 the band was
+  0.02 in absolute Sharpe units instead of 2% of the best. Runs with a
+  best Sharpe ratio of 1 or more are unchanged. Measured on the lab's
+  12-point grid with the 2% default:
+  1. Lab defaults (best 0.864): the band narrows from 0.02 to 0.017; both
+     rules admit points 0 and 1 and choose point 1.
+  2. The BKS tests' generic configuration (best 0.447): 0.02 to 0.0089;
+     points 0–8 lie within 0.0056 of the best, so both rules choose
+     point 8.
+  3. The trace tests' generic configuration (two-year training window,
+     best 0.288): 0.02 to 0.0058; the old band admitted points 0–2 and
+     chose lambda 0.062 (10 topics), the new one admits only point 0 and
+     chooses lambda 0.027 (11 topics).
 - **D52 What the model identifies, and which harness checks follow from it**
   (full study, 2026-09-06). Eq. 5 gives `cov_{i,t} = beta_{i,t} Sigma_ff A'`,
   so the population instrument vector has rank `K`, and any `Gamma_tilde`
@@ -1966,7 +1986,7 @@ def grouped_bars(frame, *, labels=None, series_labels=None, colors=None, axis_ti
                  separate=False) -> go.Figure       # categories x series; at most 120 rows unless top_n
 def lambda_trace_chart(path, *, lam_star=None, lam_best=None, band_floor=None, criterion_label=...,
                        extra=None, extra_labels=None, extra_title=None, title=None, subtitle=None,
-                       null_band=None, band_floor_alt=None) -> go.Figure
+                       null_band=None) -> go.Figure
                                                     # criterion with a +-1 se band, the tolerance floor, the null
                                                     # band of a Sharpe with no priced signal; selected topics; recovery
 def coefficient_path_chart(norms, *, selected=(), labels=None, lam_star=None, max_colored=8, title=None,
@@ -2576,9 +2596,7 @@ with no priced signal over the training weeks or against its standard error
 (departure, method); a chosen or best lambda at the edge of the grid
 (departure, implementation); a fit stopped at its sweep cap (departure,
 implementation); a chosen fit worse than the all-zero solution (departure,
-method, D22); a dead factor (departure, method); an absolute tolerance band
-below a Sharpe ratio of 1 and the tuner's and the relative reading of the
-band choosing differently (notes, implementation); path points above the
+method, D22); a dead factor (departure, method); path points above the
 all-zero objective (note, method); fewer than half of the topics with the
 largest true sensitivities selected (note, method); instruments far from
 their population value (data; a departure only under the full history with

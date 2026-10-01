@@ -7,6 +7,10 @@ What is checked, beyond shapes:
 * ``select_best_point`` picks the argmax and breaks ties per D27
   (sparser = larger lambda, fewer selected, smaller K; denser reversed; a
   non-finite criterion never wins);
+* the tolerance band is relative at any level of the criterion
+  (``tie_band``, D51): ``tolerance * |best|``, with only the numerical tie
+  tolerance floored at ``max(1, |best|)``; the pick does not depend on the
+  scale of the criterion, and nothing changes for ``|best| >= 1``;
 * ``tune`` returns the argmax of the criterion over the grid, a canonical
   fit (``Sigma_ff`` diagonal descending, ``mu_f >= 0``) whose statistics
   match the chosen path point, ``lam_max`` of the chosen ``K``; fixed
@@ -172,6 +176,36 @@ def test_select_best_point_argmax_and_tie_break():
         tuning.select_best_point([], "sparser")
     with pytest.raises(ValueError):
         tuning.select_best_point(pts, "random")
+
+
+def test_tie_band_is_relative_with_a_numerical_floor():
+    """D51: the user tolerance is relative at any level; only TIE_REL_TOL keeps the max(1, |best|) floor."""
+    assert tuning.tie_band(0.445, 0.02) == pytest.approx(0.0089, rel=1e-12)  # 2% of the best, not 0.02
+    assert tuning.tie_band(-0.5, 0.02) == pytest.approx(0.01, rel=1e-12)  # a negative (LOOCV) best: 2% of |best|
+    assert tuning.tie_band(0.5, 0.0) == tuning.TIE_REL_TOL  # exact argmax: the numerical band, absolute below 1
+    assert tuning.tie_band(0.0, 0.02) == tuning.TIE_REL_TOL
+    # |best| >= 1: the same width as the rule before 2026-10-01, max(TIE_REL_TOL, tol) * max(1, |best|)
+    for best in (1.0, 1.057, 2.97, 40.0, -3.0):
+        for tol in (0.0, 1e-12, 0.02, 0.5):
+            assert tuning.tie_band(best, tol) == max(tuning.TIE_REL_TOL, tol) * max(1.0, abs(best)), (best, tol)
+
+
+def test_select_best_point_tolerance_is_relative_below_and_above_one():
+    """D51: tolerance 0.02 admits the points within 2% of the best, whether the best is below or above 1."""
+    crit = np.array([0.5, 0.492, 0.485, 0.40])  # 0.492 is 1.6% below the best, 0.485 is 3% below
+    lams, n_sel = (0.1, 0.2, 0.3, 0.4), (6, 5, 4, 2)
+    for scale in (0.1, 0.89, 1.0, 4.0, np.sqrt(52.0)):  # best from 0.05 to 3.6 (0.89: 0.445, the lab's test config)
+        pts = [point(lam, float(c), n) for lam, c, n in zip(lams, scale * crit, n_sel)]
+        assert tuning.select_best_point(pts, "sparser", tolerance=0.02) == 1, scale
+        assert tuning.select_best_point(pts, "denser", tolerance=0.02) == 0, scale
+        assert tuning.select_best_point(pts, "sparser") == 0, scale  # no tolerance: the exact argmax
+    # best 0.5: the numerical tie tolerance rel_tol keeps its max(1, |best|) floor, so passing the user tolerance
+    # there (as tune did before 2026-10-01) gives an absolute band of 0.02 that also admits 0.485
+    pts = [point(lam, float(c), n) for lam, c, n in zip(lams, crit, n_sel)]
+    assert tuning.select_best_point(pts, "sparser", rel_tol=0.02) == 2
+    # best 2.0: both give the same band, 0.04
+    pts4 = [point(lam, float(c), n) for lam, c, n in zip(lams, 4.0 * crit, n_sel)]
+    assert tuning.select_best_point(pts4, "sparser", rel_tol=0.02) == 1
 
 
 def test_path_point_from_fit(panel, est):
@@ -480,3 +514,27 @@ def test_tolerance_prefers_the_sparsest_point_within_the_band(panel, est, monkey
     assert loose.meta["tie_rel_tol"] == 0.05
     with pytest.raises(ValueError):
         TuningConfig(tolerance=1.0)
+
+
+@pytest.mark.parametrize("scale", [0.445, 2.5])
+def test_tune_tolerance_band_is_relative_below_and_above_one(panel, est, monkeypatch, scale):
+    """D51: the band is tolerance x |best| at any level of the criterion, so the pick does not depend on its scale."""
+    lam_min = float(np.min(lambda_grid(panel, est, 2)))
+
+    def fake_crit(res, ann, rcond=1e-6):  # best = scale at the densest point, 1% lower per doubling of lambda
+        return scale * (1.0 - 0.01 * float(np.log2(res.lam / lam_min)))
+
+    monkeypatch.setattr(tuning, "is_sharpe_criterion", fake_crit)
+    tr = tuning.tune(panel, est, TuningConfig(tolerance=0.02), EvaluationConfig())
+    best = max(p.criterion for p in tr.path)
+    assert best == pytest.approx(scale, rel=1e-12)
+    assert tr.meta["tie_band"] == pytest.approx(0.02 * best, rel=1e-12)
+    floor = best - 0.02 * best
+    sparser = [p for p in tr.path if p.lam > tr.lam]
+    assert next(p for p in tr.path if p.lam == tr.lam).criterion >= floor
+    assert sparser and all(p.criterion < floor for p in sparser)
+    # 2% of the best is 2 doublings of lambda at either scale: the same grid point
+    assert np.log2(tr.lam / lam_min) <= 2.0 < np.log2(min(p.lam for p in sparser) / lam_min)
+    if scale < 1.0:
+        # the absolute band of 0.02 used before 2026-10-01 would have admitted sparser points
+        assert any(p.criterion >= best - 0.02 for p in sparser)

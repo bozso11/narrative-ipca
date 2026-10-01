@@ -165,7 +165,7 @@ def _normal_figures() -> dict[str, go.Figure]:
                                                     x_title="True", y_title="Estimated"),
         "grouped_bars": charts.grouped_bars(B[["A0", "A1"]], reference=(0.1, "Reference")),
         "lambda_trace_chart": charts.lambda_trace_chart(
-            _trace_path(), band_floor=2.84, band_floor_alt=2.86, null_band=(0.87, 2.30, 4.44),
+            _trace_path(), band_floor=2.84, null_band=(0.87, 2.30, 4.44),
             extra=pd.DataFrame({"spearman": np.linspace(0.3, 0.1, 8)}, index=_trace_path()["lam"])),
         "coefficient_path_chart": charts.coefficient_path_chart(_gamma_path(), selected=["T01", "T02"],
                                                                 lam_star=float(_trace_path()["lam"].iloc[3])),
@@ -1004,11 +1004,11 @@ def test_lambda_trace_chart_band_markers_and_panels() -> None:
     assert not bare.layout.shapes
 
 
-def test_lambda_trace_chart_null_band_and_alternative_floor() -> None:
-    """The no-signal band (5-95% filled, dashed median) and the relative tolerance floor (SPEC addendum A2)."""
+def test_lambda_trace_chart_null_band_and_floor() -> None:
+    """The no-signal band (5-95% filled, dashed median, SPEC addendum A2) beneath the one tolerance floor (D51)."""
     path = _trace_path()
     lam = path["lam"].to_numpy()
-    fig = charts.lambda_trace_chart(path, band_floor=2.84, band_floor_alt=2.87, null_band=(0.87, 2.30, 4.44))
+    fig = charts.lambda_trace_chart(path, band_floor=2.84, null_band=(0.87, 2.30, 4.44))
     upper = _trace(fig, "No priced signal: 95% quantile")
     lower = _trace(fig, "No priced signal: 5-95%")
     median = _trace(fig, "No priced signal: median")
@@ -1022,19 +1022,11 @@ def test_lambda_trace_chart_null_band_and_alternative_floor() -> None:
     assert order.index("No priced signal: median") < order.index("Criterion + 1 standard error")  # beneath the data
     assert all(t.yaxis == "y" for t in (upper, lower, median)) and all(t.hovertemplate for t in fig.data)
     floors = [s for s in _shapes(fig, "line") if s.xref == "x domain"]
-    assert sorted(s.y0 for s in floors) == [2.84, 2.87]
-    alt = next(s for s in floors if s.y0 == 2.87)
-    code = next(s for s in floors if s.y0 == 2.84)
-    assert alt.line.dash == "dot" and code.line.dash == "dash"
-    notes = {a.text: a for a in fig.layout.annotations if "band floor" in (a.text or "")}
-    assert notes["Relative band floor 2.87"].yanchor == "bottom"  # the higher line: label above
-    assert notes["Tolerance band floor 2.84"].yanchor == "top"  # the lower line: label below
-    # the same threshold twice is one line; without a null band nothing of it is drawn
-    same = charts.lambda_trace_chart(path, band_floor=2.84, band_floor_alt=2.84)
-    assert len([s for s in _shapes(same, "line") if s.xref == "x domain"]) == 1
-    assert not any((t.name or "").startswith("No priced signal") for t in same.data)
-    only_alt = charts.lambda_trace_chart(path, band_floor_alt=2.9)
-    assert [a.text for a in only_alt.layout.annotations if "floor" in (a.text or "")] == ["Relative band floor 2.9"]
+    assert [s.y0 for s in floors] == [2.84] and floors[0].line.dash == "dash"
+    assert [a.text for a in fig.layout.annotations if "floor" in (a.text or "")] == ["Tolerance band floor 2.84"]
+    # without a null band nothing of it is drawn
+    no_null = charts.lambda_trace_chart(path, band_floor=2.84)
+    assert not any((t.name or "").startswith("No priced signal") for t in no_null.data)
     # malformed quantiles (non-finite or unordered) draw no band
     for bad in ((np.nan, 2.3, 4.4), (4.4, 2.3, 0.9), (1.0, 2.0), None):
         fig_bad = charts.lambda_trace_chart(path, null_band=bad)
