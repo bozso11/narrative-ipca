@@ -1457,7 +1457,8 @@ Main tabs:
    illustrative.
 7. **Data and method**: sources, assumptions (TBC items), why BKS-implied
    scores lower than the direct methods (a short version of G.15.1; the
-   Compare methods tab points to it), limitations (Section G.12).
+   Compare methods tab points to it), limitations (Section G.12); the market
+   data README sits in a collapsed expander.
 
 **"How to read" guides** (owner requests 2026-09-30 and 2026-10-02, D91).
 Every chart, results or reference table and row of tiles, on every page, has
@@ -1510,7 +1511,7 @@ Placement:
    and the D52 and D47 notes.
 4. Bordered expanders hold content, not explanation: the sidebar groups, the
    stage timings, the long/short view, the attention chart, "Add a link" and
-   the market data README.
+   the market data README, which opens collapsed (owner decision 2026-10-02).
 5. No pop-up, dialog or badge explains anything.
 
 Rules:
@@ -1909,8 +1910,9 @@ decisions continue at D74.
   1,874 px, Correlation table 2,574 to 2,096, Topic contributions 2,204 to
   1,202, Compare methods 6,011 to 3,843, Lists 4,483 to 3,823; the nine
   trace steps after Run BKS 48,883 to 39,664 in total (Summary 5,730 to
-  4,477). The Data and method tab is unchanged (14,022 px), most of it the
-  market data README, which stays open.
+  4,477). The market data README on the Data and method tab now opens
+  collapsed too (owner decision of the same day), which takes that tab from
+  14,022 to 2,541 px.
 
 ### G.12 Limitations of the lab
 

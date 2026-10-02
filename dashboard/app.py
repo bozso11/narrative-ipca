@@ -1378,7 +1378,7 @@ def method_tab(ctx: dict[str, Any]) -> None:
     st.caption("This run: " + "; ".join(parts) + ".")
     readme = reference.market_dir() / "README.md"
     if readme.is_file():
-        with st.expander("data/market/README.md: sources, conventions, TBC items, QA", expanded=True):
+        with st.expander("data/market/README.md: sources, conventions, TBC items, QA"):
             st.markdown(readme.read_text(encoding="utf-8"))
     else:
         st.info(f"No README found at {readme}.")

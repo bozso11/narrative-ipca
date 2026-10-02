@@ -2153,9 +2153,9 @@ def test_app_explanations_use_two_elements():
     # the Compare methods settings note is the Methods tooltip, not a caption
     assert "All methods share the threshold tau = 0.05" in at.multiselect(key="cm_methods").help
     assert not [c.value for c in at.caption if "keeps its settings" in c.value]
-    # the market data README is content and keeps its open expander
+    # the market data README is content in a bordered expander, collapsed on load (owner decision 2026-10-02)
     readme = [e for e in at.expander if str(e.label).startswith("data/market/README.md")]
-    assert readme and all(e.proto.expanded for e in readme)
+    assert readme and not any(e.proto.expanded for e in readme) and all(e.proto.type == 0 for e in readme)
 
     _generic_sidebar(at)
     _trace_page(at)
