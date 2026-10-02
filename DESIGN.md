@@ -1424,7 +1424,11 @@ Main tabs:
    Each BKS-implied variant needs a BKS run of this browser session on the
    current settings and its history (D80); without one the tab says why, per
    variant, and offers one Run BKS button that fits every selected variant
-   not fitted yet. It never starts a BKS fit on its own. When a BKS-implied
+   not fitted yet. When a Run BKS of this browser session refused a
+   variant's settings (from the sidebar, the BKS tab, the trace page or this
+   tab), the tab gives the refusal's reason for that variant, also after a
+   change that keeps its fit key such as the forecast weeks, not "BKS has
+   not been run". It never starts a BKS fit on its own. When a BKS-implied
    method is selected, a caption under the table points to the reasons it
    scores lower (Data and method tab, G.15).
 5. **BKS** (the sidebar's covariance history, named in the caption):
@@ -1662,6 +1666,11 @@ decisions continue at D74.
   (G.10). A browser session reuses a cached BKS fit automatically only when
   it requested that fit itself. The BKS run makes no Streamlit call while it
   computes, so a widget change during a long fit no longer discards it.
+  A refused fit does not join the browser session's fit keys; its reason is
+  stored under the fit key (`bks_fit_errors`), so every page gives the
+  reason (review of 2026-09-30). Only a cache miss
+  (`session.BKSNotCached`) reads as "BKS has not been run"; any other error
+  inside a fit propagates.
 - **D81 Training floor of one month.** Owner request 2026-09-29: the shortest
   training window is 21 weekdays (was 250). Measured on the default setup,
   scored over the 39 four-week windows of 2023–2025: median OOS R2 0.0% at one
@@ -2425,6 +2434,22 @@ sweep R2 (percentage points) and in Spearman, setting A then setting B.
 In total, from row 6 to row 11 BKS loses -11.1 / -17.2 / -0.51 on A and
 -13.9 / -15.0 / -0.65 on B.
 
+**Two findings from the BKS trace (G.16, D90).** Measured 2026-09-30 on the
+trace's reference ladder for setting A, full history, noise seed 0 only
+(unlike the table, which averages seeds 0–2); recorded here 2026-10-02.
+
+1. **The topic information is in the betas; the Eq. 5 step loses it.** A
+   cross-sectional least-squares inversion of the fit's three betas (ladder
+   row 6) gives a Spearman correlation of 0.68 with `B_true` and keeps 89% of
+   the instruments' squared norm. Eq. 5 turns the same betas into
+   sensitivities with Spearman 0.19 and keeps 38%. Eq. 5 is an orthogonal
+   projection onto the span of `Gamma_tilde`, which IPCA tilts towards the
+   instruments' weak directions (point 1); the two inversions agree only when
+   the instruments lie exactly in that span.
+2. **BKS-implied sensitivities are further from the truth than all zeros.**
+   Their RMSE against `B_true` is 0.091, against 0.078 for the all-zero
+   matrix.
+
 **The training-window variant** (row 12, D88) goes through the same step,
 starting from instruments about as good as OLS (row 5). On A it scores below
 the full history in each of the noise seeds 0–4; on B the two are close.
@@ -2550,10 +2575,12 @@ Spearman 0.19 give 0.68 through the least-squares inversion, which keeps 89%
 of the instruments' squared norm against Eq. 5's 38%: the topic information
 is in the betas, and the Eq. 5 inversion (an orthogonal projection onto the
 span of `Gamma_tilde`, which IPCA tilts towards the instruments' weak
-directions) loses it. This refines G.15.1 point 1. The ladder's median OOS
-R2 over four forecast weeks is noisy: two rows score above the true
-sensitivities on it (25.8% and 25.1% against 23.2%), while Spearman is the
-steadier guide (the true row is its ceiling, 1 by construction).
+directions) loses it. This refines G.15.1 point 1 and is recorded there
+with the RMSE finding (G.15.1, "Two findings from the BKS trace"). The
+ladder's median OOS R2 over four forecast weeks is noisy: two rows score
+above the true sensitivities on it (25.8% and 25.1% against 23.2%), while
+Spearman is the steadier guide (the true row is its ceiling, 1 by
+construction).
 
 **Checks.** Identity checks must hold whatever the settings; an identity
 check that is off points to a defect in the code. Most recompute a result

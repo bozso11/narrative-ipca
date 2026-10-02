@@ -694,6 +694,25 @@ def test_session_keys_reuse_fits_across_forecast_windows(session_run):
     assert k("comparison", cfg2) != k("comparison", cfg)
 
 
+def test_session_comparison_lets_defects_through(monkeypatch):
+    """Only a cache miss (BKSNotCached) reads as "BKS has not been run"; a KeyError inside a fit is a defect and
+    propagates instead of listing the method as unavailable."""
+    cfg = _cfg(n_topics=12, share=0.5)
+    s = LabSession()
+    assert s.comparison(cfg).summary.loc["bks_implied", "note"] == BKS_NOT_RUN  # a real cache miss
+
+    def broken(*args, **kwargs):
+        return pd.Series([1.0], index=["a"])["missing_topic"]
+
+    monkeypatch.setattr(s, "bks_implied", broken)
+    with pytest.raises(KeyError):
+        s.comparison(cfg, methods=("elastic_net", "bks_implied"))
+    monkeypatch.undo()
+    monkeypatch.setattr(s, "method_fit", broken)
+    with pytest.raises(KeyError):
+        s.comparison(cfg, methods=("ridge",))
+
+
 def test_session_lists_ols_refusal_as_unavailable():
     # 30 topics against about 44 training days: OLS needs L < n_train / 2
     w = WindowConfig(train_start="2022-11-01", train_end="2022-12-30", forecast_start="2023-01-02")

@@ -1781,6 +1781,26 @@ def test_app_trace_page_shows_a_refusal_not_an_eviction():
     assert_refusal(at)
 
 
+def test_app_compare_tab_gives_a_refusal_reason():
+    """D80, D88 (review 2026-09-30): after the sidebar's Run BKS refuses the settings (K = 3 factors on 3 assets), the
+    Compare tab gives the reason for the variant with the sidebar's history, also after a change that keeps the fit
+    key (forecast weeks), not "BKS has not been run"; a refused fit does not join this browser session's fit keys."""
+    reason = "factors need more than 3 assets"
+    at = _app().run()
+    _generic_sidebar(at)
+    at.slider(key="sb_n_generic_assets").set_value(3).run()
+    at.button(key="sb_run_bks").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.session_state["bks_fit_keys"] and any(reason in v for v in _fit_errors(at).values())
+    at.slider(key="sb_forecast_weeks").set_value(3).run()  # a new bks key, the same fit key
+    assert not at.exception, [e.value for e in at.exception]
+    cm = at.tabs[3]
+    box = next(i.value for i in cm.info if i.value.startswith("BKS-implied is not available"))
+    full = next(line for line in box.splitlines() if line.startswith("- BKS-implied (full history):"))
+    assert "BKS could not run with these settings:" in full and reason in full, full
+    assert reason in cm.dataframe[0].value.loc["bks_implied", "Note"]
+
+
 def _fit_errors(at) -> dict[str, str]:
     """The refusals stored per BKS fit key (``bks_fit_errors``)."""
     return dict(at.session_state["bks_fit_errors"]) if "bks_fit_errors" in at.session_state else {}
