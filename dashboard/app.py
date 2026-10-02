@@ -851,6 +851,10 @@ def _switch_to_trace(history: str) -> None:
     already in this browser session's fit keys (the Compare tab ran it), so the trace uses the cached fit; if the
     fit has been evicted since (two fits are kept), the trace page says so and its Run BKS fits it again. The
     Compare tab says so under the button when the fit is no longer cached.
+
+    Called from the script body when the button returns True, never as its ``on_click``: Streamlit (1.62) drops a
+    ``st.switch_page`` inside a widget callback with "Calling st.rerun() within a callback is a no-op". The
+    sidebar reads the stored history on the rerun the switch starts.
     """
     st.session_state[_VALUES]["sb_bks_history"] = history
     st.switch_page(PAGES["trace"])
@@ -1022,13 +1026,12 @@ def compare_tab(ctx: dict[str, Any]) -> None:
         inspect_history = lab_compare.BKS_HISTORY[inspect]
         if inspect_history == cfg.bks.history:
             trace_link("Trace the BKS-implied sensitivities step by step")
-        elif "trace" in PAGES:
-            st.button(
-                "Trace the BKS-implied sensitivities step by step", key="cm_trace", icon=":material/troubleshoot:",
-                on_click=_switch_to_trace, args=(inspect_history,),
-                help="Opens the BKS trace page with the sidebar's covariance history set to "
-                f"{_ui.BKS_HISTORY_LABELS[inspect_history].lower()}.",
-            )
+        elif "trace" in PAGES and st.button(
+            "Trace the BKS-implied sensitivities step by step", key="cm_trace", icon=":material/troubleshoot:",
+            help="Opens the BKS trace page with the sidebar's covariance history set to "
+            f"{_ui.BKS_HISTORY_LABELS[inspect_history].lower()}.",
+        ):
+            _switch_to_trace(inspect_history)
         mcfg = lab_compare.method_config(cfg, inspect)
         if "trace" in PAGES and not (session.has("bks_panel", mcfg) and session.has("bks_fit", mcfg)):
             # the comparison still holds this variant's scores, but its fit left the two-entry fit cache

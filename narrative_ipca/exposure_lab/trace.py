@@ -1877,7 +1877,9 @@ def build_trace(
     cond_use = min(max(cond_max, 1.0), _MAX_COND_SCALE)
     ssr_ratio = syy / ssr if ssr > 0.0 else 1.0
     tol_obj = max(1e-10, min(1e-13 * cond_use * max(ssr_ratio, 1.0), 1e-6))
-    tol_F = max(1e-10, min(1e-12 * cond_use, 1e-6))
+    # no cap below 1e-12 x cond (cond_use stops at 1e7, so at most 1e-5): plain IPCA with four assets (cond 3.2e7)
+    # stores factors 1.96e-6 (relative) from the exact factor step, about 280 x cond x eps, so a 1e-6 cap fails
+    tol_F = max(1e-10, 1e-12 * cond_use)
     cond_txt = (f"The weekly factor systems have condition numbers up to {cond_max:,.3g}"
                 + (f" and SSR is 1/{ssr_ratio:,.3g} of sum y^2" if ssr_ratio > 1.0 else "")
                 + ", so rounding allows a relative difference of about "
@@ -1902,8 +1904,8 @@ def build_trace(
         d_F, tolerance=tol_F,
         note=("Each training week's factor is the exact least-squares (ridge) solution for the fitted Gamma "
               f"(relative to the largest factor). The weekly systems have condition numbers up to {cond_max:,.3g}, "
-              "so rounding allows about 1e-12 x cond (at least 1e-10). Off means the stored factors belong to "
-              "another Gamma."),
+              "so rounding allows about 1e-12 x cond (at least 1e-10, at most 1e-5). Off means the stored factors "
+              "belong to another Gamma."),
     )
     r2_rec = 1.0 - ssr / syy if syy > 0 else float("nan")
     checks.add(
