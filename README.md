@@ -118,8 +118,8 @@ reports under `reports/simulation/full/`. In short:
    narrative information; the placebo test and pricing errors can.
 3. The paper's in-sample argmax rule is not selective on a flat Sharpe
    surface (91 of 120 topics, 15 of 20 placebos); the 2% tolerance rule
-   (`TuningConfig.tolerance`) selects 9-11 topics with no placebo at the same
-   OOS Sharpe.
+   (`TuningConfig.tolerance`) selects 9-11 topics with no placebo in two of
+   three seeds (the third lands in the dense region) at the same OOS Sharpe.
 4. Loading rows, impact vectors and latent states are not identified by the
    model (D52); the implied betas `c Gamma` are.
 

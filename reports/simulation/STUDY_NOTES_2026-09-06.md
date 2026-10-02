@@ -7,10 +7,34 @@ daily data, monthly periods, 40% of the sample out of sample with annual
 refits. Five scenarios, three seeds each, three lambda-tuning rules:
 `bks` (in-sample MVE Sharpe, exact argmax, the paper's rule), `tol02` (same
 criterion, sparsest point within 2% of the maximum), `loocv` (leave-one-period-out
-Sharpe, BKS App. C.3, 16 subsampled folds). Tables: `full/STUDY_2026-09-06.md`;
-full detail per variant: `full/<variant>/harness_2026-09-06.md`. Metric
-definitions and thresholds: `DESIGN.md` Part E; decisions D47 and D52 explain
-the two findings below.
+Sharpe, BKS App. C.3, 16 subsampled folds). Tables: `full/STUDY_2026-10-02.md`;
+full detail per variant: `full/<variant>/harness_<date>.md` (`bks` and `loocv`
+2026-09-06, `tol02` 2026-10-02). Metric definitions and thresholds:
+`DESIGN.md` Part E; decisions D47 and D52 explain the two findings below.
+
+**Update 2026-10-02: `tol02` re-run after the D51 fix.** The 2% band is now
+relative at every level of the Sharpe ratio; before, it was 0.02 in absolute
+terms whenever the best in-sample Sharpe was below 1. A re-run with the old
+rule gives the 2026-09-06 selections, pass flags and reported figures (stored
+values agree to 1e-13), so every change below is the fix. Both runs used
+`--out` in a scratch directory, side by side on 4 workers each; the new run's
+outputs were copied to `full/tol02/`, with the paths in its report and in
+`full/study_run.log` rewritten to that directory. Its runtimes are therefore
+not comparable with the `bks` and `loocv` columns of 2026-09-06.
+
+1. 5 of 15 runs change. `no_factor` seed 2 and `weak` seed 1 choose a
+   smaller lambda (3 → 5 and 112 → 116 topics); `no_factor` seed 1,
+   `topic_null` seed 1 and `weak` seed 0 change only through the retuning at
+   the out-of-sample refits.
+2. `baseline` and `softmax` are unchanged, so finding 3 and the
+   recommendation below stand.
+3. On `no_factor` the full-sample band now admits only the argmax, so
+   `tol02` selects what `bks` selects there (4.7 topics, 1.3 placebos); the
+   out-of-sample refits still differ slightly (OOS Sharpe -0.23 against
+   -0.24).
+4. `weak`: 58 topics and 8.7 placebos on average (was 57 and 8.0); the OOS
+   ratio check passes in 1 of 3 seeds (was 2), so no `weak` seed passes every
+   check. The table below has the new figures.
 
 ## Key findings
 
@@ -69,11 +93,11 @@ the two findings below.
 | scenario | rule | selected | recall (strong) | precision | placebos | beta CC1 | factor CC1 | sys. R2 | OOS Sharpe / true | expected | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | baseline | bks | 91 | 0.83 | 0.19 | 14.7 | 0.974 | 0.993 | 0.94 | 0.69 / 0.95 | factors and betas recovered, few placebos | factors yes; selection dense (finding 3) |
-| baseline | tol02 | 34 | 0.70 | 0.74 | 4.7 | 0.975 | 0.994 | 0.94 | 0.69 / 0.95 | as above | yes in 2 of 3 seeds |
+| baseline | tol02 | 34 | 0.70 | 0.73 | 4.7 | 0.975 | 0.994 | 0.94 | 0.69 / 0.95 | as above | yes in 2 of 3 seeds |
 | baseline | loocv | 43 | 0.57 | 0.72 | 6.3 | 0.974 | 0.994 | 0.91 | 0.62 / 0.95 | as above | erratic selection |
 | softmax | bks | 50 | 0.80 | 0.49 | 6.7 | 0.975 | 0.994 | 0.94 | 0.63 / 0.95 | same as baseline | same as baseline |
-| weak | bks | 84 | 0.93 | 0.44 | 13.3 | 0.969 | 0.992 | 0.91 | 0.28 / 0.56 | graceful degradation | factors yes; two seeds select all 120 (argmax at the dense end) |
-| weak | tol02 | 57 | 0.93 | 0.51 | 8.0 | 0.971 | 0.993 | 0.92 | 0.25 / 0.56 | graceful degradation | yes |
+| weak | bks | 84 | 0.93 | 0.44 | 13.3 | 0.969 | 0.992 | 0.91 | 0.28 / 0.55 | graceful degradation | factors yes; two seeds select all 120 (argmax at the dense end) |
+| weak | tol02 | 58 | 0.93 | 0.51 | 8.7 | 0.971 | 0.993 | 0.92 | 0.25 / 0.55 | graceful degradation | factors yes; seed 1 dense (116 topics, 20 placebos); OOS ratio passes in 1 of 3 seeds |
 | no_factor | bks | 4.7 | n/a | n/a | 1.3 | n/a | 0.20 | n/a | −0.24 (se 0.37) | chance level | yes |
 | no_factor | loocv | 74 | n/a | n/a | 13 | n/a | 0.22 | n/a | −0.28 (se 0.37) | chance level | selection arbitrary on pure noise |
 | topic_null | bks | 84 | n/a | n/a | 14.7 | 0.921 | 0.976 | 0.86 | 0.39 / 0.95 | positive, degraded (D47) | as predicted |

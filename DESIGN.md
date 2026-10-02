@@ -451,6 +451,16 @@ Each entry: the decision, why, and the config field or code location to change i
      best 0.288): 0.02 to 0.0058; the old band admitted points 0–2 and
      chose lambda 0.062 (10 topics), the new one admits only point 0 and
      chooses lambda 0.027 (11 topics).
+  4. The full-size study's `tol02` variant, re-run 2026-10-02 (a re-run
+     with the old rule gives the 2026-09-06 selections, pass flags and
+     reported figures; stored values agree to 1e-13): 5 of 15 runs change.
+     `no_factor` seed 2 (best 0.596) and `weak` seed 1 (best 0.582) choose
+     a smaller lambda (3 → 5 and 112 → 116 topics); three more runs change
+     only through the retuning at the out-of-sample refits. `baseline` and
+     `softmax` are unchanged, so the tolerance-rule figures of D52 point 2
+     and README.md item 3 stand. On `no_factor` the full-sample band now
+     admits only the argmax point. `weak` passes the OOS ratio check in 1
+     of 3 seeds (was 2). Tables: `reports/simulation/full/STUDY_2026-10-02.md`.
 - **D52 What the model identifies, and which harness checks follow from it**
   (full study, 2026-09-06). Eq. 5 gives `cov_{i,t} = beta_{i,t} Sigma_ff A'`,
   so the population instrument vector has rank `K`, and any `Gamma_tilde`
@@ -478,7 +488,7 @@ Each entry: the decision, why, and the config field or code location to change i
      and the placebo count are the meaningful selection checks, and they
      judge the tuning rule: the BKS exact argmax selected 91 of 120 topics on
      average (precision 0.19, 15 of 20 placebos), the 2% tolerance rule 34
-     (precision 0.74, 5 placebos), with identical factor recovery and OOS
+     (precision 0.73, 5 placebos), with identical factor recovery and OOS
      Sharpe.
   3. Under `no_factor` a chance-level selection contains placebos at rate
      `n_placebo / L`, so the placebo check is not applied there.

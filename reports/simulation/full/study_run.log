@@ -1578,3 +1578,167 @@ reports: {
  "tol02": "reports\\simulation\\full\\tol02\\harness_2026-09-06.md",
  "loocv": "reports\\simulation\\full\\loocv\\harness_2026-09-06.md"
 }
+2026-10-02 08:35:45,960 run_full_study INFO variant tol02: 15 runs on 4 workers (3 threads each)
+2026-10-02 08:35:55,791 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.057e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:35:56,041 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.763e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:35:56,086 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.11e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:36:48,939 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.46e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:36:49,508 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.15e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:36:50,057 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.233e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:37:27,716 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.954e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:37:28,666 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.113e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:37:29,065 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.206e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:09,372 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.009e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:10,564 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.167e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:10,696 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.094e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:53,706 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.911e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:54,621 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.112e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:38:56,528 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.086e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:39:41,037 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.851e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:39:42,132 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.112e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:39:44,477 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.077e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:40:09,222 run_full_study INFO variant tol02: no_factor seed 0 done in 262s -> pass (n_selected 3.0, oos_sharpe -0.15178668072156218)
+2026-10-02 08:40:29,411 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.424e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:40:30,718 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.112e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:40:34,276 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.058e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:41:19,336 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.512e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:41:20,899 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.104e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:41:24,483 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.055e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:42:11,299 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.759e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:42:12,989 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.127e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:42:17,300 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.053e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:42:52,921 run_full_study INFO variant tol02: baseline seed 1 done in 425s -> FAIL (n_selected 11.0, oos_sharpe 0.3753278019038223)
+2026-10-02 08:42:55,255 run_full_study INFO variant tol02: baseline seed 0 done in 428s -> FAIL (n_selected 9.0, oos_sharpe 0.9307448884226477)
+2026-10-02 08:43:00,604 run_full_study INFO variant tol02: baseline seed 2 done in 433s -> FAIL (n_selected 83.0, oos_sharpe 0.7646761556916295)
+2026-10-02 08:43:09,491 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.677e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:43:14,513 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.431e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:44:02,496 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.979e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:44:06,480 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.233e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:44:43,435 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.984e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:44:45,136 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.617e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:44:53,949 run_full_study INFO variant tol02: no_factor seed 1 done in 285s -> pass (n_selected 6.0, oos_sharpe -0.613012458972779)
+2026-10-02 08:45:06,384 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.282e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:45:15,055 narrative_ipca.tuning WARNING tune: the chosen point (lam=0.0002519, K=3, 42 selected) has a singular Sigma_ff at rcond=1.0e-06; its is_sharpe criterion and b_MVE drop at least one factor direction
+2026-10-02 08:45:15,056 narrative_ipca.oos WARNING run_oos: refit 2/8 (lam=0.0002519, K=3, 42 selected): Sigma_ff is singular at rcond=1.0e-06, b_MVE drops at least one factor direction; the OOS MVE of this block is fragile
+2026-10-02 08:45:24,906 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.77e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:45:29,320 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.781e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:45:50,732 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=6.297e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:45:54,378 narrative_ipca.tuning WARNING tune: the chosen point (lam=0.0002603, K=3, 41 selected) has a singular Sigma_ff at rcond=1.0e-06; its is_sharpe criterion and b_MVE drop at least one factor direction
+2026-10-02 08:45:54,379 narrative_ipca.oos WARNING run_oos: refit 3/8 (lam=0.0002603, K=3, 41 selected): Sigma_ff is singular at rcond=1.0e-06, b_MVE drops at least one factor direction; the OOS MVE of this block is fragile
+2026-10-02 08:46:04,956 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.688e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:46:13,017 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.537e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:46:32,388 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.999e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:46:34,655 narrative_ipca.tuning WARNING tune: the chosen point (lam=0.0002557, K=3, 39 selected) has a singular Sigma_ff at rcond=1.0e-06; its is_sharpe criterion and b_MVE drop at least one factor direction
+2026-10-02 08:46:34,656 narrative_ipca.oos WARNING run_oos: refit 4/8 (lam=0.0002557, K=3, 39 selected): Sigma_ff is singular at rcond=1.0e-06, b_MVE drops at least one factor direction; the OOS MVE of this block is fragile
+2026-10-02 08:46:45,230 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.626e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:46:57,463 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.358e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:47:17,889 narrative_ipca.tuning WARNING tune: the chosen point (lam=0.0002524, K=3, 42 selected) has a singular Sigma_ff at rcond=1.0e-06; its is_sharpe criterion and b_MVE drop at least one factor direction
+2026-10-02 08:47:17,891 narrative_ipca.oos WARNING run_oos: refit 5/8 (lam=0.0002524, K=3, 42 selected): Sigma_ff is singular at rcond=1.0e-06, b_MVE drops at least one factor direction; the OOS MVE of this block is fragile
+2026-10-02 08:47:18,019 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.841e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:47:28,898 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.455e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:47:45,856 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.109e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:47:56,977 run_full_study INFO variant tol02: no_factor seed 2 done in 304s -> pass (n_selected 5.0, oos_sharpe 0.06358548177001858)
+2026-10-02 08:48:01,202 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.702e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:02,406 narrative_ipca.tuning WARNING tune: the chosen point (lam=0.000243, K=3, 43 selected) has a singular Sigma_ff at rcond=1.0e-06; its is_sharpe criterion and b_MVE drop at least one factor direction
+2026-10-02 08:48:02,406 narrative_ipca.oos WARNING run_oos: refit 6/8 (lam=0.000243, K=3, 43 selected): Sigma_ff is singular at rcond=1.0e-06, b_MVE drops at least one factor direction; the OOS MVE of this block is fragile
+2026-10-02 08:48:09,958 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.117e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:13,766 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.487e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:33,280 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.901e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:44,335 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.519e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:57,813 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.227e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:48:58,510 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.488e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:49:20,762 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=4.74e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:49:27,501 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.396e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:49:32,614 run_full_study INFO variant tol02: topic_null seed 1 done in 392s -> pass (n_selected 67.0, oos_sharpe 0.15140097268367184)
+2026-10-02 08:49:36,648 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.205e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:49:45,016 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.741e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:49:57,206 run_full_study INFO variant tol02: topic_null seed 0 done in 422s -> pass (n_selected 95.0, oos_sharpe 0.5718598150084483)
+2026-10-02 08:50:09,854 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.051e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:10,752 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.343e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:17,199 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.168e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:33,197 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.542e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:55,619 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=5.304e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:57,409 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.141e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:50:58,782 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.114e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:51:11,974 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.988e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:51:28,778 run_full_study INFO variant tol02: topic_null seed 2 done in 395s -> pass (n_selected 91.0, oos_sharpe 0.40501548363227974)
+2026-10-02 08:51:34,732 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.102e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:51:39,637 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.116e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:51:40,816 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.057e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:51:51,331 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.01e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:52:14,074 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.08e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:52:23,094 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.118e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:52:28,132 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.174e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:52:33,372 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.912e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:52:56,152 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.07e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:07,581 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.11e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:07,612 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.152e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:16,444 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.814e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:38,454 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.062e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:48,602 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.118e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:53:53,621 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.133e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:54:01,617 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.413e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:54:23,511 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.049e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:54:31,472 run_full_study INFO variant tol02: softmax seed 0 done in 394s -> pass (n_selected 11.0, oos_sharpe 0.881395761171368)
+2026-10-02 08:54:32,110 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.066e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:54:44,545 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.39e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:54:49,465 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.473e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:55:11,172 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.047e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:55:17,709 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.063e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:55:32,961 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=8.849e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:55:39,275 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.732e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:55:59,417 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.047e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:56:04,285 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.065e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:56:11,538 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.408e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:56:17,951 run_full_study INFO variant tol02: softmax seed 1 done in 405s -> FAIL (n_selected 13.0, oos_sharpe 0.30152232306122756)
+2026-10-02 08:56:30,331 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.964e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:56:37,580 run_full_study INFO variant tol02: softmax seed 2 done in 400s -> FAIL (n_selected 48.0, oos_sharpe 0.7142109085436469)
+2026-10-02 08:56:50,000 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.056e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:56:50,628 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.555e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:10,552 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.059e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:22,911 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.401e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:26,949 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.072e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:39,706 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.031e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:55,612 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.337e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:57:56,018 run_full_study INFO variant tol02: weak seed 0 done in 387s -> FAIL (n_selected 11.0, oos_sharpe 0.33207775808421097)
+2026-10-02 08:58:09,050 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.021e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:58:23,614 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=8.916e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:58:33,568 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.014e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:58:50,157 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.088e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:59:00,409 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=1.007e-06, K=3) did not converge in 500 sweeps
+2026-10-02 08:59:18,258 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.383e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:59:27,073 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.908e-07, K=3) did not converge in 500 sweeps
+2026-10-02 08:59:40,392 run_full_study INFO variant tol02: weak seed 1 done in 309s -> FAIL (n_selected 116.0, oos_sharpe -0.0069835849540153165)
+2026-10-02 08:59:52,253 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.924e-07, K=3) did not converge in 500 sweeps
+2026-10-02 09:00:13,359 narrative_ipca.sparse_ipca WARNING fit_sparse_ipca(lam=9.909e-07, K=3) did not converge in 500 sweeps
+2026-10-02 09:00:29,680 run_full_study INFO variant tol02: weak seed 2 done in 252s -> FAIL (n_selected 47.0, oos_sharpe 0.41510628328218413)
+2026-10-02 09:00:30,129 narrative_ipca.harness INFO write_report: reports\simulation\full\tol02\harness_2026-10-02.md
+
+=== variant tol02: report reports\simulation\full\tol02\harness_2026-10-02.md
+            selection_recall  selection_recall_strong  selection_precision  beta_canonical_corr  placebo_selected  gamma_subspace_cos  factor_canonical_corr  state_canonical_corr  impact_spearman  oos_sharpe_ratio_to_true  systematic_r2_recovered  null_selection_lift  null_oos_sharpe_abs   all
+scenario                                                                                                                                                                                                                                                                                              
+baseline                0.67                     0.33                 0.67                  1.0              0.67                 NaN                    1.0                   NaN              NaN                      1.00                      1.0                  NaN                  NaN  0.00
+no_factor                NaN                      NaN                  NaN                  NaN               NaN                 NaN                    NaN                   NaN              NaN                       NaN                      NaN                  1.0                  1.0  1.00
+topic_null               NaN                      NaN                  NaN                  NaN               NaN                 NaN                    NaN                   NaN              NaN                       NaN                      NaN                  NaN                  NaN  1.00
+softmax                 1.00                     0.67                 0.67                  1.0              0.67                 NaN                    1.0                   NaN              NaN                      1.00                      1.0                  NaN                  NaN  0.33
+weak                    1.00                     1.00                 0.33                  1.0              0.33                 NaN                    1.0                   NaN              NaN                      0.33                      1.0                  NaN                  NaN  0.00
+  scenario  seed  n_selected  selection_recall  selection_precision  placebo_selected  mve_sharpe_is  oos_sharpe  oos_sharpe_true_mve  factor_canonical_corr  gamma_subspace_cos  instrument_beta_r2_relevant  instrument_beta_r2_noise  oos_selection_stability  runtime_seconds
+  baseline     0         9.0              0.45                1.000               0.0          1.033       0.931                1.070                  0.995               0.610                        0.839                     0.106                    0.582          427.266
+  baseline     1        11.0              0.55                1.000               0.0          0.937       0.375                0.561                  0.993               0.842                        0.795                     0.108                    0.817          424.904
+  baseline     2        83.0              0.85                0.205              14.0          1.325       0.765                1.219                  0.994               0.465                        0.786                     0.101                    0.795          432.611
+ no_factor     0         3.0              0.00                0.000               1.0          0.600      -0.152                  NaN                  0.161                 NaN                        0.000                     0.000                    0.531          261.203
+ no_factor     1         6.0              0.00                0.000               2.0          0.235      -0.613                  NaN                  0.326                 NaN                        0.000                     0.000                    0.570          284.163
+ no_factor     2         5.0              0.00                0.000               1.0          0.596       0.064                  NaN                  0.105                 NaN                        0.000                     0.000                    0.297          303.493
+topic_null     0        95.0              0.65                0.137              16.0          1.033       0.572                1.070                  0.975                 NaN                        0.100                     0.106                    0.898          421.383
+topic_null     1        67.0              0.40                0.119              13.0          0.781       0.151                0.561                  0.980                 NaN                        0.110                     0.108                    0.838          391.425
+topic_null     2        91.0              0.75                0.165              15.0          1.122       0.405                1.219                  0.974                 NaN                        0.094                     0.101                    0.690          394.278
+   softmax     0        11.0              0.55                1.000               0.0          1.032       0.881                1.070                  0.995               0.518                        0.817                     0.209                    0.771          393.983
+   softmax     1        13.0              0.65                1.000               0.0          0.920       0.302                0.561                  0.993               0.762                        0.782                     0.170                    0.826          404.810
+   softmax     2        48.0              0.75                0.312               6.0          1.301       0.714                1.219                  0.994               0.533                        0.778                     0.124                    0.661          399.828
+      weak     0        11.0              0.55                1.000               0.0          0.717       0.332                0.701                  0.994               0.627                        0.652                     0.107                    0.639          386.783
+      weak     1       116.0              1.00                0.172              20.0          0.576      -0.007                0.135                  0.992               0.669                        0.566                     0.108                    0.929          308.513
+      weak     2        47.0              0.85                0.362               6.0          0.972       0.415                0.828                  0.994               0.577                        0.582                     0.101                    0.799          251.376
+
+reports: {
+ "tol02": "reports\\simulation\\full\\tol02\\harness_2026-10-02.md"
+}

@@ -45,9 +45,20 @@ python scripts/summarise_study.py --out reports/simulation/full
 ```
 
 Note: the per-run artefact JSON files (`<variant>/artefacts/<run>_metrics.json`)
-keep the original run's `passed` dicts (check set v1); the authoritative pass
-flags after a rescore are the `pass_*` columns of `per_run.csv` and the
+keep the `passed` dicts of the run that wrote them: check set v1 for `bks` and
+`loocv` (2026-09-06), check set v2 for the `tol02` re-run of 2026-10-02. The
+authoritative pass flags are the `pass_*` columns of `per_run.csv` and the
 `passed.csv` table.
+
+To re-run one variant (as `tol02` was on 2026-10-02 after the D51 fix), append
+its log, then summarise again; `rescore_study.py` reads the timings of the
+latest completed run of each variant from the log, so one log must hold one
+run per variant at a time:
+
+```bash
+python scripts/run_full_study.py --variants tol02 --seeds 3 --workers 8 --out reports/simulation/full >> reports/simulation/full/study_run.log 2>&1
+python scripts/summarise_study.py --out reports/simulation/full
+```
 
 The sequential single-process equivalent for one variant is
 `python scripts/run_simulation_study.py --scenarios baseline,no_factor,topic_null,softmax,weak --seeds 3`
