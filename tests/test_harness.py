@@ -1481,6 +1481,27 @@ def test_rescore_study_recomputes_flags_from_per_run_csv(tmp_path, capsys):
         script.main(["--out", str(tmp_path / "nowhere")])
 
 
+def test_rescore_study_timings_follow_the_latest_run(tmp_path):
+    """A re-run of one variant appends its log; the timings come from that run, not the first one."""
+    script = _load_rescore_script()
+    (tmp_path / "study_run.log").write_text(
+        "2026-09-06 17:17:14,908 run_full_study INFO variant tol02: 15 runs on 8 workers (3 threads each)\n"
+        "2026-09-06 17:30:00,000 narrative_ipca.harness INFO write_report: study\\tol02\\harness_2026-09-06.md\n"
+        "2026-09-06 17:31:00,000 run_full_study INFO variant loocv: 15 runs on 8 workers (3 threads each)\n"
+        "2026-10-02 08:35:45,960 run_full_study INFO variant tol02: 15 runs on 4 workers (3 threads each)\n"
+        "2026-10-02 08:40:00,000 narrative_ipca.harness INFO write_report: study\\loocv\\harness_2026-10-02.md\n"
+        "2026-10-02 09:00:30,129 narrative_ipca.harness INFO write_report: C:\\tmp\\tol02\\harness_2026-10-02.md\n"
+        "2026-10-02 09:10:00,000 narrative_ipca.harness INFO write_report: study\\tol02\\harness_2026-10-03.md\n",
+        encoding="utf-8",
+    )
+    assert script.timings_from_log(tmp_path, "tol02") == (datetime(2026, 10, 2, 8, 35, 45), 1485.0)
+    started, elapsed = script.timings_from_log(tmp_path, "loocv")  # its report line follows another variant's start
+    assert started == datetime(2026, 9, 6, 17, 31, 0) and elapsed == (datetime(2026, 10, 2, 8, 40) - started).total_seconds()
+    with (tmp_path / "study_run.log").open("a", encoding="utf-8") as f:  # a later re-run that crashed before its report
+        f.write("2026-10-03 10:00:00,000 run_full_study INFO variant tol02: 15 runs on 4 workers (3 threads each)\n")
+    assert script.timings_from_log(tmp_path, "tol02") == (datetime(2026, 10, 2, 8, 35, 45), 1485.0)
+
+
 def test_rescore_study_reads_metrics_exactly_and_prefers_the_artefact(tmp_path):
     """load_rows parses floats exactly; refresh_metrics_from_artefact restores the artefact's values, ignores junk."""
     script = _load_rescore_script()

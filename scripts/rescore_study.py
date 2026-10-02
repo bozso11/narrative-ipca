@@ -153,32 +153,37 @@ def rescore_rows(rows: list[dict[str, Any]], thresholds: HarnessThresholds) -> l
 def timings_from_log(out: Path, variant: str) -> tuple[datetime | None, float]:
     """``(started, elapsed_seconds)`` of ``variant`` read from ``<out>/study_run.log``; ``(None, nan)`` when absent.
 
-    The start is the driver's ``variant <name>: N runs`` line, the end the
-    ``write_report`` line whose path lies in the variant's directory.
+    A run starts at the driver's ``variant <name>: N runs`` line and ends at
+    the first ``write_report`` line after it whose path lies in the variant's
+    directory. A re-run of one variant appends its log, so the latest
+    completed run wins; a later run that never wrote its report (it crashed,
+    and the tables still hold the earlier run) is passed over. Without a
+    completed run, the latest start is returned with ``nan``. One log holds
+    one run per variant at a time: two concurrent runs of a variant would
+    pair the first report line with the second start.
     """
     log = out / "study_run.log"
     if not log.is_file():
         return None, float("nan")
     start_re = re.compile(_LOG_STAMP + rf" run_full_study INFO variant {re.escape(variant)}: \d+ runs")
     end_re = re.compile(_LOG_STAMP + r" narrative_ipca\.harness INFO write_report: (.*)$")
-    started: datetime | None = None
-    finished: datetime | None = None
+    pending: datetime | None = None
+    completed: tuple[datetime, datetime] | None = None
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
-        if started is None:
-            m = start_re.search(line)
-            if m:
-                started = datetime.strptime(m.group(1), _LOG_FORMAT)
+        m = start_re.search(line)
+        if m:
+            pending = datetime.strptime(m.group(1), _LOG_FORMAT)
+            continue
+        if pending is None:
             continue
         m = end_re.search(line)
         if m:
             path = m.group(2).strip().replace("\\", "/")  # group 1 is the timestamp
             if f"/{variant}/" in path or path.startswith(f"{variant}/"):
-                finished = datetime.strptime(m.group(1), _LOG_FORMAT)
-                break
-    if started is None:
-        return None, float("nan")
-    elapsed = (finished - started).total_seconds() if finished is not None else float("nan")
-    return started, elapsed
+                completed, pending = (pending, datetime.strptime(m.group(1), _LOG_FORMAT)), None
+    if completed is not None:
+        return completed[0], (completed[1] - completed[0]).total_seconds()
+    return pending, float("nan")
 
 
 def pipeline_config_of(variant: str) -> PipelineConfig:
