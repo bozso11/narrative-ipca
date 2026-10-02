@@ -10,7 +10,7 @@ The document has seven parts:
 
 - Part A — the methodology, step by step, mapped to modules and equations.
 - Part B — the decision register (D1–D52): every assumption or best guess, with
-  the reason and where to change it. The lab's decisions D53–D72 and D74–D90
+  the reason and where to change it. The lab's decisions D53–D72 and D74–D91
   are in Part G (D73 is a Part B entry).
 - Part C — module contracts (function signatures the code implements).
 - Part D — the simulation data-generating process with known ground truth.
@@ -1410,15 +1410,16 @@ Main tabs:
    an unavailable method stays in the table with its reason. The table puts
    the three out-of-sample columns next to the method name and the recovery
    columns after them, and shows a dash where a figure does not apply. The
-   lead caption says that BKS-implied (full history) sees more history than
-   the direct methods (with the kernel-weight share before the training
-   start), that BKS-implied (training window) is the like-for-like variant,
-   and that the BKS tab's own OOS R2, named with its value after a run, is
-   not the comparable figure. Two charts: the OOS R2 per asset in this window for
-   every method (a dot plot, assets sorted by the oracle's R2, one colour and
-   marker symbol per method, the oracle as an ink tick, values below -50%
-   drawn at -50%), and the median OOS R2 across consecutive forecast windows
-   (one line per method, same colours, values below -100% drawn at -100%).
+   "How to read the comparison" guide says that BKS-implied (full history)
+   sees more history than the direct methods (with the kernel-weight share
+   before the training start), that BKS-implied (training window) is the
+   like-for-like variant, and that the BKS tab's own OOS R2, named with its
+   value after a run, is not the comparable figure. Two charts: the OOS R2
+   per asset in this window for every method (a dot plot, assets sorted by
+   the oracle's R2, one colour and marker symbol per method, the oracle as an
+   ink tick, values below -50% drawn at -50%), and the median OOS R2 across
+   consecutive forecast windows (one line per method, same colours, values
+   below -100% drawn at -100%).
    Each method keeps its colour whatever the selection (slots in
    `compare.METHODS` order). An inspect section for one method (default the
    sidebar's direct method, followed until the user picks another; the
@@ -1452,22 +1453,67 @@ Main tabs:
    (`_ui.bks_runtime_warning`).
 6. **Lists**: the 55 assets (with legs, index, proxy, data source), the 20
    manual topics (ID, group, name, scope), and the link map (editable for the
-   session, with a reset).
+   session, with a reset) under the line that the default map is
+   illustrative.
 7. **Data and method**: sources, assumptions (TBC items), why BKS-implied
    scores lower than the direct methods (a short version of G.15.1; the
    Compare methods tab points to it), limitations (Section G.12).
 
-**"How to read" captions** (owner request 2026-09-30). Every chart, results
-or reference table and row of tiles, on every page, has a caption right under
-it (the link map's sits directly above its editor, which the edit buttons
-follow; on the BKS trace page, where the six BKS tiles repeat above every
-step, the tiles' caption, `HOW_TRACE_TILES`, sits in a collapsed "How to read
-the tiles" expander right under them): a lead line ("How to read the tiles:", "How to read this chart:",
-...), then one bullet per item, and each bullet ends with one sentence
+**"How to read" guides** (owner requests 2026-09-30 and 2026-10-02, D91).
+Every chart, results or reference table and row of tiles, on every page, has
+a "How to read" guide right under it. The guide is a collapsed toggle: a help
+icon and a blue label, "How to read the tiles", "How to read this chart", and
+so on. Opening it shows the guide in place, with the element still in view
+above it: one bullet per item, and each bullet ends with one sentence
 "Example: ...". Diagnostics (the stage timings) and input editors (the
 long/short view, the session's link edits) have none. The Topic
-contributions tab's "How to read the two views" block is the model: its
-bullets keep the owner's wording and only gain the example. Rules:
+contributions tab's "How to read the two views" guide is the model: its
+bullets keep the owner's wording and only gain the example.
+
+Explanations use two elements and no others, so a reader learns one rule: a
+question mark marks an explanation.
+
+1. **The "?" tooltip** (`help=`) says what one tile, widget, button or table
+   column means, in a short definition (at most 450 characters). It shows on
+   hover or keyboard focus.
+2. **The guide toggle** (`st.expander(type="compact")`, drawn by
+   `dashboard/_guide.py`) holds every longer explanation: the "How to read"
+   guides and the Topic contributions tab's "Why this method". It starts
+   collapsed. Its key (`how_<site>`) keeps it open across reruns until the
+   reader closes it, also when the view or the trace step changes.
+
+Placement:
+
+1. A guide sits directly under the element it explains, in the same column.
+   A data note that says what the element shows (the assets or pairs shown,
+   the windows, the pooled figure) stays visible between the element and its
+   guide. Two guides of one element stack in reading order (the Correlation
+   table: the cell metric, then the table).
+2. Exceptions:
+   - The link map's guide sits directly above its editor, which the edit
+     buttons follow, under the visible line "The default link map is
+     illustrative, not a research claim."
+   - The section guides sit where their captions sat: "How to read the
+     comparison" at the top of the Compare methods tab, above the Methods
+     choice; "How to read the covariance history" under the BKS tab lead and
+     above Run BKS; and "How to read the two views" full width under the two
+     contribution charts.
+   - The roll-up guide sits under the bar chart's guide, because the roll-up
+     changes only the bar chart.
+   - The attention chart's guide sits under the chart, inside its collapsed
+     expander.
+3. The leads that say what a page, tab or trace step shows stay visible: the
+   Simulation lab lead, the BKS tab lead, the trace page lead, each trace
+   step's "What happens here" and its "Next:" line, and the Real data
+   definition. Run notes, warnings and caveats also stay visible and never go
+   inside a guide, for example the linked-asset note, the BKS-implied note
+   and the D52 and D47 notes.
+4. Bordered expanders hold content, not explanation: the sidebar groups, the
+   stage timings, the long/short view, the attention chart, "Add a link" and
+   the market data README.
+5. No pop-up, dialog or badge explains anything.
+
+Rules:
 
 1. The examples use static, illustrative numbers, never figures computed from
    the current run. They form one consistent set for the whole dashboard,
@@ -1499,16 +1545,19 @@ bullets keep the owner's wording and only gain the example. Rules:
    variation (G.8 point 4) and has no percentage-point value. The example
    says instead that a topic has a 10% share when its explained return is one
    tenth of the asset's return on every day of the window.
-3. The texts live in `dashboard/_ui.py` (`how_to_read` and the `HOW_*`
-   constants and `how_*` builders); a text part that depends on the settings
-   (the kernel half-life, the number of windows) is filled in, the example is
-   not. The Correlation table's metric caption shows the chosen metric's
-   bullet (and the unit bullet for the three sensitivity metrics), so it
-   follows the view as the blank rule does; the contributions tiles' caption
-   follows the chosen view, and the roll-up caption shows when the roll-up is
-   on.
+3. The texts live in `dashboard/_ui.py` (`how_to_read`, the `HOW_*`
+   constants and the `how_*` builders). `_ui.guide_parts` splits a text into
+   the toggle's label (the lead without its colon; a lead holds no brackets)
+   and its body (the bullets), and `dashboard/_guide.py` draws it. A text
+   part that depends on the settings (the kernel half-life, the number of
+   windows) is filled in; the example is not. The Correlation table's metric
+   guide shows the chosen metric's bullet (and the unit bullet for the three
+   sensitivity metrics), so it follows the view as the blank rule does. The
+   contributions tiles' guide follows the chosen view, and the roll-up guide
+   shows when the roll-up is on. A guide's label never changes with the
+   view, so an open guide stays open and its body updates in place.
 4. Plain words only: no decision numbers or other design-register codes in
-   these captions.
+   these guides.
 
 ### G.10 Performance and caching
 
@@ -1553,7 +1602,7 @@ above 100 topics), 1.4 s at 200 assets x 120 topics, 2–10 s at 500 x 500
 step (asset, topic, week) takes 0.03–0.25 s and is computed only for the step
 on show.
 
-### G.11 Decisions (D53–D72 and D74–D90)
+### G.11 Decisions (D53–D72 and D74–D91)
 
 D73 is the Part B decision on `.npz` timestamps of the same day; the lab's
 decisions continue at D74.
@@ -1838,6 +1887,30 @@ decisions continue at D74.
   method, and the window of `Sigma_z`, a choice of this implementation
   (instruments 92% before the training start, `Sigma_z` over the 129 training
   days; 0.91 with `Sigma_z` over the instruments' own history) (G.16).
+- **D91 "How to read" guides behind toggles.** Owner request 2026-10-02: the
+  "How to read" captions took a large part of every page. Move them behind
+  collapsibles or pop-ups, clearly visible and optional, with at most two or
+  three element types. Explanations now use two elements (G.9):
+  1. The `help=` tooltip explains one item.
+  2. A collapsed compact "How to read" toggle sits right under the element
+     it explains. It has a blue label after a help icon and a key, so it
+     stays open across reruns.
+
+  The inline captions and the trace page's tiles expander (G.9's former
+  exception) are retired. Popovers were rejected because they cover the
+  chart and close on the next click, and dialogs because they need a rerun
+  per open. Leads, run notes and caveats stay visible. The Compare methods
+  settings note became the Methods tooltip, and "Why this method" became a
+  guide toggle instead of a bordered expander. The toggle needs
+  `st.expander(type="compact", key=...)`, so the lab extra now requires
+  Streamlit 1.62 or later, the oldest version tested.
+  Page heights before and after, measured 2026-10-02 on the defaults at
+  1440 x 900 with every guide closed (Streamlit 1.64): Overview 2,953 to
+  1,874 px, Correlation table 2,574 to 2,096, Topic contributions 2,204 to
+  1,202, Compare methods 6,011 to 3,843, Lists 4,483 to 3,823; the nine
+  trace steps after Run BKS 48,883 to 39,664 in total (Summary 5,730 to
+  4,477). The Data and method tab is unchanged (14,022 px), most of it the
+  market data README, which stays open.
 
 ### G.12 Limitations of the lab
 
@@ -2079,6 +2152,17 @@ def comparison_table(summary, notes=None) -> pd.DataFrame        # the Compare m
 def method_option_label(method, direct=None) -> str
 def unavailable_note(note) -> str                                 # a method's reason in plain words
 ```
+
+Added to `dashboard/_ui.py` on 2026-10-02 (D91):
+
+```python
+def guide_label(name) -> str               # ":blue[:material/help_outline: name]", the guide toggle's label (G.9)
+def guide_parts(text) -> tuple[str, str]   # the label and the bullets of a how_to_read() text (G.9)
+```
+
+`dashboard/_guide.py` (Streamlit): `guide(text, *, key)` draws a "How to
+read" guide toggle; `toggle(name, *, key)` opens one for other content ("Why
+this method") (G.9, D91).
 
 ### G.14 Real data page (placeholder, D82, D85)
 
@@ -2523,16 +2607,18 @@ sits above the page's Run BKS button, as in the BKS tab.
 **Steps.** The page opens with a one-line run summary (history, `K`,
 lambda and its rule, the selected topics, the training and forecast weeks,
 the Eq. 5 instrument week, the assets, `w` and the lead) and the six tiles of
-the BKS tab, their caption (`HOW_TRACE_TILES`, which points to step 6) in a
-collapsed expander right under them (G.9). A radio chooses the step; only
-that step is computed and drawn. One row under it holds an asset (shared
-with the BKS tab's per-topic split), a topic (default: the asset's topic
-with the largest true sensitivity, followed until the user picks one) and,
-in steps 4 and 5, the return week (default the last training week, whose
-rows Eq. 5 uses) or, in step 7, the forecast week (default the first). Each
-step opens with a "What happens here" caption (inputs, computation with its
-formula and every symbol in words, outputs, the package function) and ends
-with its checks and a "Next:" line saying what feeds the next step.
+the BKS tab, their "How to read the tiles" guide (`HOW_TRACE_TILES`, which
+points to step 6) right under them, as on the BKS tab (G.9). A radio chooses
+the step; only that step is computed and drawn. One row under it holds an
+asset (shared with the BKS tab's per-topic split), a topic (default: the
+asset's topic with the largest true sensitivity, followed until the user
+picks one) and, in steps 4 and 5, the return week (default the last
+training week, whose rows Eq. 5 uses) or, in step 7, the forecast week
+(default the first). Each step opens with a "What happens here" caption
+(inputs, computation with its formula and every symbol in words, outputs,
+the package function); every chart and table of the step has its "How to
+read" guide; the step ends with its checks and a "Next:" line saying what
+feeds the next step.
 
 | Step | What it shows | Reference ("what it should be") |
 |---|---|---|
@@ -2684,10 +2770,10 @@ history against 0.71) (D90).
 
 **Code.** `narrative_ipca/exposure_lab/trace.py` (G.13), the session stage
 `bks_trace` (G.10), the figure builders of G.13 and `dashboard/trace_page.py`;
-the captions are `HOW_TRACE_*` in `dashboard/_ui.py`. Tests:
+the "How to read" texts are `HOW_TRACE_*` in `dashboard/_ui.py`. Tests:
 `tests/test_lab_trace.py` (every identity check holds on generic and default
 configurations, both histories, both leads, fixed lambda 0 and tuned; the
 chain equals production; the helpers agree with the panel) and the trace
-tests in `tests/test_lab_dashboard.py` (every step with its captions, a
+tests in `tests/test_lab_dashboard.py` (every step with its guides, a
 refused run and an evicted fit, defects kept apart from departures, the
 defaults' answer).

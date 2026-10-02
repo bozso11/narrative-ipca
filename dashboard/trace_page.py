@@ -9,12 +9,12 @@ traced (:meth:`narrative_ipca.exposure_lab.session.LabSession.bks_trace`). This 
 fit), ``ev`` (its evaluation), ``a_labels``, ``t_labels``, ``bks_key``, ``trace`` (``BKSTrace``), ``res``
 (``BKSLabResult``), ``panel`` (``BKSPanel``) and ``bks_fit`` (``BKSFit``).
 
-Layout: a run summary line, the BKS tiles (their caption, ``_ui.HOW_TRACE_TILES``, in a collapsed expander
-right under them, G.9), the step selector and the focus controls (asset, topic and, in the steps that use one, a
-week), then the selected step only. Steps are lazy: only the selected step calls its per-selection helpers of
+Layout: a run summary line, the BKS tiles with their "How to read the tiles" guide (``_ui.HOW_TRACE_TILES``,
+G.9), the step selector and the focus controls (asset, topic and, in the steps that use one, a week), then the
+selected step only. Steps are lazy: only the selected step calls its per-selection helpers of
 :mod:`narrative_ipca.exposure_lab.trace`; the summary reads the cached trace only. Each step has a "What happens
 here" caption (inputs, computation with its formula, outputs, the package function), its charts and tables each
-followed by a "How to read" caption (``_ui.HOW_TRACE_*``), its checks, and a line saying what feeds the next
+followed by a "How to read" guide toggle (``_ui.HOW_TRACE_*``), its checks, and a line saying what feeds the next
 step. The page text says "topic sensitivity", never "exposure".
 
 The Summary's answer box keeps defects (identity checks that are off, findings of severity ``"defect"``) apart
@@ -32,6 +32,7 @@ import pandas as pd
 import streamlit as st
 
 import _ui
+from _guide import guide
 from narrative_ipca.exposure_lab import charts
 from narrative_ipca.exposure_lab import trace as T
 from narrative_ipca.exposure_lab.evaluate import median_finite
@@ -97,8 +98,12 @@ def _f(x: Any, fmt: str = ".2f") -> str:
 
 
 def _how(name: str) -> None:
-    """The "How to read" caption ``_ui.<name>``."""
-    st.caption(_ui.how_to_read(*getattr(_ui, name)))
+    """The "How to read" guide toggle of ``_ui.<name>``, keyed ``how_trace_...`` after the name.
+
+    One step renders per run, so the keys never collide; ``how_trace_checks`` is the same on every step, so that
+    guide stays open from step to step.
+    """
+    guide(getattr(_ui, name), key="how_" + name.removeprefix("HOW_").lower())
 
 
 def _what(lines: list[tuple[str, str]]) -> None:
@@ -214,7 +219,7 @@ def render(ctx: dict[str, Any], ui: dict[str, Any]) -> None:
     """Draw the trace page below the Run BKS button (see the module docstring)."""
     trace: T.BKSTrace = ctx["trace"]
     st.markdown(run_summary(trace, ctx["res"]))
-    ui["bks_tiles"](ctx["res"], caption_expander=True, caption=_ui.HOW_TRACE_TILES)
+    ui["bks_tiles"](ctx["res"], caption=_ui.HOW_TRACE_TILES, key="how_trace_tiles")
 
     step = ui["control"]("radio", "Step", "tr_step", options=list(T.STEPS), horizontal=True,
                          format_func=lambda s: T.STEPS.get(s, s))
@@ -255,7 +260,7 @@ def _focus_controls(ctx: dict[str, Any], ui: dict[str, Any], trace: T.BKSTrace, 
 
 
 def _checks(trace: T.BKSTrace, step: str) -> None:
-    """The step's checks as a table, with its "How to read" caption."""
+    """The step's checks as a table, with its "How to read" guide."""
     _heading("Checks at this step")
     frame = trace.checks_frame(step)
     if frame.empty:
@@ -1044,10 +1049,10 @@ def _path_chart(trace: T.BKSTrace, ui: dict[str, Any]) -> None:
             null_band=null_band),
         "fig_tr_path",
     )
-    _how("HOW_TRACE_PATH")
     note = trace.meta["path_trace_note"]
     if extra is None and note:
         st.caption(f"The recovery panel is not shown: {note}.")
+    _how("HOW_TRACE_PATH")
 
 
 def _path_table(trace: T.BKSTrace) -> None:
@@ -1118,10 +1123,10 @@ def _forecast(ctx: dict[str, Any], ui: dict[str, Any], focus: dict[str, Any]) ->
             subtitle="All assets of each week; factors fitted to the week's own returns"),
         "fig_tr_week_r2",
     )
-    _how("HOW_TRACE_WEEK_R2")
     st.caption(f"Pooled over the {len(weeks)} forecast weeks: {_ui.fmt_pct(trace.meta['r2_pooled_panel'])} in "
                f"panel units (the tiles' number), {_ui.fmt_pct(trace.meta['r2_pooled_exact'])} in exact return "
                "units.")
+    _how("HOW_TRACE_WEEK_R2")
     fw = fweek if fweek is not None else pd.Timestamp(trace.forecast_periods[0])
     try:
         frame, stats = T.forecast_week(trace, ctx["panel"], ctx["bks_fit"], ctx["res"], fw)

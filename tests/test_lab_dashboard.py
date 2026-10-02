@@ -4,14 +4,15 @@
 * ``dashboard/_ui.py``: config from widget values, the training window from
   its cut-off and length, the "Settings in use" table of the Real data page,
   exposure-table layout and the blank rule that follows the view (D69), the
-  "How to read" captions, link edits (pure helpers, no Streamlit).
+  "How to read" texts and guide labels, link edits (pure helpers, no
+  Streamlit).
 * ``dashboard/app.py``: driven headless with ``streamlit.testing.v1.AppTest``
   on the default config, after widget changes, with invalid dates, with a
   BKS run on a small generic universe, in the Compare methods tab before and
   after a BKS run (G.15), on the Real data page with the shared sidebar and on
   the BKS trace page (G.16, D90: every step, a refused run, an evicted fit,
-  defects kept apart from departures); a "How to read" caption with examples
-  next to every chart (G.9).
+  defects kept apart from departures); a "How to read" guide with examples
+  next to every chart, and explanations in two elements only (G.9, D91).
 * ``scripts/run_lab.py``: files written for a small generic config.
 
 The default page needs ``data/market`` and ``data/reference``; those tests are
@@ -432,6 +433,16 @@ def test_how_to_read_captions():
         _ui.how_to_read("How to read this:", [])
     with pytest.raises(ValueError):
         _ui.how_to_read("How to read this:", [("Text.", "")])
+    # the guide toggle (D91): the lead without its colon is the label, the bullets are the body
+    assert _ui.guide_label("How to read this") == ":blue[:material/help_outline: How to read this]"
+    assert _ui.guide_parts(text) == (_ui.guide_label("How to read this"),
+                                     "- First item. Example: one.\n- Second item. Example: two.")
+    for bad in ("How to read this:\n- First item. Example: one.",  # no blank line after the lead
+                "Read this:\n\n- First item. Example: one.",
+                "How to read x (y):\n\n- First item. Example: one.",
+                "How to read this:\n\nFirst item. Example: one."):
+        with pytest.raises(ValueError):
+            _ui.guide_parts(bad)
     blocks = [_ui.how_to_read(*getattr(_ui, n)) for n in dir(_ui) if n.startswith("HOW_")]
     blocks += [_ui.how_cell_metric(m) for m in _ui.METRICS]
     blocks += [_ui.how_r2_bars("estimator"), _ui.how_compare_table("the 6 consecutive 4-week windows"),
@@ -440,6 +451,8 @@ def test_how_to_read_captions():
     for b in blocks:
         lead, _, body = b.partition("\n\n")
         assert lead.startswith("How to read") and lead.endswith(":"), lead
+        assert re.fullmatch(r"How to read [^():]+:", lead) and len(lead) <= 46, lead  # a short, static label
+        _ui.guide_parts(b)
         lines = body.split("\n")
         assert lines and all(ln.startswith("- ") and ln.count(" Example: ") == 1 for ln in lines), lead
         assert not any(c in b for c in "$*`~§"), lead  # no markdown or LaTeX surprises in st.caption
@@ -455,6 +468,8 @@ def test_how_to_read_captions():
     # the metric caption follows the view: the chosen metric, and the unit bullet for the sensitivities only
     assert "% per 1 sd shock:" in _ui.how_cell_metric("True sensitivity")
     assert "% per 1 sd shock:" not in _ui.how_cell_metric("OOS correlation")
+    # the link map's caveat is a visible line, not part of its guide
+    assert "illustrative" not in _ui.how_to_read(*_ui.HOW_LINK_MAP) and "illustrative" in _ui.LINK_MAP_CAVEAT
 
 
 @needs_market
@@ -806,17 +821,19 @@ def test_app_bks_run_on_small_generic_config():
     at.slider(key="sb_signal_share").set_value(0.5).run()
     _assert_clean(at)
     assert any("12 topics" in m.value for m in at.markdown)
-    assert _ui.how_to_read(*_ui.HOW_GENERIC_ASSETS) in [c.value for c in at.tabs[5].caption]  # Lists tab
+    assert _has_guide(at.tabs[5], _ui.how_to_read(*_ui.HOW_GENERIC_ASSETS))  # Lists tab
+    _assert_guides_placed(at.tabs[5])
     at.button(key="sb_run_bks").click().run()
     _assert_clean(at)
     bks = at.tabs[4]
     assert "Chosen lambda" in [m.label for m in bks.metric]
     assert len(bks.get("plotly_chart")) >= 4
     assert not bks.warning, [w.value for w in bks.warning]
-    # every BKS chart and the tiles have their "How to read" caption with examples (owner request 2026-09-30)
+    # every BKS chart and the tiles have their "How to read" guide with examples (owner request 2026-09-30)
     assert _assert_how_to_read(bks) == {"fig_bks_gamma", "fig_bks_path", "fig_bks_r2", "fig_bks_split"}
-    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) in [c.value for c in bks.caption]
-    assert _ui.how_bks_history(69.0) in [c.value for c in bks.caption]
+    assert _has_guide(bks, _ui.how_to_read(*_ui.HOW_BKS_TILES))
+    assert _has_guide(bks, _ui.how_bks_history(69.0))
+    _assert_two_elements(at)
     # a new forecast window re-evaluates the cached fit: not stale
     at.slider(key="sb_forecast_weeks").set_value(8).run()
     _assert_clean(at)
@@ -876,65 +893,74 @@ def _trace_names(chart) -> list[str]:
     return [t.get("name") for t in json.loads(chart.proto.spec)["data"]]
 
 
-#: The lead of the "How to read" caption under each Plotly chart, by chart key (owner request 2026-09-30).
+#: The name of the first "How to read" guide under each Plotly chart, by chart key (owner requests 2026-09-30 and
+#: 2026-10-02, D91): the label without the help icon, which is the text's lead without its colon.
 HOW_TO_READ_LEADS: dict[str, str] = {
-    "fig_r2": "How to read this chart:",
-    "fig_sweep": "How to read this chart:",
-    "fig_scatter": "How to read this chart:",
-    "fig_exposure": "How to read the table:",
-    "fig_contrib": "How to read the bar chart:",
-    "fig_cumulative": "How to read the cumulative chart:",
-    "fig_attention": "How to read the attention chart:",
-    "fig_cm_r2": "How to read this chart:",
-    "fig_cm_sweep": "How to read this chart:",
-    "fig_cm_scatter": "How to read this chart:",
-    "fig_cm_r2_inspect": "How to read this chart:",
-    "fig_bks_gamma": "How to read the Gamma chart:",
-    "fig_bks_path": "How to read the lambda path:",
-    "fig_bks_r2": "How to read the R² comparison:",
-    "fig_bks_split": "How to read the per-topic split:",
-    "real_heatmap": "How to read the preview:",
+    "fig_r2": "How to read this chart",
+    "fig_sweep": "How to read this chart",
+    "fig_scatter": "How to read this chart",
+    "fig_exposure": "How to read the cell metric",
+    "fig_contrib": "How to read the bar chart",
+    "fig_cumulative": "How to read the cumulative chart",
+    "fig_attention": "How to read the attention chart",
+    "fig_cm_r2": "How to read this chart",
+    "fig_cm_sweep": "How to read this chart",
+    "fig_cm_scatter": "How to read this chart",
+    "fig_cm_r2_inspect": "How to read this chart",
+    "fig_bks_gamma": "How to read the Gamma chart",
+    "fig_bks_path": "How to read the lambda path",
+    "fig_bks_r2": "How to read the R² comparison",
+    "fig_bks_split": "How to read the per-topic split",
+    "real_heatmap": "How to read the preview",
     # the BKS trace page (D90)
-    "fig_tr_ladder": "How to read the ladder:",
-    "fig_tr_inputs": "How to read the inputs chart:",
-    "fig_tr_truth": "How to read the truth chart:",
-    "fig_tr_divisor": "How to read the divisor chart:",
-    "fig_tr_shocks": "How to read the shocks chart:",
-    "fig_tr_instrument": "How to read the instrument chart:",
-    "fig_tr_kernel": "How to read the kernel chart:",
-    "fig_tr_instr_truth": "How to read the instrument scatter:",
-    "fig_tr_design": "How to read the design heatmap:",
-    "fig_tr_stability": "How to read the stability chart:",
-    "fig_tr_path": "How to read the lambda path and its noise:",
-    "fig_tr_coef_path": "How to read the Gamma path:",
-    "fig_tr_gamma": "How to read the Gamma heatmap:",
-    "fig_tr_topics": "How to read the topic chart:",
-    "fig_tr_kkt": "How to read the optimum check:",
-    "fig_tr_factors": "How to read the factor chart:",
-    "fig_tr_week_r2": "How to read the weekly R² chart:",
-    "fig_tr_week_scatter": "How to read the week scatter:",
-    "fig_tr_oos_factors": "How to read the forecast factors:",
-    "fig_tr_chain": "How to read the chain chart:",
-    "fig_tr_capture": "How to read the direction chart:",
-    "fig_tr_implied_scatter": "How to read the implied scatter:",
-    "fig_tr_sigma": "How to read the Sigma_z chart:",
+    "fig_tr_ladder": "How to read the ladder",
+    "fig_tr_inputs": "How to read the inputs chart",
+    "fig_tr_truth": "How to read the truth chart",
+    "fig_tr_divisor": "How to read the divisor chart",
+    "fig_tr_shocks": "How to read the shocks chart",
+    "fig_tr_instrument": "How to read the instrument chart",
+    "fig_tr_kernel": "How to read the kernel chart",
+    "fig_tr_instr_truth": "How to read the instrument scatter",
+    "fig_tr_design": "How to read the design heatmap",
+    "fig_tr_stability": "How to read the stability chart",
+    "fig_tr_path": "How to read the lambda path and its noise",
+    "fig_tr_coef_path": "How to read the Gamma path",
+    "fig_tr_gamma": "How to read the Gamma heatmap",
+    "fig_tr_topics": "How to read the topic chart",
+    "fig_tr_kkt": "How to read the optimum check",
+    "fig_tr_factors": "How to read the factor chart",
+    "fig_tr_week_r2": "How to read the weekly R² chart",
+    "fig_tr_week_scatter": "How to read the week scatter",
+    "fig_tr_oos_factors": "How to read the forecast factors",
+    "fig_tr_chain": "How to read the chain chart",
+    "fig_tr_capture": "How to read the direction chart",
+    "fig_tr_implied_scatter": "How to read the implied scatter",
+    "fig_tr_sigma": "How to read the Sigma_z chart",
 }
 
+#: The label of a guide toggle (``_ui.guide_label``); group 1 is its name.
+GUIDE_RE = re.compile(r"^:blue\[:material/help_outline: (.+)\]$")
 
-def _chart_captions(block) -> dict[str, list[str]]:
-    """Every Plotly chart under ``block`` by key, with the captions that follow it in its own container, up to
-    the next chart there (the captions "next to" the chart)."""
-    out: dict[str, list[str]] = {}
+
+def _guide_name(node) -> str | None:
+    """The plain name of a guide toggle ("How to read the tiles"), else None."""
+    if node.type != "expander":
+        return None
+    m = GUIDE_RE.match(str(node.label))
+    return m.group(1) if m else None
+
+
+def _guides(block) -> list[tuple[str, str, object]]:
+    """Every guide toggle under ``block`` in tree order, as ``(name, body, node)``; the body is its captions
+    joined by newlines. Collapsed bodies run, so AppTest sees them."""
+    out: list[tuple[str, str, object]] = []
 
     def walk(node) -> None:
-        current = None
         for i in sorted(node.children):
             child = node.children[i]
-            if child.type == "plotly_chart":
-                current = str(child.proto.id).rsplit("-", 1)[-1]
-                out[current] = []
-            elif child.type == "caption" and current is not None:
-                out[current].append(str(child.value))
+            name = _guide_name(child)
+            if name is not None:
+                out.append((name, "\n".join(str(c.value) for c in child.caption), child))
             if getattr(child, "children", None) is not None:
                 walk(child)
 
@@ -942,21 +968,149 @@ def _chart_captions(block) -> dict[str, list[str]]:
     return out
 
 
+def _guide_names(block) -> list[str]:
+    return [name for name, _, _ in _guides(block)]
+
+
+def _chart_guides(block) -> dict[str, list[tuple[str, str]]]:
+    """Every Plotly chart under ``block`` by key, with the ``(name, body)`` of the guide toggles that follow it
+    in its own container, up to the next chart there (the guides "next to" the chart)."""
+    out: dict[str, list[tuple[str, str]]] = {}
+
+    def walk(node) -> None:
+        current = None
+        for i in sorted(node.children):
+            child = node.children[i]
+            name = _guide_name(child)
+            if child.type == "plotly_chart":
+                current = str(child.proto.id).rsplit("-", 1)[-1]
+                out[current] = []
+            elif name is not None and current is not None:
+                out[current].append((name, "\n".join(str(c.value) for c in child.caption)))
+            if getattr(child, "children", None) is not None:
+                walk(child)
+
+    walk(block)
+    return out
+
+
+def _loose_how_to_read(block) -> list[str]:
+    """Captions under ``block`` that start with "How to read" (a guide's body starts with "- "): must be none."""
+    return [str(c.value)[:50] for c in block.caption if str(c.value).startswith("How to read")]
+
+
+def _has_guide(block, text: str) -> bool:
+    """Whether a guide toggle under ``block`` shows the ``how_to_read`` text ``text``: its label and bullets."""
+    label, body = _ui.guide_parts(text)
+    return any(str(node.label) == label and b == body for _, b, node in _guides(block))
+
+
+#: Where the guides that do not explain a chart sit (G.9 placement), by guide name: the kinds the element they
+#: explain may have (see :func:`_kind`). That element is the nearest earlier one in the guide's container once
+#: the visible data notes (captions) are skipped; "first" means there is none, and "guide:<name>" is a guide of
+#: the same element stacked above. A note guide explains the caption right before it: "caption:<text>" means
+#: that caption contains the text. A chart guide (:data:`HOW_TO_READ_LEADS`) follows a chart, and every other
+#: guide follows a table.
+GUIDE_AFTER: dict[str, set[str]] = {
+    "How to read the tiles": {"tiles"},
+    "How to read the table": {"dataframe", "guide:How to read the cell metric"},
+    "How to read the roll-up": {"guide:How to read the bar chart"},
+    "How to read the two views": {"columns"},
+    "Why this method": {"guide:How to read the two views"},
+    "How to read the comparison": {"first"},
+    "How to read the findings": {"markdown"},
+    "How to read this note": {"caption:linked to a topic"},
+    "How to read the BKS-implied note": {f"caption:{IMPLIED_NOTE}"},
+    "How to read the covariance history": {"caption:Weekly BKS fit"},
+    "How to read the link map": {f"caption:{_ui.LINK_MAP_CAVEAT}"},
+}
+
+
+def _kind(node) -> str:
+    """The kind of an element for :data:`GUIDE_AFTER`: "chart", "dataframe" (a table or data editor), "tiles" (a
+    row of metrics), "columns" (a row without metrics), "guide:<name>", "caption:<text>" or the element type."""
+    name = _guide_name(node)
+    if name is not None:
+        return f"guide:{name}"
+    if node.type == "plotly_chart":
+        return "chart"
+    if node.type in ("dataframe", "arrow_data_frame"):
+        return "dataframe"
+    if node.type == "flex_container":
+        return "tiles" if node.metric else "columns"
+    if node.type == "caption":
+        return f"caption:{node.value}"
+    return str(node.type)
+
+
+def _guide_sites(block) -> list[tuple[str, str, str, str]]:
+    """Every guide toggle under ``block`` in tree order as ``(name, before, explained, after)``: the kinds of the
+    element right before it, of the nearest earlier element that is not a caption ("first" if none) and of the
+    element right after it ("last" if none), all in the guide's own container."""
+    out: list[tuple[str, str, str, str]] = []
+
+    def walk(node) -> None:
+        kids = [node.children[i] for i in sorted(node.children)]
+        for j, child in enumerate(kids):
+            name = _guide_name(child)
+            if name is not None:
+                earlier = [_kind(k) for k in kids[:j]]
+                explained = next((k for k in reversed(earlier) if not k.startswith("caption:")), "first")
+                after = _kind(kids[j + 1]) if j + 1 < len(kids) else "last"
+                out.append((name, earlier[-1] if earlier else "first", explained, after))
+            if getattr(child, "children", None) is not None:
+                walk(child)
+
+    walk(block)
+    return out
+
+
+def _assert_guides_placed(block) -> None:
+    """G.9 placement: each guide under ``block`` sits right under the element it explains, after that element's
+    data notes; the link map's guide sits directly above the editor."""
+    charts = set(HOW_TO_READ_LEADS.values())
+    for name, before, explained, after in _guide_sites(block):
+        want = GUIDE_AFTER.get(name, {"chart"} if name in charts else {"dataframe"})
+        notes = [w.removeprefix("caption:") for w in want if w.startswith("caption:")]
+        if notes:
+            assert before.startswith("caption:") and any(n in before for n in notes), (name, before[:80])
+        else:
+            assert explained in want, (name, explained[:80])
+        if name == "How to read the link map":
+            assert after == "dataframe", after[:80]
+
+
+def _chart_guide_text(key: str) -> str | None:
+    """The fixed "How to read" text of the chart ``key``; None where the text follows the view or the run (the
+    cell metric, the Compare methods dots, sweep and inspected method)."""
+    for prefix, stem in (("fig_bks_", "HOW_BKS_"), ("fig_tr_", "HOW_TRACE_")):
+        if key.startswith(prefix):
+            return _ui.how_to_read(*getattr(_ui, stem + key.removeprefix(prefix).upper()))
+    fixed = {"fig_sweep": _ui.HOW_SWEEP, "fig_scatter": _ui.HOW_SCATTER, "fig_contrib": _ui.HOW_CONTRIB_BARS,
+             "fig_cumulative": _ui.HOW_CUMULATIVE, "fig_attention": _ui.HOW_ATTENTION,
+             "fig_cm_scatter": _ui.HOW_COMPARE_SCATTER, "real_heatmap": _ui.HOW_REAL_PREVIEW}
+    if key == "fig_r2":
+        return _ui.how_r2_bars("estimator")
+    return _ui.how_to_read(*fixed[key]) if key in fixed else None
+
+
 def _assert_how_to_read(block) -> set[str]:
-    """Each Plotly chart under ``block`` has its "How to read" caption next to it, and every bullet of that
-    caption ends with an example. Returns the chart keys."""
-    captions = _chart_captions(block)
-    for key, caps in captions.items():
-        hits = [c for c in caps if c.startswith(HOW_TO_READ_LEADS[key])]
-        assert hits, (key, [c[:50] for c in caps])
-        bullets = hits[0].split("\n\n", 1)[1].split("\n")
+    """Each Plotly chart under ``block`` has its "How to read" guide next to it, with the chart's own text where
+    that text is fixed, and every bullet of that guide ends with an example; no "How to read" text is a loose
+    caption, every guide is a collapsed compact toggle (D91) and sits where G.9 puts it. Returns the chart
+    keys."""
+    assert _loose_how_to_read(block) == []
+    found = _chart_guides(block)
+    for key, guides in found.items():
+        assert guides and guides[0][0] == HOW_TO_READ_LEADS[key], (key, [n for n, _ in guides])
+        bullets = guides[0][1].split("\n")
         assert bullets and all(b.startswith("- ") and " Example: " in b for b in bullets), key
-    return set(captions)
-
-
-def _leads(block) -> list[str]:
-    """First lines of the captions under ``block``."""
-    return [str(c.value).split("\n", 1)[0] for c in block.caption]
+        text = _chart_guide_text(key)
+        assert text is None or guides[0][1] == _ui.guide_parts(text)[1], key
+    for name, _, node in _guides(block):
+        assert node.proto.type == 1 and node.proto.expanded is False, name  # compact, collapsed on load
+    _assert_guides_placed(block)
+    return set(found)
 
 
 def _heatmap_cells_shown(block) -> int:
@@ -972,27 +1126,29 @@ def _heatmap_cells_shown(block) -> int:
 
 @needs_market
 def test_app_how_to_read_next_to_every_chart():
-    """Owner request 2026-09-30: a "How to read" caption whose bullets end with an example sits next to every
-    chart, table and row of tiles, for every cell metric and unit and both contribution views; the blank rule
-    of the Correlation table and its label follow the view."""
+    """Owner requests 2026-09-30 and 2026-10-02 (D91): a "How to read" guide whose bullets end with an example
+    sits next to every chart, table and row of tiles, for every cell metric and unit and both contribution
+    views; the blank rule of the Correlation table and its label follow the view."""
     at = _app().run()
     _assert_clean(at)
     assert _assert_how_to_read(at.main) == {
         "fig_r2", "fig_sweep", "fig_scatter", "fig_exposure", "fig_contrib", "fig_cumulative", "fig_attention",
         "fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect",
     }
-    assert _ui.how_to_read(*_ui.HOW_OVERVIEW_TILES) in [c.value for c in at.tabs[0].caption]
-    assert "How to read this note:" in _leads(at.tabs[0])  # 43 of 55 assets are linked at the defaults
-    assert _ui.how_to_read(*_ui.HOW_TILES_SHARE) in [c.value for c in at.tabs[2].caption]
-    assert _ui.how_to_read(*_ui.HOW_TWO_VIEWS) in [c.value for c in at.tabs[2].caption]
-    cm = [c.value for c in at.tabs[3].caption]
-    assert cm[0].startswith("How to read the comparison:\n\n- Every method is scored") and cm[0].count(" Example: ") == 6
+    assert _has_guide(at.tabs[0], _ui.how_to_read(*_ui.HOW_OVERVIEW_TILES))
+    assert "How to read this note" in _guide_names(at.tabs[0])  # 43 of 55 assets are linked at the defaults
+    assert _has_guide(at.tabs[2], _ui.how_to_read(*_ui.HOW_TILES_SHARE))
+    assert _has_guide(at.tabs[2], _ui.how_to_read(*_ui.HOW_TWO_VIEWS))
+    name, body, _ = _guides(at.tabs[3])[0]
+    assert name == "How to read the comparison"
+    assert body.startswith("- Every method is scored") and body.count(" Example: ") == 6
     for text in (_ui.how_to_read(*_ui.HOW_COMPARE_TILES), _ui.how_compare_table("the 6 consecutive 4-week windows")):
-        assert text in cm
-    assert "How to read the covariance history:" in _leads(at.tabs[4])  # before a BKS run too
-    lists = _leads(at.tabs[5])
+        assert _has_guide(at.tabs[3], text)
+    assert "How to read the covariance history" in _guide_names(at.tabs[4])  # before a BKS run too
+    lists = _guide_names(at.tabs[5])
     for lead in (_ui.HOW_ASSETS_TABLE[0], _ui.HOW_TOPICS_TABLE[0], _ui.HOW_LINK_MAP[0]):
-        assert lead in lists
+        assert lead[:-1] in lists
+    assert _ui.LINK_MAP_CAVEAT in [c.value for c in at.tabs[5].caption]
 
     # the Correlation table: every cell metric in both units; the blank rule and its label follow the view
     cfg, _, _ = _ui.config_from_values(_ui.default_values(), (), reference.load_assets()["asset_class"])
@@ -1011,8 +1167,10 @@ def test_app_how_to_read_next_to_every_chart():
             _assert_clean(at)
             tab = at.tabs[1]
             assert _assert_how_to_read(tab) == {"fig_exposure"}
-            caps = _chart_captions(tab)["fig_exposure"]
-            assert _ui.how_cell_metric(metric) in caps and _ui.how_to_read(*_ui.HOW_TABLE) in caps, metric
+            found = _chart_guides(tab)["fig_exposure"]
+            assert [n for n, _ in found][:2] == ["How to read the cell metric", "How to read the table"], metric
+            assert found[0][1] == _ui.guide_parts(_ui.how_cell_metric(metric))[1], metric
+            assert found[1][1] == _ui.guide_parts(_ui.how_to_read(*_ui.HOW_TABLE))[1], metric
             assert at.checkbox(key="ex_blank_rule").label == _ui.blank_rule(metric, 0.05)["label"]
             assert f"Blank: {_ui.blank_rule(metric, 0.05)['subtitle']}" in tab.get("plotly_chart")[0].proto.spec
             assert _heatmap_cells_shown(tab) == want.get(metric, n_selected), (metric, units)
@@ -1028,7 +1186,7 @@ def test_app_how_to_read_next_to_every_chart():
         at.selectbox(key="tc_asset").set_value(empty[0]).run()
         _assert_clean(at)
         tab = at.tabs[2]
-        assert "fig_attention" not in _chart_captions(tab)
+        assert "fig_attention" not in _chart_guides(tab)
         assert any(i.value.startswith("No topic contributes") for i in tab.info)
         assert next(m for m in tab.metric if m.label == "Largest topic").value == "none"
         at.selectbox(key="tc_asset").set_value(_ui.DEFAULT_CONTRIB_ASSET).run()
@@ -1038,13 +1196,15 @@ def test_app_how_to_read_next_to_every_chart():
     at.checkbox(key="tc_rollup").check().run()
     _assert_clean(at)
     assert _assert_how_to_read(at.tabs[2]) == {"fig_contrib", "fig_cumulative", "fig_attention"}
-    tc = [c.value for c in at.tabs[2].caption]
-    assert _ui.how_to_read(*_ui.HOW_TILES_ATTRIBUTION) in tc and _ui.how_to_read(*_ui.HOW_ROLLUP) in tc
-    # Compare methods without the oracle: the rows follow the first method, and the captions say so
+    assert _has_guide(at.tabs[2], _ui.how_to_read(*_ui.HOW_TILES_ATTRIBUTION))
+    assert _has_guide(at.tabs[2], _ui.how_to_read(*_ui.HOW_ROLLUP))
+    # the roll-up changes only the bar chart, so its guide sits under the bar chart's guide
+    assert "How to read the roll-up" in [n for n, _ in _chart_guides(at.tabs[2])["fig_contrib"]]
+    # Compare methods without the oracle: the rows follow the first method, and the guides say so
     at.multiselect(key="cm_methods").unselect("oracle").run()
     _assert_clean(at)
     assert _assert_how_to_read(at.tabs[3]) == {"fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect"}
-    assert _ui.how_compare_dots(False) in _chart_captions(at.tabs[3])["fig_cm_r2"]
+    assert _ui.guide_parts(_ui.how_compare_dots(False))[1] in [b for _, b in _chart_guides(at.tabs[3])["fig_cm_r2"]]
 
 
 def test_app_compare_methods_with_a_bks_run():
@@ -1078,8 +1238,8 @@ def test_app_compare_methods_with_a_bks_run():
     dots, sweep = cm.get("plotly_chart")[:2]
     for label in ("BKS-implied (full history)", "BKS-implied (training window)"):
         assert label in _trace_names(dots) and label in _trace_names(sweep)
-    # the lead caption: the full history's extra data, the like-for-like variant and the BKS tab's own R2
-    lead = cm.caption[0].value
+    # the lead guide: the full history's extra data, the like-for-like variant and the BKS tab's own R2
+    lead = next(b for n, b, _ in _guides(cm) if n == "How to read the comparison")
     assert "weigh all days before the cut-off" in lead and "lies before the training start" in lead
     assert "BKS-implied (training window) sees only the training window" in lead
     assert "differ in the covariance history and the return scaling" in lead
@@ -1118,8 +1278,9 @@ def test_app_compare_methods_with_a_bks_run():
     assert any(c.value.startswith(IMPLIED_NOTE) and "K = 3 factors" in c.value and "full history" in c.value
                for c in at.tabs[3].caption)
     assert [m.label for m in at.tabs[3].metric] == ["Coverage", "Sign agreement", "MCC", "Spearman"]
-    assert _ui.how_bks_implied(69.0) in [c.value for c in at.tabs[3].caption]  # the note's "How to read"
+    assert _has_guide(at.tabs[3], _ui.how_bks_implied(69.0))  # the note's "How to read"
     assert _assert_how_to_read(at.tabs[3]) == {"fig_cm_r2", "fig_cm_sweep", "fig_cm_scatter", "fig_cm_r2_inspect"}
+    _assert_two_elements(at)
     at.selectbox(key="cm_inspect").set_value("bks_implied_train").run()
     _assert_clean(at)
     assert any(c.value.startswith(IMPLIED_NOTE) and "training window only" in c.value for c in at.tabs[3].caption)
@@ -1401,8 +1562,8 @@ def test_real_exposures_page_empty_and_with_file(tmp_path, monkeypatch):
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.get("plotly_chart")) == 1
     assert _assert_how_to_read(at.main) == {"real_heatmap"}  # owner request 2026-09-30
-    assert _ui.how_to_read(*_ui.HOW_REAL_STATUS) in [c.value for c in at.caption]
-    assert _ui.how_to_read(*_ui.HOW_REAL_CONTRACT) in [c.value for c in at.caption]
+    assert _has_guide(at.main, _ui.how_to_read(*_ui.HOW_REAL_STATUS))
+    assert _has_guide(at.main, _ui.how_to_read(*_ui.HOW_REAL_CONTRACT))
     # the page says "topic sensitivity" and defines it; no "exposure" anywhere on it (2026-09-30)
     assert _ui.SENSITIVITY_DEFINITION in [c.value for c in at.caption]
     texts = [(k, t.replace(str(tmp_path), "<tmp>")) for k, t in _visible_texts(at)]  # the test's own path
@@ -1431,7 +1592,9 @@ def test_real_data_page_lists_settings_and_warns_on_invalid_ones():
     assert got["Forecast start"] == "2025-06-02"
     assert any("not valid" in w.value and "must be after training end" in w.value for w in at.warning)
     assert _ui.SIMULATION_ONLY_NOTE in [c.value for c in at.caption]
-    assert _ui.how_to_read(*_ui.HOW_REAL_SETTINGS) in [c.value for c in at.caption]  # owner request 2026-09-30
+    assert _has_guide(at.main, _ui.how_to_read(*_ui.HOW_REAL_SETTINGS))  # owner request 2026-09-30
+    assert _loose_how_to_read(at.main) == []
+    _assert_guides_placed(at.main)
 
 
 @needs_market
@@ -1490,7 +1653,7 @@ def test_app_real_data_page_shares_the_sidebar():
     _assert_clean(at)
     _open_real_data_page(at)
     at.run()
-    _assert_clean(at)
+    _assert_two_elements(at)
     assert at.title[0].value == "Real data"
     assert "Time windows" in [e.label for e in at.sidebar.get("expander")]
     assert at.button(key="sb_run_bks").disabled  # BKS runs on the Simulation lab and BKS trace pages only
@@ -1530,8 +1693,8 @@ TRACE_STEP_CHARTS: dict[str, set[str]] = {
     "implied": {"fig_tr_chain", "fig_tr_capture", "fig_tr_implied_scatter", "fig_tr_sigma"},
 }
 
-#: The "How to read" captions (``_ui.HOW_TRACE_*``) each step of the trace page shows.
-TRACE_STEP_CAPTIONS: dict[str, tuple[str, ...]] = {
+#: The "How to read" guides (``_ui.HOW_TRACE_*``) each step of the trace page shows.
+TRACE_STEP_GUIDES: dict[str, tuple[str, ...]] = {
     "summary": ("HOW_TRACE_STATUS", "HOW_TRACE_LADDER", "HOW_TRACE_LADDER_TABLE", "HOW_TRACE_FINDINGS",
                 "HOW_TRACE_CHECKS"),
     "inputs": ("HOW_TRACE_SETTINGS", "HOW_TRACE_SHAPES", "HOW_TRACE_INPUTS", "HOW_TRACE_TRUTH", "HOW_TRACE_CHECKS"),
@@ -1562,15 +1725,15 @@ def _step(at, step: str) -> None:
     assert TRACE_STEPS[step] in [s.value for s in at.main.subheader], step
 
 
-def test_trace_step_captions_cover_every_trace_caption():
-    """Every HOW_TRACE_* caption of _ui belongs to a step of the trace page, or is the tiles' caption above the
-    steps (and nothing else is listed); the tiles' caption points to step 6, not to charts "below"."""
-    listed = {n for names in TRACE_STEP_CAPTIONS.values() for n in names}
+def test_trace_step_guides_cover_every_trace_guide():
+    """Every HOW_TRACE_* text of _ui belongs to a step of the trace page, or is the tiles' guide above the steps
+    (and nothing else is listed); the tiles' guide points to step 6, not to charts "below"."""
+    listed = {n for names in TRACE_STEP_GUIDES.values() for n in names}
     assert listed | {"HOW_TRACE_TILES"} == {n for n in dir(_ui) if n.startswith("HOW_TRACE_")}
     tiles = _ui.how_to_read(*_ui.HOW_TRACE_TILES)
     assert "path below" not in tiles and "per-topic split" not in tiles and tiles.count("step 6") == 2
     assert [t for t, _ in _ui.HOW_TRACE_TILES[1]][1:] == [t for t, _ in _ui.HOW_BKS_TILES[1]][1:]
-    assert set(TRACE_STEP_CHARTS) == set(TRACE_STEPS) == set(TRACE_STEP_CAPTIONS)
+    assert set(TRACE_STEP_CHARTS) == set(TRACE_STEPS) == set(TRACE_STEP_GUIDES)
     assert {k for keys in TRACE_STEP_CHARTS.values() for k in keys} == {
         k for k in HOW_TO_READ_LEADS if k.startswith("fig_tr_")}
     from narrative_ipca.exposure_lab import trace as lab_trace
@@ -1595,8 +1758,8 @@ def test_app_trace_page_before_a_run():
 
 
 def test_app_trace_page_traces_the_run_step_by_step():
-    """D90: after the trace page's Run BKS every step renders with its charts, each chart with its "How to read"
-    caption, every step's HOW_TRACE_* captions, a "What happens here" caption and a link to the next step; the
+    """D90, D91: after the trace page's Run BKS every step renders with its charts, each chart with its "How to
+    read" guide, every step's HOW_TRACE_* guides, a "What happens here" caption and a link to the next step; the
     page says "topic sensitivity", never "exposure"; the BKS tab then shows the same run."""
     at = _app().run()
     _generic_sidebar(at)
@@ -1605,8 +1768,8 @@ def test_app_trace_page_traces_the_run_step_by_step():
     _assert_clean(at)
     assert "bks_requested" not in at.session_state  # the trace page handled the request itself
     assert "Chosen lambda" in [m.label for m in at.metric]
-    assert _ui.how_to_read(*_ui.HOW_TRACE_TILES) in [c.value for c in at.caption]
-    assert _ui.how_to_read(*_ui.HOW_BKS_TILES) not in [c.value for c in at.caption]
+    assert _has_guide(at.main, _ui.how_to_read(*_ui.HOW_TRACE_TILES))
+    assert not _has_guide(at.main, _ui.how_to_read(*_ui.HOW_BKS_TILES))
     assert at.radio(key="tr_step").value == "summary"
     assert list(at.radio(key="tr_step").options) == list(TRACE_STEPS.values())
     assert any(m.value.startswith("**Full history before the cut-off** · K = 3 · lambda") for m in at.markdown)
@@ -1616,8 +1779,8 @@ def test_app_trace_page_traces_the_run_step_by_step():
         _step(at, step)
         assert _assert_how_to_read(at.main) == charts, step
         caps = [c.value for c in at.main.caption]
-        for name in TRACE_STEP_CAPTIONS[step]:
-            assert _ui.how_to_read(*getattr(_ui, name)) in caps, (step, name)
+        for name in TRACE_STEP_GUIDES[step]:
+            assert _has_guide(at.main, _ui.how_to_read(*getattr(_ui, name))), (step, name)
         assert sum(c.startswith("What happens here:\n\n- Inputs: ") for c in caps) == 1, step
         assert sum(c.startswith("Next: ") for c in caps) == 1, step
         assert at.main.dataframe, step  # every step has at least its checks table
@@ -1696,7 +1859,7 @@ def test_app_trace_page_training_history_and_lambda_zero():
         _step(at, step)
         _assert_how_to_read(at.main)
     _step(at, "fit")
-    shown = set(_chart_captions(at.main))
+    shown = set(_chart_guides(at.main))
     assert not shown & {"fig_tr_path", "fig_tr_coef_path", "fig_tr_kkt"}
     assert {"fig_tr_gamma", "fig_tr_factors"} <= shown
     caps = [c.value for c in at.main.caption]
@@ -1941,3 +2104,64 @@ def test_app_trace_page_on_the_defaults():
             assert list(topics["Rank"])[:3] == [1, 2, 3] and list(topics["Selected"])[:3] == ["yes", "no", "no"]
             assert topics["Enters at lambda"].iloc[1:3].isna().all()
     assert at.selectbox(key="bks_asset").value == _ui.DEFAULT_CONTRIB_ASSET
+
+
+# ---------------------------------------------------------------------------
+# Explanation elements (G.9, D91)
+# ---------------------------------------------------------------------------
+#: Labels of the bordered expanders: they hold content or tools, never an explanation (D91).
+CONTENT_EXPANDERS: set[str] = {
+    "Universe", "Topics", "Sensitivities", "Time windows", "Direct estimator", "BKS model",
+    "Stage timings of this page", "Long/short view per asset", "Simulated attention of the largest contributors",
+    "Add a link", "data/market/README.md: sources, conventions, TBC items, QA",
+}
+
+#: Largest "?" tooltip (``help=``), in characters; a longer explanation is a guide toggle (G.9).
+MAX_HELP = 450
+
+
+def _assert_two_elements(at) -> None:
+    """D91: explanations are "?" tooltips of at most :data:`MAX_HELP` characters and collapsed compact guide
+    toggles placed as G.9 says; no "How to read" text is a loose caption, nothing is a popover, dialog or status
+    block, and every other expander holds content."""
+    _assert_clean(at)  # a duplicate guide key would raise here
+    assert _loose_how_to_read(at.main) == [] and _loose_how_to_read(at.sidebar) == []
+    assert not at.get("popover") and not at.get("dialog") and not at.status
+    others = {str(e.label) for e in at.expander if _guide_name(e) is None}
+    assert others <= CONTENT_EXPANDERS, others - CONTENT_EXPANDERS
+    for name, _, node in _guides(at.main):
+        assert node.proto.type == 1 and node.proto.expanded is False, name  # compact, collapsed on load
+    _assert_guides_placed(at.main)
+    helps = [str(m.help or "") for m in at.metric]
+    for kind in ("button", "download_button", "checkbox", "toggle", "slider", "number_input", "date_input",
+                 "selectbox", "radio", "select_slider", "multiselect"):
+        helps += [str(getattr(w, "help", "") or "") for w in getattr(at, kind)]
+    longest = max(helps, key=len, default="")
+    assert len(longest) <= MAX_HELP, longest[:80]
+
+
+@needs_market
+def test_app_explanations_use_two_elements():
+    """Owner request 2026-10-02 (D91): explanations use two elements only, the "?" tooltip and the collapsed
+    "How to read" guide toggle, on the Simulation lab (with the other contributions view and the roll-up) and on
+    every step of the BKS trace page."""
+    at = _app().run()
+    at.radio(key="tc_view").set_value("Return attribution").run()
+    at.checkbox(key="tc_rollup").check().run()
+    _assert_two_elements(at)
+    assert "Why this method" in _guide_names(at.tabs[2])
+    # the Compare methods settings note is the Methods tooltip, not a caption
+    assert "All methods share the threshold tau = 0.05" in at.multiselect(key="cm_methods").help
+    assert not [c.value for c in at.caption if "keeps its settings" in c.value]
+    # the market data README is content and keeps its open expander
+    readme = [e for e in at.expander if str(e.label).startswith("data/market/README.md")]
+    assert readme and all(e.proto.expanded for e in readme)
+
+    _generic_sidebar(at)
+    _trace_page(at)
+    at.button(key="tr_run_bks").click().run()
+    _assert_clean(at)
+    assert "How to read the tiles" in _guide_names(at.main)
+    for step in TRACE_STEPS:
+        _step(at, step)
+        _assert_two_elements(at)

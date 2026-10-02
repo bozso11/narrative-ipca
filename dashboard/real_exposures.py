@@ -138,6 +138,8 @@ def render_settings(settings: dict[str, Any]) -> None:
     """
     import streamlit as st
 
+    from _guide import guide
+
     st.subheader("Settings in use")
     st.caption("The sidebar is shared with the simulation lab. These settings will apply to real data:")
     values = settings.get("values")
@@ -148,7 +150,7 @@ def render_settings(settings: dict[str, Any]) -> None:
             st.warning(f"The settings could not be listed: {exc}")
         else:
             st.dataframe(table, hide_index=True, width="stretch", height=35 * (len(table) + 1) + 3)
-            st.caption(_ui.how_to_read(*_ui.HOW_REAL_SETTINGS))
+            guide(_ui.HOW_REAL_SETTINGS, key="how_real_settings")
     errors = list(settings.get("errors") or [])
     if errors:
         st.warning("The current settings are not valid, so they would not run:\n\n"
@@ -170,6 +172,8 @@ def render(settings: dict[str, Any] | None = None) -> None:
     """
     import streamlit as st
 
+    from _guide import guide
+
     st.title("Real data")
     st.info(
         "Placeholder. This page will show the topic sensitivities that the research pipeline estimates on real "
@@ -185,7 +189,7 @@ def render(settings: dict[str, Any] | None = None) -> None:
     st.dataframe(status, hide_index=True, width="stretch")
     n_found = int((status["Found"] == "yes").sum())
     st.caption(f"{n_found} of {len(status)} input files found in {real_dir()}.")
-    st.caption(_ui.how_to_read(*_ui.HOW_REAL_STATUS))
+    guide(_ui.HOW_REAL_STATUS, key="how_real_status")
 
     st.subheader("What this page will show")
     st.markdown(
@@ -200,12 +204,12 @@ def render(settings: dict[str, Any] | None = None) -> None:
 
     st.subheader("What it needs (data contract, TBC)")
     st.dataframe(pd.DataFrame(CONTRACT).rename(columns=str.capitalize), hide_index=True, width="stretch")
-    st.caption(_ui.how_to_read(*_ui.HOW_REAL_CONTRACT))
     st.caption(
         "Assets and returns come from data/reference/assets.csv and data/market/; asset_id must match. The "
         "column names follow the interface fields of the research plan (sensitivity, uncertainty, source, "
         "effective window, coverage)."
     )
+    guide(_ui.HOW_REAL_CONTRACT, key="how_real_contract")
 
     st.subheader("How it differs from the simulation lab")
     st.markdown(
@@ -238,4 +242,4 @@ def render(settings: dict[str, Any] | None = None) -> None:
         subtitle="Blank: coverage none or no estimate.",
     )
     st.plotly_chart(fig, width="stretch", theme=None, key="real_heatmap")
-    st.caption(_ui.how_to_read(*_ui.HOW_REAL_PREVIEW))
+    guide(_ui.HOW_REAL_PREVIEW, key="how_real_preview")

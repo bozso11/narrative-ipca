@@ -57,12 +57,11 @@ had clamped them widens again. The value in effect in a run (after clamping)
 is in ``st.session_state["_effective"]``. Sidebar keys start with ``sb_``.
 
 Every chart, results or reference table and row of tiles has a "How to read"
-caption whose bullets end with a static example (owner request 2026-09-30,
-G.9): under it, or directly above the link map's editor (the BKS trace page's
-tiles: in a collapsed expander right under them). Diagnostics (stage
-timings) and input editors (the long/short view, the session's link edits)
-have none. The texts are in ``_ui`` (``how_to_read`` and the ``HOW_*``
-constants).
+guide whose bullets end with a static example (owner requests 2026-09-30 and
+2026-10-02, G.9, D91): a collapsed toggle (``_guide.guide``) right under it,
+or directly above the link map's editor. Diagnostics (stage timings) and
+input editors (the long/short view, the session's link edits) have none. The
+texts are in ``_ui`` (``how_to_read`` and the ``HOW_*`` constants).
 
 The BKS run makes no Streamlit call while it computes: a widget change
 during a long fit would otherwise raise Streamlit's rerun exception inside
@@ -92,6 +91,7 @@ import streamlit as st  # noqa: E402
 import _ui  # noqa: E402
 import real_exposures  # noqa: E402
 import trace_page  # noqa: E402
+from _guide import guide, toggle  # noqa: E402
 from narrative_ipca.exposure_lab import charts, reference  # noqa: E402
 from narrative_ipca.exposure_lab import bks as lab_bks  # noqa: E402
 from narrative_ipca.exposure_lab import compare as lab_compare  # noqa: E402
@@ -523,12 +523,12 @@ def overview_tab(ctx: dict[str, Any]) -> None:
     for row in (tiles[:4], tiles[4:]):
         for col, (label, value, help_) in zip(st.columns(4), row):
             col.metric(label, value, help=help_, border=True)
-    st.caption(_ui.how_to_read(*_ui.HOW_OVERVIEW_TILES))
+    guide(_ui.HOW_OVERVIEW_TILES, key="how_ov_tiles")
 
     note = _ui.linked_asset_note(ev, truth)
     if note:
         st.caption(note)
-        st.caption(_ui.how_to_read(*_ui.HOW_LINKED_NOTE))
+        guide(_ui.HOW_LINKED_NOTE, key="how_ov_linked_note")
     feas = ctx["feasibility"]
     if feas["text"]:
         st.warning(feas["text"])
@@ -565,20 +565,20 @@ def overview_tab(ctx: dict[str, Any]) -> None:
             r2, r2o, r2t = r2.reindex(top), r2o.reindex(top), r2t.reindex(top)
             st.caption(f"Showing the 100 assets with the highest OOS R² of {len(ev.r2)}.")
         show_chart(charts.r2_bars(r2, r2o, r2t, labels=ctx["a_labels"]), "fig_r2")
-        st.caption(_ui.how_r2_bars("estimator"))
+        guide(_ui.how_r2_bars("estimator"), key="how_fig_r2")
     with c2:
         weeks = ctx["cfg"].window.forecast_weeks
         caption = _ui.sweep_caption(sweep, weeks, ev.n_days)
         show_chart(charts.window_sweep_chart(sweep, empty_message=f"No complete {weeks}-week window in the data"),
                    "fig_sweep")
         st.caption(caption)
-        st.caption(_ui.how_to_read(*_ui.HOW_SWEEP))
+        guide(_ui.HOW_SWEEP, key="how_fig_sweep")
         linked = truth.W_unscaled != 0
         est, n_total = _ui.subsample_pairs(fit.B_hat, linked, max_points=20000)
         show_chart(charts.exposure_scatter(est, truth.B_true, linked=linked), "fig_scatter")
         if est.size and n_total > int(np.isfinite(est.to_numpy()).sum()):
             st.caption(f"Showing all linked pairs and a seeded sample of the others ({n_total} pairs in total).")
-        st.caption(_ui.how_to_read(*_ui.HOW_SCATTER))
+        guide(_ui.HOW_SCATTER, key="how_fig_scatter")
 
     with st.expander("Stage timings of this page"):
         st.dataframe(_ui.timings_frame(ctx["timings"]), hide_index=True, width="content")
@@ -660,8 +660,8 @@ def exposure_tab(ctx: dict[str, Any]) -> None:
         col_title="Topics",
     )
     show_chart(fig, "fig_exposure")
-    st.caption(_ui.how_cell_metric(metric))
-    st.caption(_ui.how_to_read(*_ui.HOW_TABLE))
+    guide(_ui.how_cell_metric(metric), key="how_ex_metric")
+    guide(_ui.HOW_TABLE, key="how_ex_table")
     csv = tbl["values"].rename(index=ctx["a_labels"]).to_csv().encode("utf-8")
     st.download_button("Download the table (CSV)", data=csv, file_name="sensitivity_table.csv", mime="text/csv",
                        key="ex_download", on_click="ignore")
@@ -709,7 +709,7 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
                     help=f"{t_labels.get(top, top)}" if top is not None else None)
     m[3].metric("OOS R², estimator / oracle",
                 f"{_ui.fmt_pct(ev.r2.get(asset))} / {_ui.fmt_pct(ev.r2_oracle.get(asset))}", border=True)
-    st.caption(_ui.how_to_read(*(_ui.HOW_TILES_ATTRIBUTION if view == "Return attribution" else _ui.HOW_TILES_SHARE)))
+    guide(_ui.HOW_TILES_ATTRIBUTION if view == "Return attribution" else _ui.HOW_TILES_SHARE, key="how_tc_tiles")
 
     if view == "Return attribution":
         contrib, true = ev.contrib.loc[asset], ev.contrib_true.loc[asset]
@@ -735,7 +735,9 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
     left, right = st.columns([1.15, 1])
     with left:
         show_chart(fig, "fig_contrib")
-        st.caption(_ui.how_to_read(*_ui.HOW_CONTRIB_BARS))
+        guide(_ui.HOW_CONTRIB_BARS, key="how_fig_contrib")
+        if rollup:
+            guide(_ui.HOW_ROLLUP, key="how_tc_rollup")
     with right:
         show_chart(
             charts.cumulative_explained(
@@ -744,11 +746,9 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
             ),
             "fig_cumulative",
         )
-        st.caption(_ui.how_to_read(*_ui.HOW_CUMULATIVE))
-    st.caption(_ui.how_to_read(*_ui.HOW_TWO_VIEWS))
-    if rollup:
-        st.caption(_ui.how_to_read(*_ui.HOW_ROLLUP))
-    with st.expander("Why this method"):
+        guide(_ui.HOW_CUMULATIVE, key="how_fig_cumulative")
+    guide(_ui.HOW_TWO_VIEWS, key="how_tc_two_views")
+    with toggle("Why this method", key="how_tc_why"):
         st.markdown(
             "The lab uses the out-of-sample linear regression proposed for this question: sensitivities fitted on "
             "the training window, frozen, and applied to the window's shocks.\n\n"
@@ -780,7 +780,7 @@ def contributions_tab(ctx: dict[str, Any]) -> None:
                     ctx["cfg"].window.train_end), labels=t_labels),
                 "fig_attention",
             )
-            st.caption(_ui.how_to_read(*_ui.HOW_ATTENTION))
+            guide(_ui.HOW_ATTENTION, key="how_fig_attention")
 
 
 def _bks_implied_reason(ctx: dict[str, Any], lib_reason: str, method: str = IMPLIED_METHOD) -> tuple[str, bool]:
@@ -881,7 +881,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     if store is not None and store["key"] == ctx["bks_key"]:
         bks_r2 = f" (here {_ui.fmt_pct(store['result'].r2_pooled)})"
     ex = _ui.COMPARE_LEAD_EXAMPLES
-    st.caption(_ui.how_to_read(
+    guide(_ui.how_to_read(
         "How to read the comparison:", (
             ("Every method is scored on the same forecast days, with its sensitivities frozen at the training end. "
              "The direct methods are fitted on the training window only.", ex["direct"]),
@@ -900,19 +900,20 @@ def compare_tab(ctx: dict[str, Any]) -> None:
             ("The oracle uses the true sensitivities of the simulation. It is the reference, not an estimator.",
              ex["oracle"]),
         ),
-    ))
+    ), key="how_cm_lead")
     options = list(lab_compare.METHODS)
 
     def label_of(m: str) -> str:
         return _ui.method_option_label(m, cfg.direct)
 
-    chosen = control("multiselect", "Methods", "cm_methods", options=options, format_func=label_of)
-    st.caption(
+    methods_note = (
         "The sidebar's direct method keeps its settings; the other direct methods use their defaults (elastic net "
         "with the universal penalty, ridge with lambda chosen by generalised cross-validation). All methods share "
         f"the threshold tau = {cfg.direct.select_tau:g}: the elastic net selects every non-zero estimate, the other "
         "methods every estimate of at least tau in absolute value, and tau also marks the truly sensitive pairs."
     )
+    chosen = control("multiselect", "Methods", "cm_methods", options=options, format_func=label_of,
+                     help=methods_note)
     if not chosen:
         st.info("Choose at least one method.")
         return
@@ -941,9 +942,9 @@ def compare_tab(ctx: dict[str, Any]) -> None:
     n_win = int(res.meta.get("n_windows", 0))
     windows = (f"the {_ui.plural(n_win, f'consecutive {weeks}-week window')}" if n_win
                else f"the consecutive {weeks}-week windows (none fits here)")
-    st.caption(_ui.how_compare_table(windows))
     if any(m in lab_compare.BKS_METHODS for m in methods):
         st.caption(WHY_BKS_LOWER_CAPTION)
+    guide(_ui.how_compare_table(windows), key="how_cm_table")
 
     labels = {str(m): str(res.summary.loc[m, "label"]) for m in res.summary.index}
     if not res.fits:
@@ -963,7 +964,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                                   title="Out-of-sample R² per asset by method, this window"),
             "fig_cm_r2",
         )
-        st.caption(_ui.how_compare_dots(ref is not None))
+        guide(_ui.how_compare_dots(ref is not None), key="how_fig_cm_r2")
     with c2:
         show_chart(
             charts.method_sweep_lines(res.r2_sweep, method_labels=labels, slots=lab_compare.METHODS,
@@ -977,7 +978,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                     f"{pd.Timestamp(first).date()} to {pd.Timestamp(last).date()})")
         else:
             st.caption(f"No complete {weeks}-week window fits between the forecast start and the end of the data.")
-        st.caption(_ui.how_compare_sweep(span, ref is not None))
+        guide(_ui.how_compare_sweep(span, ref is not None), key="how_fig_cm_sweep")
 
     st.subheader("Inspect one method")
     inspect_options = [m for m in options if m != "oracle"]  # the oracle is the reference in every inspect chart
@@ -1006,7 +1007,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                 "in absolute value), over all pairs.")
     m[3].metric("Spearman", _ui.fmt_num(rec.get("spearman")), border=True,
                 help="Rank correlation of estimated and true sensitivities, all pairs.")
-    st.caption(_ui.how_to_read(*_ui.HOW_COMPARE_TILES))
+    guide(_ui.HOW_COMPARE_TILES, key="how_cm_tiles")
     if inspect in lab_compare.BKS_METHODS:
         meta = fit.meta
         n_topics = len(fit.B_hat.index)
@@ -1022,7 +1023,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
             f"topics kept, lambda = {float(meta.get('lam', float('nan'))):.3g}; covariance history: "
             f"{_ui.BKS_HISTORY_LABELS.get(hist, hist).lower()}{share_text}."
         )
-        st.caption(_ui.how_bks_implied(cfg.bks.half_life_months))
+        guide(_ui.how_bks_implied(cfg.bks.half_life_months), key="how_cm_implied")
         inspect_history = lab_compare.BKS_HISTORY[inspect]
         if inspect_history == cfg.bks.history:
             trace_link("Trace the BKS-implied sensitivities step by step")
@@ -1050,7 +1051,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
                                            title=f"Estimated vs true sensitivity: {name}"), "fig_cm_scatter")
         if est.size and n_total > int(np.isfinite(est.to_numpy()).sum()):
             st.caption(f"Showing all linked pairs and a seeded sample of the others ({n_total} pairs in total).")
-        st.caption(_ui.how_to_read(*_ui.HOW_COMPARE_SCATTER))
+        guide(_ui.HOW_COMPARE_SCATTER, key="how_fig_cm_scatter")
     with c2:
         r2m, r2o, r2t = ev.r2, ev.r2_oracle, truth.r2_true
         if len(r2m) > 100:
@@ -1059,7 +1060,7 @@ def compare_tab(ctx: dict[str, Any]) -> None:
             st.caption(f"Showing the 100 assets with the highest OOS R² of {len(ev.r2)}.")
         show_chart(charts.r2_bars(r2m, r2o, r2t, labels=a_labels, name=name,
                                   title=f"Out-of-sample R² per asset: {name}"), "fig_cm_r2_inspect")
-        st.caption(_ui.how_r2_bars(name, overview=False))
+        guide(_ui.how_r2_bars(name, overview=False), key="how_fig_cm_r2_inspect")
 
 
 def _bks_runtime_warning(n_topics: int) -> None:
@@ -1069,13 +1070,12 @@ def _bks_runtime_warning(n_topics: int) -> None:
         st.warning(text)
 
 
-def bks_tiles(res: Any, caption_expander: bool = False, caption: tuple[str, Any] = _ui.HOW_BKS_TILES) -> None:
-    """The six tiles of a BKS run and their "How to read" caption (BKS tab and BKS trace page).
+def bks_tiles(res: Any, caption: tuple[str, Any] = _ui.HOW_BKS_TILES, key: str = "how_bks_tiles") -> None:
+    """The six tiles of a BKS run and their "How to read the tiles" guide (BKS tab and BKS trace page).
 
-    ``caption_expander``: the caption goes in a collapsed "How to read the tiles" expander right under the tiles
-    (the trace page, where the tiles sit above the step selector on every step; G.9's exception). ``caption``: the
-    ``(lead, bullets)`` of the caption; the trace page passes ``_ui.HOW_TRACE_TILES``, whose pointers name its
-    step 6.
+    The guide toggle sits right under the tiles on both pages. ``caption``: the ``(lead, bullets)`` of the guide;
+    the trace page passes ``_ui.HOW_TRACE_TILES``, whose pointers name its step 6, and ``key``
+    ``"how_trace_tiles"``.
     """
     m = st.columns(6)
     m[0].metric("Chosen lambda", f"{res.lam:.4g}", border=True)
@@ -1088,11 +1088,7 @@ def bks_tiles(res: Any, caption_expander: bool = False, caption: tuple[str, Any]
     m[5].metric("Same, instruments shuffled", _ui.fmt_pct(res.meta.get("shuffled_r2_pooled")), border=True,
                 help="Reference: the topic instruments shuffled across assets within each week (20 shuffles). The "
                 "gap to the pooled OOS R² is what the instruments add beyond K freely fitted weekly factors.")
-    if caption_expander:
-        with st.expander("How to read the tiles"):
-            st.caption(_ui.how_to_read(*caption))
-    else:
-        st.caption(_ui.how_to_read(*caption))
+    guide(caption, key=key)
 
 
 def bks_tab(ctx: dict[str, Any]) -> None:
@@ -1127,7 +1123,7 @@ def bks_tab(ctx: dict[str, Any]) -> None:
         "- With no topic signal BKS still scores well above zero, because noise topics' instruments inherit the "
         "assets' betas (D47)."
     )
-    st.caption(_ui.how_bks_history(b.half_life_months))
+    guide(_ui.how_bks_history(b.half_life_months), key="how_bks_history")
     check = _ui.bks_training_check(cfg.window.train_start, cfg.window.train_end, cfg.bks, cfg.exposure.lead_days,
                                    cfg.window.shock_window)
     if not check["can_run"]:
@@ -1173,13 +1169,13 @@ def bks_tab(ctx: dict[str, Any]) -> None:
                                    title="BKS Gamma row norms by topic (standardised)"),
             "fig_bks_gamma",
         )
-        st.caption(_ui.how_to_read(*_ui.HOW_BKS_GAMMA))
+        guide(_ui.HOW_BKS_GAMMA, key="how_fig_bks_gamma")
     with c2:
         show_chart(charts.lambda_path_chart(res.path, res.lam, criterion_label="In-sample Sharpe ratio (annualised)"),
                    "fig_bks_path")
-        st.caption(_ui.how_to_read(*_ui.HOW_BKS_PATH))
+        guide(_ui.HOW_BKS_PATH, key="how_fig_bks_path")
     show_chart(_ui.r2_compare_figure(res.r2, direct_r2, a_labels), "fig_bks_r2")
-    st.caption(_ui.how_to_read(*_ui.HOW_BKS_R2))
+    guide(_ui.HOW_BKS_R2, key="how_fig_bks_r2")
 
     ids = [str(a) for a in res.contrib.index]
     asset = control("selectbox", "Asset for the per-topic split", "bks_asset", options=ids,
@@ -1195,7 +1191,7 @@ def bks_tab(ctx: dict[str, Any]) -> None:
         subtitle="Not identified (D52): the split belongs to the sparse representative the lasso chose.",
     )
     show_chart(fig, "fig_bks_split")
-    st.caption(_ui.how_to_read(*_ui.HOW_BKS_SPLIT))
+    guide(_ui.HOW_BKS_SPLIT, key="how_fig_bks_split")
     st.caption(D52_NOTE)
     st.caption(D47_NOTE)
     for w in res.meta.get("warnings", [])[1:]:
@@ -1210,13 +1206,13 @@ def lists_tab(ctx: dict[str, Any]) -> None:
         run_assets = market.assets if cfg.universe.asset_source == "listed" else None
         table = _ui.reference_asset_table(ref_assets, legs, run_assets)
         st.dataframe(table, hide_index=True, height=35 * (len(table) + 1) + 3)
-        st.caption(_ui.how_to_read(*_ui.HOW_ASSETS_TABLE))
+        guide(_ui.HOW_ASSETS_TABLE, key="how_lists_assets")
     else:
         st.warning("The reference files in data/reference could not be read.")
     if cfg.universe.asset_source == "generic":
         st.markdown(f"**Generic assets of this run** ({len(market.assets)}, artificial returns)")
         st.dataframe(market.assets[["name", "asset_class", "sub_class", "source"]], height=300)
-        st.caption(_ui.how_to_read(*_ui.HOW_GENERIC_ASSETS))
+        guide(_ui.HOW_GENERIC_ASSETS, key="how_lists_generic")
 
     st.subheader("Manual topics")
     topics_ref = ctx["topics_ref"]
@@ -1225,7 +1221,7 @@ def lists_tab(ctx: dict[str, Any]) -> None:
         tt.columns = ["ID", "Group", "Name", "Scope"]
         st.dataframe(tt, hide_index=True, height=35 * (len(tt) + 1) + 3,
                      column_config={"Scope": st.column_config.TextColumn("Scope", width="large")})
-        st.caption(_ui.how_to_read(*_ui.HOW_TOPICS_TABLE))
+        guide(_ui.HOW_TOPICS_TABLE, key="how_lists_topics")
     n_gen = cfg.topics.n_generic
     if n_gen:
         linked = sim.links.table.loc[sim.links.table["origin"] == "random", "topic_id"].nunique()
@@ -1233,7 +1229,8 @@ def lists_tab(ctx: dict[str, Any]) -> None:
                    "carry random links.")
 
     st.subheader("Link map of this run")
-    st.caption(_ui.how_to_read(*_ui.HOW_LINK_MAP))
+    st.caption(_ui.LINK_MAP_CAVEAT)
+    guide(_ui.HOW_LINK_MAP, key="how_lists_link_map")
     frame = _ui.link_edit_frame(sim.links.table, ctx["t_labels"], ctx["a_labels"])
     edited = st.data_editor(
         frame,

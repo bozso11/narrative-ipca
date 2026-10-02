@@ -1,4 +1,4 @@
-"""Pure helpers of the topic-sensitivity lab dashboard (DESIGN.md G.9, G.15, G.16; D66-D70, D83-D85, D88, D90).
+"""Pure helpers of the topic-sensitivity lab dashboard (DESIGN.md G.9, G.15, G.16; D66-D70, D83-D85, D88, D90, D91).
 
 No Streamlit imports: everything here maps widget values and lab results to
 configurations, tables and figures, so it can be tested without a running
@@ -1270,7 +1270,7 @@ def sweep_caption(sweep: pd.DataFrame, weeks: int, n_eval_days: int, max_windows
         )
     first, last = pd.Timestamp(sweep["start"].iloc[0]).date(), pd.Timestamp(sweep["end"].iloc[-1]).date()
     capped = f" (the cap of {max_windows})" if len(sweep) >= int(max_windows) else ""
-    # the rest (the cap, the dropped last window, the pooled R2) is in the chart's "How to read" caption
+    # the rest (the cap, the dropped last window, the pooled R2) is in the chart's "How to read" guide
     windows = plural(len(sweep), f"consecutive {weeks}-week window")
     return f"{windows}{capped} from {first} to {last}, training fit frozen."
 
@@ -1319,9 +1319,9 @@ def timings_frame(timings: dict[str, dict[str, Any]]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# "How to read" captions (owner request 2026-09-30)
+# "How to read" guides (owner requests 2026-09-30 and 2026-10-02, D91)
 # ---------------------------------------------------------------------------
-# One caption under each chart, table or row of tiles: a lead line, then one bullet per item, and each bullet
+# One guide under each chart, table or row of tiles: a lead line, then one bullet per item, and each bullet
 # ends with one example sentence. The examples use static, illustrative numbers, one consistent set for the
 # whole dashboard that holds on the dashboard defaults: Energy Global v World EQ (the Topic contributions tab's
 # default asset) with a training volatility of about 1.1% a day (1.14%); its strong S1 Energy link set at 0.35,
@@ -1334,18 +1334,20 @@ def timings_frame(timings: dict[str, dict[str, Any]]) -> pd.DataFrame:
 # against 34.0% for the true sensitivities; 20 return days in the 4-week default window; 55 assets and 20
 # topics (1,100 pairs). They were checked against the code on the dashboard defaults (DESIGN.md G.9, and
 # test_how_to_read_examples_hold_on_defaults); an example is never computed from the current run.
+# ``dashboard/_guide.py`` draws each text as a collapsed guide toggle: the lead without its colon is the label
+# and the bullets are the body (:func:`guide_parts`).
 Bullets = Sequence[tuple[str, str]]
 
 
 def how_to_read(lead: str, bullets: Bullets) -> str:
-    """A "How to read" caption: ``lead``, a blank line, then ``- text Example: example`` per bullet.
+    """A "How to read" text: ``lead``, a blank line, then ``- text Example: example`` per bullet.
 
     ``bullets`` holds ``(text, example)`` pairs; the example is given without
     the "Example:" prefix, which this function adds. Raises ``ValueError``
     when there is no bullet or a bullet lacks its text or its example.
     """
     if not bullets:
-        raise ValueError("a 'How to read' caption needs at least one bullet")
+        raise ValueError("a 'How to read' text needs at least one bullet")
     lines = []
     for text, example in bullets:
         text, example = str(text).strip(), str(example).strip()
@@ -1353,6 +1355,29 @@ def how_to_read(lead: str, bullets: Bullets) -> str:
             raise ValueError("every bullet needs a text and an example")
         lines.append(f"- {text} Example: {example}")
     return f"{lead}\n\n" + "\n".join(lines)
+
+
+#: The guide toggle's label (DESIGN.md G.9, D91): the help icon (the glyph of the "?" tooltips) and the name, in blue.
+GUIDE_LABEL = ":blue[:material/help_outline: {}]"
+
+
+def guide_label(name: str) -> str:
+    """The label of the guide toggle called ``name`` ("How to read the tiles", "Why this method")."""
+    return GUIDE_LABEL.format(name)
+
+
+def guide_parts(text: str) -> tuple[str, str]:
+    """The guide toggle's label and body of a :func:`how_to_read` text: the label of its lead without the colon,
+    and its bullets.
+
+    Raises ``ValueError`` when there is no blank line after the lead, the lead
+    is not "How to read ...:" without brackets, or the body does not start
+    with a bullet.
+    """
+    lead, sep, body = text.partition("\n\n")
+    if not sep or not re.fullmatch(r"How to read [^():\n]+:", lead) or not body.startswith("- "):
+        raise ValueError(f"not a 'How to read' text: {text[:60]!r}")
+    return guide_label(lead[:-1]), body
 
 
 # --- Overview -----------------------------------------------------------------
@@ -1468,7 +1493,7 @@ def how_r2_bars(who: str, overview: bool = True) -> str:
 
 
 # --- Correlation table ----------------------------------------------------------
-#: One bullet per cell metric; the caption shows the chosen metric's bullet (and the unit bullet for the three
+#: One bullet per cell metric; the guide shows the chosen metric's bullet (and the unit bullet for the three
 #: sensitivity metrics), so the text follows the view as the blank rule does.
 CELL_METRIC_BULLETS: dict[str, tuple[str, str]] = {
     "OOS correlation": (
@@ -1513,7 +1538,7 @@ UNIT_BULLET: tuple[str, str] = (
 
 
 def how_cell_metric(metric: str) -> str:
-    """The Correlation table's metric caption: the chosen metric's bullet, plus the unit bullet if it has units."""
+    """The Correlation table's metric guide: the chosen metric's bullet, plus the unit bullet if it has units."""
     bullets = [CELL_METRIC_BULLETS[metric]]
     if metric in EXPOSURE_METRICS:
         bullets.append(UNIT_BULLET)
@@ -1688,8 +1713,8 @@ HOW_ROLLUP: tuple[str, Bullets] = ("How to read the roll-up:", (
 
 
 # --- Compare methods --------------------------------------------------------------
-#: Examples of the Compare methods tab's lead caption, by bullet; ``app.compare_tab`` writes the texts, which
-#: carry the run's own figures (the kernel-weight share, the BKS tab's R²).
+#: Examples of the Compare methods tab's "How to read the comparison" guide, by bullet; ``app.compare_tab`` writes
+#: the texts, which carry the run's own figures (the kernel-weight share, the BKS tab's R²).
 COMPARE_LEAD_EXAMPLES: dict[str, str] = {
     "direct": "with training from 2025-01-01 to 2025-06-30 and a 4-week forecast from 2025-07-01, the elastic "
               "net sees no return after 2025-06-30 and is scored on the 20 return days from 2025-07-01 to "
@@ -2016,9 +2041,9 @@ def how_bks_history(half_life_months: float) -> str:
 
 # --- Lists ------------------------------------------------------------------------
 HOW_ASSETS_TABLE: tuple[str, Bullets] = (
-    "How to read the assets table (listed assets in the order of the source image):", (
-        ("Each asset 'A v B' is long leg A and short leg B. Its daily return is the return of A minus the return "
-         "of B.",
+    "How to read the assets table:", (
+        ("The rows are the listed assets, in the order of the source image. Each asset 'A v B' is long leg A and "
+         "short leg B. Its daily return is the return of A minus the return of B.",
          "on a day when Energy Global rises 1.5% and World EQ 0.5%, Energy Global v World EQ returns +1.0%."),
         ("Outrights and 'XXX v USD' pairs are long against USD cash, a leg with return 0 and no index or proxy.",
          "Global Equity is MSCI ACWI (proxy ACWI) against USD cash, so its daily return is the ACWI leg's "
@@ -2052,10 +2077,14 @@ HOW_TOPICS_TABLE: tuple[str, Bullets] = ("How to read the manual topics table:",
      "with 50 generic topics and a link share of 0.20, the note says 10 of them carry random links."),
 ))
 
+#: The visible line above the link map's guide (G.9): a caveat, so it stays out of the collapsed guide.
+LINK_MAP_CAVEAT = "The default link map is illustrative, not a research claim."
+
 HOW_LINK_MAP: tuple[str, Bullets] = (
-    "How to read the link map (one row per linked pair; the default map is illustrative, not a research claim):", (
-        ("A pair without a row has a set sensitivity of 0. Origin says where a link comes from: default (the "
-         "authored map), random (seeded draws for generic topics) or override (a session edit).",
+    "How to read the link map:", (
+        ("One row per linked pair. A pair without a row has a set sensitivity of 0. Origin says where a link "
+         "comes from: default (the authored map), random (seeded draws for generic topics) or override (a "
+         "session edit).",
          "the default run has 95 links, all of origin default, 8 of them for S1 Energy."),
         ("Sign: the direction the asset moves when attention to the topic rises. For 'A v B' it is the direction "
          "of long A, short B.",
@@ -2569,7 +2598,7 @@ HOW_TRACE_WEEK_R2: tuple[str, Bullets] = ("How to read the weekly R² chart:", (
      "reads 25.0% against 7.7%."),
     ("Third bar: the same forecasts in return units against the exact weekly returns (sums of the raw daily "
      "returns). Under the full history the return units are approximate, so it differs from the first bar; the "
-     "line under the caption gives both pooled values.",
+     "line under the chart gives both pooled values.",
      "21.8% for the week ending 2025-07-04; pooled 23.0% against 27.8% in panel units."),
 ))
 

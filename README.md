@@ -218,7 +218,7 @@ python scripts/fetch_market_data.py
 | Path | Content |
 |---|---|
 | `narrative_ipca/exposure_lab/` | config and types (contracts), reference and market data, links and simulation, direct estimator and evaluation, BKS wrapper, method comparison, BKS trace (`trace.py`), charts, cached session |
-| `dashboard/` | the Streamlit app (`app.py`), its pure helpers (`_ui.py`), the BKS trace page's steps (`trace_page.py`) and the Real data page (`real_exposures.py`) |
+| `dashboard/` | the Streamlit app (`app.py`), its pure helpers (`_ui.py`), the "How to read" guide toggle (`_guide.py`), the BKS trace page's steps (`trace_page.py`) and the Real data page (`real_exposures.py`) |
 | `data/reference/` | assets (image order), legs with benchmark index and proxy, the 20 manual topics, the default link map |
 | `data/market/` | daily leg levels and returns, asset returns, raw downloads and `manifest.json`; `README.md` there has sources, conventions, QA and open items |
 | `tests/test_lab_*.py` | lab tests, including Monte Carlo checks of the simulation truth |
