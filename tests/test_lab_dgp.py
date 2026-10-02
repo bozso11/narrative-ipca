@@ -66,7 +66,11 @@ def _generic_ids(n: int) -> list[str]:
 
 def _gaussian_market(n_days: int, corr: float, seed: int, n_assets: int = 6, start: str = "1800-01-01") -> MarketData:
     """i.i.d. Gaussian returns with equal pairwise correlation ``corr`` and vols 0.5%-1.5% daily."""
-    cal = pd.bdate_range(start, periods=n_days)
+    # The Mon-Fri days of pd.bdate_range(start, periods=n_days), built with numpy: 80,000 business days span
+    # about 307 years, and under pandas 2 the business-day offset arithmetic goes through a nanosecond
+    # Timedelta, which overflows beyond about 292 years (pandas 3 works in microseconds).
+    days = np.busday_offset(np.datetime64(start, "D"), np.arange(n_days), roll="forward")
+    cal = pd.DatetimeIndex(days.astype("datetime64[ns]"))
     C = np.full((n_assets, n_assets), corr)
     np.fill_diagonal(C, 1.0)
     vols = np.linspace(0.005, 0.015, n_assets)

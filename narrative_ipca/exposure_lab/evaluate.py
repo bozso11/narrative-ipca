@@ -394,9 +394,11 @@ def _window_arrays(
     valid = np.isfinite(r) & row_ok[:, None]
     S0 = np.where(row_ok[:, None], S, 0.0)
 
-    B = fit.B_hat.to_numpy(dtype=float)
+    # one memory layout for both: BLAS rounds a product differently for C- and F-ordered operands, so the oracle
+    # method (B = B_true) would miss the oracle reference by a unit in the last place (D74)
+    B = np.ascontiguousarray(fit.B_hat.to_numpy(dtype=float))
     scale = fit.ret_scale.reindex(assets).to_numpy(dtype=float)
-    B_true = truth.B_true.reindex(index=topics, columns=assets).to_numpy(dtype=float)
+    B_true = np.ascontiguousarray(truth.B_true.reindex(index=topics, columns=assets).to_numpy(dtype=float))
     fitted = (S0 @ B) * scale[None, :]
     fitted_oracle = (S0 @ B_true) * scale[None, :]  # D74: the fit's training scale, not asset_vol
     return _WindowArrays(

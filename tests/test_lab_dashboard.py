@@ -1460,11 +1460,20 @@ def _page_links(block) -> list[tuple[str, str]]:
 def _open_page(at, url_path: str) -> None:
     """Point a run AppTest at a callable page by its URL path (callable pages have no file for ``switch_page``).
 
-    The default page (Simulation lab) is registered with an empty URL path.
+    The default page (Simulation lab) is registered with an empty URL path. Without ``_registered_pages``
+    (Streamlit 1.62) the hash is the one ``st.Page`` gives a callable page, ``calc_hash(url_path)``; an empty
+    hash opens the default page.
     """
+    if not hasattr(at, "_page_hash"):
+        pytest.skip("this Streamlit version's AppTest cannot open a callable page")
     pages = getattr(at, "_registered_pages", None)
-    hashes = [h for h, info in (pages or {}).items() if info.get("url_pathname") == url_path]
-    if not hashes or not hasattr(at, "_page_hash"):
+    if pages is None:
+        from streamlit.util import calc_hash
+
+        at._page_hash = calc_hash(url_path) if url_path else ""
+        return
+    hashes = [h for h, info in pages.items() if info.get("url_pathname") == url_path]
+    if not hashes:
         pytest.skip("this Streamlit version's AppTest cannot open a callable page")
     at._page_hash = hashes[0]
 
